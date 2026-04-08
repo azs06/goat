@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/responses"
+	"github.com/joho/godotenv"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 type cliCommand struct {
@@ -60,23 +62,31 @@ func cleanInput(text string) []string {
 	return words
 }
 
-func main() {
-	fmt.Println("Welcome to G.O.A.T agent")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	client := openai.NewClient(
-		option.WithAPIKey("My API Key"), // or set OPENAI_API_KEY in your env
-	)
-
-	resp, err := client.Responses.New(context.TODO(), openai.ResponseNewParams{
-		Model: "gpt-5.4",
-		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String("Say this is a test")},
+func sendPrompt(ctx context.Context, c *openai.Client, p string) {
+	resp, err := c.Responses.New(ctx, responses.ResponseNewParams{
+		Model: "gpt-5.4-mini",
+		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
 	})
 	if err != nil {
 		panic(err.Error())
 	}
 
 	fmt.Println(resp.OutputText())
+}
+
+func main() {
+	ctx := context.Background()
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	var apiKey = os.Getenv("OPENAI_API_KEY")
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+	)
+	fmt.Println("Welcome to G.O.A.T agent")
+	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("G.O.A.T > ")
 		scanner.Scan()
@@ -85,5 +95,17 @@ func main() {
 		if len(words) == 0 {
 			continue
 		}
+
+		command := words[0]
+
+		if cmd, ok := commands[command]; ok {
+			err := cmd.callback(&config{}, words[1:]...)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+		} else {
+			sendPrompt(ctx, &client, text)
+		}
+
 	}
 }
