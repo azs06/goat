@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/responses"
 )
 
 type cliCommand struct {
@@ -20,22 +22,20 @@ type config struct {
 }
 
 func commandExit(c *config, args ...string) error {
-	fmt.Print("Closing the Pokedex... Goodbye!")
+	fmt.Print("Closing the Goat... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 func commandHelp(c *config, args ...string) error {
-	fmt.Println("Welcome to the Pokedex!")
-	fmt.Println("Usage:")
-	fmt.Println("help: Displays a help message")
-	fmt.Println("exit: Exit the Pokedex")
+	fmt.Println("Welcome to the Goat!")
+	fmt.Println("exit: Exit the Agent")
 	return nil
 }
 
 var commands = map[string]cliCommand{
 	"exit": {
 		name:        "exit",
-		description: "Exit the Pokedex",
+		description: "Exit the Goat",
 		callback:    commandExit,
 	},
 	"help": {
