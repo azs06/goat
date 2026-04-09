@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -64,11 +65,100 @@ func cleanInput(text string) []string {
 
 func sendPrompt(ctx context.Context, c *openai.Client, p string) {
 	resp, err := c.Responses.New(ctx, responses.ResponseNewParams{
-		Model: "gpt-5.4-mini",
-		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
+		Model:        "gpt-5.4-mini",
+		Instructions: openai.String(SystemPrompt),
+		Input:        responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
 	})
 	if err != nil {
 		panic(err.Error())
+	}
+
+	fmt.Println(resp.OutputText())
+}
+
+func getWeather(location string) string {
+	return fmt.Sprintf("The weather in %s is 72F and sunny.", location)
+}
+
+func getTools() []responses.ToolUnionParam {
+	return []responses.ToolUnionParam{{
+		OfFunction: &responses.FunctionToolParam{
+			Name:        "get_weather",
+			Description: openai.String("Get weather at the given location"),
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"location": map[string]string{
+						"type": "string",
+					},
+				},
+				"required": []string{"location"},
+			},
+		},
+	}}
+}
+
+func executeToolCall(toolCall responses.ResponseFunctionToolCall) (string, error) {
+	if toolCall.Name != "get_weather" {
+		return "", fmt.Errorf("unsupported tool: %s", toolCall.Name)
+	}
+
+	var args struct {
+		Location string `json:"location"`
+	}
+
+	if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+		return "", fmt.Errorf("decode tool arguments: %w", err)
+	}
+
+	if strings.TrimSpace(args.Location) == "" {
+		return "", fmt.Errorf("missing location")
+	}
+
+	return getWeather(args.Location), nil
+}
+
+func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
+	resp, err := c.Responses.New(ctx, responses.ResponseNewParams{
+		Model:        "gpt-5.4-mini",
+		Instructions: openai.String(SystemPrompt),
+		Input:        responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
+		Tools:        getTools(),
+	})
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for _, item := range resp.Output {
+		if item.Type != "function_call" {
+			continue
+		}
+
+		toolCall := item.AsFunctionCall()
+		toolOutput, err := executeToolCall(toolCall)
+		if err != nil {
+			panic(err.Error())
+		}
+
+		resp, err = c.Responses.New(ctx, responses.ResponseNewParams{
+			Model:              "gpt-5.4-mini",
+			Instructions:       openai.String(SystemPrompt),
+			PreviousResponseID: openai.String(resp.ID),
+			Input: responses.ResponseNewParamsInputUnion{
+				OfInputItemList: []responses.ResponseInputItemUnionParam{{
+					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+						CallID: toolCall.CallID,
+						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+							OfString: openai.String(toolOutput),
+						},
+					},
+				}},
+			},
+			Tools: getTools(),
+		})
+		if err != nil {
+			panic(err.Error())
+		}
 	}
 
 	fmt.Println(resp.OutputText())
@@ -104,7 +194,8 @@ func main() {
 				fmt.Println("Error:", err)
 			}
 		} else {
-			sendPrompt(ctx, &client, text)
+			//sendPrompt(ctx, &client, text)
+			sendPromptStream(ctx, &client, text)
 		}
 
 	}
