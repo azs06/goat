@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 type cliCommand struct {
@@ -284,6 +285,9 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
 		Instructions: openai.String(SystemPrompt),
 		Input:        responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
 		Tools:        getTools(),
+		Reasoning: shared.ReasoningParam{
+			Effort: shared.ReasoningEffortHigh,
+		},
 	})
 	if err != nil {
 		panic(err.Error())
@@ -326,6 +330,9 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
 				OfInputItemList: toolOutputs,
 			},
 			Tools: getTools(),
+			Reasoning: shared.ReasoningParam{
+				Effort: shared.ReasoningEffortHigh,
+			},
 		})
 		if err != nil {
 			panic(err.Error())
