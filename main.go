@@ -59,7 +59,7 @@ func cleanInput(text string) []string {
 
 func sendPrompt(ctx context.Context, c *openai.Client, p string) {
 	resp, err := c.Responses.New(ctx, responses.ResponseNewParams{
-		Model:        "gpt-5.4-mini",
+		Model:        "gpt-5.4",
 		Instructions: openai.String(SystemPrompt),
 		Input:        responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
 	})
@@ -72,7 +72,7 @@ func sendPrompt(ctx context.Context, c *openai.Client, p string) {
 
 func newResponseParams(input responses.ResponseNewParamsInputUnion, previousResponseID string) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
-		Model:        "gpt-5.4-mini",
+		Model:        "gpt-5.4",
 		Instructions: openai.String(SystemPrompt),
 		Input:        input,
 		Tools:        getTools(),
@@ -117,6 +117,8 @@ func createStreamedResponse(ctx context.Context, c *openai.Client, params respon
 
 	return finalResponse, printedText, nil
 }
+
+var streamedResponseCreator = createStreamedResponse
 
 func getWeather(location string) string {
 	return fmt.Sprintf("The weather in %s is 72F and sunny.", location)
@@ -324,7 +326,7 @@ func executeToolCall(ctx context.Context, toolCall responses.ResponseFunctionToo
 }
 
 func sendPromptStream(ctx context.Context, c *openai.Client, p string, respId string) string {
-	resp, printedText, err := createStreamedResponse(ctx, c, newResponseParams(
+	resp, printedText, err := streamedResponseCreator(ctx, c, newResponseParams(
 		responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
 		respId,
 	))
@@ -364,7 +366,7 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string, respId st
 			return resp.ID
 		}
 
-		resp, printedText, err = createStreamedResponse(ctx, c, newResponseParams(
+		resp, printedText, err = streamedResponseCreator(ctx, c, newResponseParams(
 			responses.ResponseNewParamsInputUnion{
 				OfInputItemList: toolOutputs,
 			},
@@ -373,7 +375,6 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string, respId st
 		if err != nil {
 			panic(err.Error())
 		}
-		return resp.ID
 	}
 }
 

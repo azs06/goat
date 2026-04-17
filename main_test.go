@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 func chdirForTest(t *testing.T, dir string) {
@@ -25,6 +29,17 @@ func chdirForTest(t *testing.T, dir string) {
 			t.Fatalf("restore working dir: %v", err)
 		}
 	})
+}
+
+func mustResponseOutputItemUnion(t *testing.T, raw string) responses.ResponseOutputItemUnion {
+	t.Helper()
+
+	var item responses.ResponseOutputItemUnion
+	if err := json.Unmarshal([]byte(raw), &item); err != nil {
+		t.Fatalf("unmarshal response output item: %v", err)
+	}
+
+	return item
 }
 
 func TestRunBashCommandUsesRelativeWorkdir(t *testing.T) {
@@ -147,5 +162,91 @@ func TestEditFileReplaceAllReplacesEveryMatch(t *testing.T) {
 
 	if string(content) != "agent agent agent" {
 		t.Fatalf("unexpected content %q", string(content))
+	}
+}
+
+func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
+	previousStreamer := streamedResponseCreator
+	defer func() {
+		streamedResponseCreator = previousStreamer
+	}()
+
+	responsesToReturn := []*responses.Response{
+		{
+			ID: "resp-1",
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"get_weather","call_id":"call-1","arguments":"{\"location\":\"Paris\"}"}`),
+			},
+		},
+		{
+			ID: "resp-2",
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"get_weather","call_id":"call-2","arguments":"{\"location\":\"Tokyo\"}"}`),
+			},
+		},
+		{
+			ID: "resp-3",
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, `{"type":"message","id":"msg-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done."}]}`),
+			},
+		},
+	}
+
+	var receivedParams []responses.ResponseNewParams
+	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+		receivedParams = append(receivedParams, params)
+		index := len(receivedParams) - 1
+		if index >= len(responsesToReturn) {
+			t.Fatalf("unexpected streamed response request %d", index+1)
+		}
+		return responsesToReturn[index], false, nil
+	}
+
+	responseID := sendPromptStream(context.Background(), nil, "check the weather twice", "")
+
+	if responseID != "resp-3" {
+		t.Fatalf("expected final response ID resp-3, got %q", responseID)
+	}
+
+	if len(receivedParams) != 3 {
+		t.Fatalf("expected 3 streamed response requests, got %d", len(receivedParams))
+	}
+
+	if receivedParams[0].PreviousResponseID.Value != "" {
+		t.Fatalf("expected initial request to omit previous response ID, got %q", receivedParams[0].PreviousResponseID.Value)
+	}
+
+	if receivedParams[1].PreviousResponseID.Value != "resp-1" {
+		t.Fatalf("expected second request to continue from resp-1, got %q", receivedParams[1].PreviousResponseID.Value)
+	}
+
+	if receivedParams[2].PreviousResponseID.Value != "resp-2" {
+		t.Fatalf("expected third request to continue from resp-2, got %q", receivedParams[2].PreviousResponseID.Value)
+	}
+
+	if len(receivedParams[1].Input.OfInputItemList) != 1 {
+		t.Fatalf("expected one tool output in second request, got %d", len(receivedParams[1].Input.OfInputItemList))
+	}
+
+	secondToolOutputJSON, err := json.Marshal(receivedParams[1].Input.OfInputItemList[0])
+	if err != nil {
+		t.Fatalf("marshal second tool output: %v", err)
+	}
+
+	if !strings.Contains(string(secondToolOutputJSON), `"call_id":"call-1"`) {
+		t.Fatalf("expected second request to include tool output for call-1, got %s", secondToolOutputJSON)
+	}
+
+	if len(receivedParams[2].Input.OfInputItemList) != 1 {
+		t.Fatalf("expected one tool output in third request, got %d", len(receivedParams[2].Input.OfInputItemList))
+	}
+
+	thirdToolOutputJSON, err := json.Marshal(receivedParams[2].Input.OfInputItemList[0])
+	if err != nil {
+		t.Fatalf("marshal third tool output: %v", err)
+	}
+
+	if !strings.Contains(string(thirdToolOutputJSON), `"call_id":"call-2"`) {
+		t.Fatalf("expected third request to include tool output for call-2, got %s", thirdToolOutputJSON)
 	}
 }
