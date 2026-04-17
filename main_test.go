@@ -166,6 +166,9 @@ func TestEditFileReplaceAllReplacesEveryMatch(t *testing.T) {
 }
 
 func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
 	previousStreamer := streamedResponseCreator
 	defer func() {
 		streamedResponseCreator = previousStreamer
@@ -175,13 +178,13 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 		{
 			ID: "resp-1",
 			Output: []responses.ResponseOutputItemUnion{
-				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"get_weather","call_id":"call-1","arguments":"{\"location\":\"Paris\"}"}`),
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"read_dir","call_id":"call-1","arguments":"{\"path\":\".\"}"}`),
 			},
 		},
 		{
 			ID: "resp-2",
 			Output: []responses.ResponseOutputItemUnion{
-				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"get_weather","call_id":"call-2","arguments":"{\"location\":\"Tokyo\"}"}`),
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"read_dir","call_id":"call-2","arguments":"{\"path\":\".\"}"}`),
 			},
 		},
 		{
@@ -202,7 +205,7 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	responseID := sendPromptStream(context.Background(), nil, "check the weather twice", "")
+	responseID := sendPromptStream(context.Background(), nil, "list files twice", "", defaultModel)
 
 	if responseID != "resp-3" {
 		t.Fatalf("expected final response ID resp-3, got %q", responseID)
@@ -248,5 +251,42 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 
 	if !strings.Contains(string(thirdToolOutputJSON), `"call_id":"call-2"`) {
 		t.Fatalf("expected third request to include tool output for call-2, got %s", thirdToolOutputJSON)
+	}
+}
+
+func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
+	previousStreamer := streamedResponseCreator
+	defer func() {
+		streamedResponseCreator = previousStreamer
+	}()
+
+	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+		return &responses.Response{
+			ID: "resp-history",
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, `{"type":"message","id":"msg-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"History saved."}]}`),
+			},
+		}, false, nil
+	}
+
+	responseID := sendPromptStream(context.Background(), nil, "hello history", "", defaultModel)
+	if responseID != "resp-history" {
+		t.Fatalf("expected resp-history, got %q", responseID)
+	}
+
+	historyData, err := os.ReadFile(filepath.Join(workspace, ".goat", "history.jsonl"))
+	if err != nil {
+		t.Fatalf("read history file: %v", err)
+	}
+
+	historyText := string(historyData)
+	if !strings.Contains(historyText, `"type":"user"`) || !strings.Contains(historyText, `"content":"hello history"`) {
+		t.Fatalf("expected user prompt in history, got %s", historyText)
+	}
+	if !strings.Contains(historyText, `"type":"assistant"`) || !strings.Contains(historyText, `"response_id":"resp-history"`) {
+		t.Fatalf("expected assistant response in history, got %s", historyText)
 	}
 }
