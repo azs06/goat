@@ -323,10 +323,10 @@ func executeToolCall(ctx context.Context, toolCall responses.ResponseFunctionToo
 	}
 }
 
-func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
+func sendPromptStream(ctx context.Context, c *openai.Client, p string, respId string) string {
 	resp, printedText, err := createStreamedResponse(ctx, c, newResponseParams(
 		responses.ResponseNewParamsInputUnion{OfString: openai.String(p)},
-		"",
+		respId,
 	))
 	if err != nil {
 		panic(err.Error())
@@ -361,7 +361,7 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
 		}
 
 		if len(toolOutputs) == 0 {
-			return
+			return resp.ID
 		}
 
 		resp, printedText, err = createStreamedResponse(ctx, c, newResponseParams(
@@ -373,12 +373,14 @@ func sendPromptStream(ctx context.Context, c *openai.Client, p string) {
 		if err != nil {
 			panic(err.Error())
 		}
+		return resp.ID
 	}
 }
 
 func main() {
 	ctx := context.Background()
 	err := godotenv.Load()
+	responseId := ""
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
@@ -407,7 +409,7 @@ func main() {
 			}
 		} else {
 			//sendPrompt(ctx, &client, text)
-			sendPromptStream(ctx, &client, text)
+			responseId = sendPromptStream(ctx, &client, text, responseId)
 		}
 
 	}
