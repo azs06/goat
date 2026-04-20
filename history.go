@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -25,6 +27,44 @@ var historyEntryAppender = appendHistoryEntry
 
 func conversationHistoryPath() string {
 	return defaultHistoryPath
+}
+
+func loadConversationHistoryEntries() ([]historyEntry, error) {
+	resolvedPath, _, err := resolveToolPath(conversationHistoryPath())
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.Open(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open history file: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+
+	var entries []historyEntry
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var entry historyEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("decode history entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan history file: %w", err)
+	}
+
+	return entries, nil
 }
 
 func appendHistoryEntry(entry historyEntry) error {
@@ -58,6 +98,27 @@ func appendHistoryEntry(entry historyEntry) error {
 	}
 
 	return nil
+}
+
+func loadLatestConversationResponseID() (string, error) {
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		return "", err
+	}
+
+	latestResponseID := ""
+	for _, entry := range entries {
+		switch entry.Type {
+		case "reset":
+			latestResponseID = ""
+		case "assistant":
+			if strings.TrimSpace(entry.ResponseID) != "" {
+				latestResponseID = strings.TrimSpace(entry.ResponseID)
+			}
+		}
+	}
+
+	return latestResponseID, nil
 }
 
 func recordHistory(entry historyEntry) {

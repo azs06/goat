@@ -131,16 +131,13 @@ func readFileBytesIfExists(filePath string) ([]byte, bool, error) {
 }
 
 func writeFile(filePath, content string) error {
-	resolvedPath, _, err := resolveToolPath(filePath)
-	if err != nil {
-		return err
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("missing path")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(resolvedPath, []byte(content), 0644)
+	return withRecordedMutation("write_file", []string{filePath}, func() error {
+		return rawWriteFile(filePath, content)
+	})
 }
 
 func previewWriteFile(filePath, content string) (string, error) {
@@ -204,7 +201,9 @@ func editFile(filePath, oldText, newText string, replaceAll bool) (int, error) {
 		return 0, err
 	}
 
-	if err := writeFile(filePath, updatedContent); err != nil {
+	if err := withRecordedMutation("edit_file", []string{filePath}, func() error {
+		return rawWriteFile(filePath, updatedContent)
+	}); err != nil {
 		return 0, err
 	}
 
@@ -275,16 +274,9 @@ func destinationPathAvailable(filePath string, overwrite bool) error {
 	return err
 }
 
-func copyFile(sourcePath, destinationPath string, overwrite bool) error {
-	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
-		return fmt.Errorf("source and destination must be different")
-	}
-
+func rawCopyFile(sourcePath, destinationPath string) error {
 	info, err := ensureRegularFile(sourcePath)
 	if err != nil {
-		return err
-	}
-	if err := destinationPathAvailable(destinationPath, overwrite); err != nil {
 		return err
 	}
 
@@ -302,6 +294,23 @@ func copyFile(sourcePath, destinationPath string, overwrite bool) error {
 	}
 
 	return os.WriteFile(resolvedDestination, data, info.Mode().Perm())
+}
+
+func copyFile(sourcePath, destinationPath string, overwrite bool) error {
+	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
+		return fmt.Errorf("source and destination must be different")
+	}
+
+	if _, err := ensureRegularFile(sourcePath); err != nil {
+		return err
+	}
+	if err := destinationPathAvailable(destinationPath, overwrite); err != nil {
+		return err
+	}
+
+	return withRecordedMutation("copy_file", []string{destinationPath}, func() error {
+		return rawCopyFile(sourcePath, destinationPath)
+	})
 }
 
 func previewCopyFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
@@ -355,23 +364,26 @@ func moveFile(sourcePath, destinationPath string, overwrite bool) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(resolvedDestination), 0755); err != nil {
-		return err
-	}
-	if overwrite {
-		if err := os.Remove(resolvedDestination); err != nil && !os.IsNotExist(err) {
+
+	return withRecordedMutation("move_file", []string{sourcePath, destinationPath}, func() error {
+		if err := os.MkdirAll(filepath.Dir(resolvedDestination), 0755); err != nil {
 			return err
 		}
-	}
+		if overwrite {
+			if err := os.Remove(resolvedDestination); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 
-	if err := os.Rename(resolvedSource, resolvedDestination); err == nil {
-		return nil
-	}
+		if err := os.Rename(resolvedSource, resolvedDestination); err == nil {
+			return nil
+		}
 
-	if err := copyFile(sourcePath, destinationPath, overwrite); err != nil {
-		return err
-	}
-	return deleteFile(sourcePath)
+		if err := rawCopyFile(sourcePath, destinationPath); err != nil {
+			return err
+		}
+		return os.Remove(resolvedSource)
+	})
 }
 
 func previewMoveFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
@@ -414,7 +426,10 @@ func deleteFile(filePath string) error {
 	if err != nil {
 		return err
 	}
-	return os.Remove(resolvedPath)
+
+	return withRecordedMutation("delete_file", []string{filePath}, func() error {
+		return os.Remove(resolvedPath)
+	})
 }
 
 func previewDeleteFile(filePath string) (string, error) {
