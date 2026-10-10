@@ -55,7 +55,9 @@ the footer:
 | Alt-Left/Alt-Right, Alt-B/Alt-F | Move by word |
 | Ctrl-U, Ctrl-K, Ctrl-W | Delete to the start of the line, to the end, or the word before the cursor |
 
-Pasted text keeps its line breaks and is never sent before you press Enter.
+Pasted text keeps its line breaks and is never sent before you press Enter. `?` on an
+empty prompt shows these keys in place of the footer, and `/help` lists them with the
+commands.
 
 Command-line flags:
 

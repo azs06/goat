@@ -46,7 +46,7 @@ func renderRule(width int) string {
 
 // renderBanner is the welcome box shown at startup. In plain mode it is the two lines
 // goat always printed.
-func renderBanner(model, effort, cwd string, width int) string {
+func renderBanner(model, effort, cwd, git string, width int) string {
 	if !style.Enabled() {
 		return fmt.Sprintf("Welcome to G.O.A.T agent\nModel: %s (effort %s). Type /help for commands.", model, effort)
 	}
@@ -71,18 +71,70 @@ func renderBanner(model, effort, cwd string, width int) string {
 		row(""),
 		dimRow("model  " + model + " " + g.Dot + " effort " + effort),
 		dimRow("cwd    " + cwd),
-		row(""),
-		dimRow("/help for commands " + g.Dot + " ctrl-c interrupts a turn"),
-		style.Accent.Render(g.BottomLeft + strings.Repeat(g.HLine, width-2) + g.BottomRight),
 	}
+	if git != "" {
+		lines = append(lines, dimRow("git    "+git))
+	}
+	lines = append(lines,
+		row(""),
+		dimRow("/ commands "+g.Dot+" ? shortcuts "+g.Dot+" tab completes paths "+g.Dot+" ctrl-c interrupts"),
+		style.Accent.Render(g.BottomLeft+strings.Repeat(g.HLine, width-2)+g.BottomRight),
+	)
 	return strings.Join(lines, "\n")
 }
 
 // renderFooter joins the status parts with dots into one dim line that fits in width-1
 // cells; the last column is left free so the cursor never wraps.
+// renderFooter joins the status parts under the prompt. Parts are in order of
+// importance: when they do not fit, the last ones are left out rather than cut.
 func renderFooter(parts []string, width int) string {
-	line := "  " + strings.Join(parts, " "+style.Glyphs().Dot+" ")
-	return style.Subtle.Render(style.TruncateToWidth(line, width-1))
+	join := func(parts []string) string { return "  " + strings.Join(parts, " "+style.Glyphs().Dot+" ") }
+	for len(parts) > 1 && style.VisibleWidth(join(parts)) > width-1 {
+		parts = parts[:len(parts)-1]
+	}
+	return style.Subtle.Render(style.TruncateToWidth(join(parts), width-1))
+}
+
+// shortcut is one key binding shown by "?" and /help.
+type shortcut struct{ keys, action string }
+
+var promptShortcuts = []shortcut{
+	{"/", "commands"},
+	{"tab", "complete command or path"},
+	{"↑ ↓", "history, or lines"},
+	{"ctrl-j", "new line (or \\ enter)"},
+	{"esc", "close a menu"},
+	{"ctrl-c", "interrupt; twice to exit"},
+	{"alt-← →", "move by word"},
+	{"ctrl-u k w", "delete line start, end, word"},
+	{"enter", "while goat works: queue"},
+	{"/output", "full tool output"},
+}
+
+// renderShortcuts lays the shortcuts out in as many columns as fit in width.
+func renderShortcuts(width int) []string {
+	keyWidth, cell := 0, 0
+	for _, s := range promptShortcuts {
+		keyWidth = max(keyWidth, style.VisibleWidth(s.keys))
+	}
+	for _, s := range promptShortcuts {
+		cell = max(cell, keyWidth+2+style.VisibleWidth(s.action))
+	}
+	columns := max(1, (width-3)/(cell+3))
+	rows := (len(promptShortcuts) + columns - 1) / columns
+	lines := make([]string, rows)
+	for i, s := range promptShortcuts {
+		row, column := i%rows, i/rows
+		entry := style.Muted.Render(style.PadRight(s.keys, keyWidth)) + "  " + style.Subtle.Render(s.action)
+		if column < columns-1 && i+rows < len(promptShortcuts) {
+			entry = style.PadRight(entry, cell+3)
+		}
+		lines[row] += entry
+	}
+	for i := range lines {
+		lines[i] = "  " + lines[i]
+	}
+	return lines
 }
 
 // formatTokenCount renders a token count as "850" or "12k".
@@ -236,25 +288,70 @@ func hardWrap(text string, width int) []string {
 }
 
 // renderHelpTable lists the commands in two aligned columns, sorted by name.
-func renderHelpTable(cmds map[string]*cliCommand) string {
-	names := make([]string, 0, len(cmds))
-	for name := range cmds {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+// helpGroups orders the commands /help lists under each heading. Commands missing
+// here are listed under "Other".
+var helpGroups = []struct {
+	title string
+	names []string
+}{
+	{"Conversation", []string{"clear", "resume", "retry", "compact", "copy", "export"}},
+	{"Model", []string{"model", "effort", "status"}},
+	{"Workspace", []string{"diff", "output", "undo", "approve", "tools"}},
+	{"goat", []string{"theme", "history", "help", "exit"}},
+}
 
-	lines := make([]string, 0, len(names))
-	for _, name := range names {
-		cmd := cmds[name]
-		line := "  " + style.PadRight(style.Accent.Render(cmd.usage), 28) + " " + style.Muted.Render(cmd.description)
+func renderHelpTable(cmds map[string]*cliCommand) string {
+	usageWidth := 0
+	for _, cmd := range cmds {
+		usageWidth = max(usageWidth, style.VisibleWidth(cmd.usage))
+	}
+	indent := strings.Repeat(" ", 2+usageWidth+2)
+	row := func(cmd *cliCommand) string {
+		description := cmd.description
 		if len(cmd.aliases) > 0 {
 			aliases := make([]string, len(cmd.aliases))
 			for i, alias := range cmd.aliases {
 				aliases[i] = "/" + alias
 			}
-			line += style.Subtle.Render(" (also " + strings.Join(aliases, ", ") + ")")
+			description += " (also " + strings.Join(aliases, ", ") + ")"
 		}
-		lines = append(lines, line)
+		lead := "  " + style.PadRight(style.Accent.Render(cmd.usage), usageWidth) + "  "
+		if !style.Enabled() {
+			return lead + description
+		}
+		return wrapStyled(style.Muted.Render(description), terminalWidth()-1, lead, indent)
+	}
+
+	var lines []string
+	listed := map[string]bool{}
+	for _, group := range helpGroups {
+		var rows []string
+		for _, name := range group.names {
+			if cmd, ok := cmds[name]; ok {
+				rows = append(rows, row(cmd))
+				listed[name] = true
+			}
+		}
+		if len(rows) > 0 {
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, style.Strong.Render(group.title))
+			lines = append(lines, rows...)
+		}
+	}
+	var others []string
+	for name := range cmds {
+		if !listed[name] {
+			others = append(others, name)
+		}
+	}
+	sort.Strings(others)
+	if len(others) > 0 {
+		lines = append(lines, "", style.Strong.Render("Other"))
+		for _, name := range others {
+			lines = append(lines, row(cmds[name]))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -269,7 +366,13 @@ func renderKeyValues(rows [][2]string) string {
 	}
 	lines := make([]string, len(rows))
 	for i, row := range rows {
-		lines[i] = style.PadRight(style.Muted.Render(row[0]), width) + " " + row[1]
+		key := style.PadRight(style.Muted.Render(row[0]), width) + " "
+		if !style.Enabled() {
+			lines[i] = key + row[1]
+			continue
+		}
+		// Long values wrap under themselves rather than under the keys.
+		lines[i] = wrapStyled(row[1], terminalWidth()-1, key, strings.Repeat(" ", width+1))
 	}
 	return strings.Join(lines, "\n")
 }

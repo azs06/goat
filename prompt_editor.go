@@ -131,6 +131,9 @@ type promptEditor struct {
 	pasting bool
 	// pathItems is the menu Tab opened for a path with several matches.
 	pathItems []completion
+	// showShortcuts replaces the footer with the key bindings; "?" on an empty prompt
+	// turns it on and the next key turns it off.
+	showShortcuts bool
 	// history holds earlier prompts, oldest first; historyIndex is the one shown, or
 	// len(history) for the text being written, which draft keeps while browsing.
 	history      []string
@@ -298,6 +301,13 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 	case pasteEnd:
 		e.pasting = false
 		return false, nil
+	}
+	if !e.pasting {
+		if key == "?" && len(e.buf) == 0 && !e.showShortcuts {
+			e.showShortcuts = true
+			return false, nil
+		}
+		e.showShortcuts = false
 	}
 	if e.pasting {
 		switch key {
@@ -483,6 +493,8 @@ func (e *promptEditor) render(footer string, width int) string {
 	below := []string{footer}
 	if items := e.completions(); len(items) > 0 {
 		below = renderCompletionMenu(items, e.selected, width)
+	} else if e.showShortcuts {
+		below = renderShortcuts(width)
 	}
 	for _, line := range below {
 		b.WriteString("\n" + line)

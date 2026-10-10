@@ -52,7 +52,7 @@ func TestTruncateToWidth(t *testing.T) {
 
 func TestRenderBanner(t *testing.T) {
 	chromeWithColor(t, false)
-	plain := renderBanner("openai:gpt-6", "medium", "~/code", 80)
+	plain := renderBanner("openai:gpt-6", "medium", "~/code", "", 80)
 	chromeAssertPlain(t, "banner", plain)
 	if !strings.Contains(plain, "Welcome to G.O.A.T agent") || !strings.Contains(plain, "Model: openai:gpt-6 (effort medium)") {
 		t.Errorf("plain banner lost its text: %q", plain)
@@ -60,7 +60,7 @@ func TestRenderBanner(t *testing.T) {
 
 	chromeWithColor(t, true)
 	for _, width := range []int{20, 50, 200} {
-		banner := renderBanner("anthropic:claude-opus-5-5", "high", "~/a/very/long/path/that/does/not/fit/in/a/narrow/terminal", width)
+		banner := renderBanner("anthropic:claude-opus-5-5", "high", "~/a/very/long/path/that/does/not/fit/in/a/narrow/terminal", "", width)
 		lines := strings.Split(banner, "\n")
 		boxWidth := style.VisibleWidth(lines[0])
 		if boxWidth > maxBannerWidth || boxWidth > width && width >= 20 {
@@ -166,14 +166,22 @@ func TestRenderHelpTable(t *testing.T) {
 	chromeWithColor(t, false)
 	plain := renderHelpTable(commands)
 	chromeAssertPlain(t, "help", plain)
-	if !strings.Contains(plain, "  /clear                       Start a new conversation") || !strings.Contains(plain, "(also /new, /reset)") {
-		t.Errorf("plain help changed:\n%s", plain)
+	for _, want := range []string{"Conversation\n  /clear ", "Start a new conversation", "(also /new, /reset)", "Workspace\n  /diff [staged]"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("plain help lacks %q:\n%s", want, plain)
+		}
 	}
 
+	// Colored help wraps long descriptions under their column, but says the same.
 	chromeWithColor(t, true)
-	colored := renderHelpTable(commands)
-	if style.StripANSI(colored) != plain {
-		t.Errorf("colored help differs from plain once unstyled:\n%s", style.StripANSI(colored))
+	colored := style.StripANSI(renderHelpTable(commands))
+	if strings.Join(strings.Fields(colored), " ") != strings.Join(strings.Fields(plain), " ") {
+		t.Errorf("colored help differs from plain once unstyled:\n%s", colored)
+	}
+	for _, line := range strings.Split(colored, "\n") {
+		if style.VisibleWidth(line) >= terminalWidth() {
+			t.Errorf("line too wide: %q", line)
+		}
 	}
 }
 

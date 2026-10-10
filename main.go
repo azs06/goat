@@ -383,7 +383,11 @@ func handleInput(cfg *config, text string) error {
 func printWelcome(cfg *config) {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
-	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), terminalWidth()))
+	git := ""
+	if state, ok := readGitState(); ok {
+		git = state.footerText()
+	}
+	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), git, terminalWidth()))
 	if !cfg.conversation.conversation.IsEmpty() {
 		fmt.Println(formatNotice("Resumed saved conversation context."))
 	}
@@ -413,7 +417,7 @@ func footerParts(cfg *config) []string {
 	if cfg.approver != nil && cfg.approver.autoApprove {
 		parts = append(parts, "auto-approve on")
 	}
-	return append(parts, "/help for commands")
+	return append(parts, "? for shortcuts")
 }
 
 // readPrompt shows the prompt and reads one line. On an interactive color terminal the

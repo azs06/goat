@@ -42,11 +42,11 @@ func init() {
 		{name: "export", usage: "/export [file]", description: "Write the conversation to a Markdown file", callback: commandExport},
 		{name: "output", usage: "/output [n]", description: "Show a tool call's full output (n=1 is the latest)", callback: commandOutput},
 		{name: "compact", usage: "/compact [focus]", description: "Summarize the conversation into a fresh, smaller context", callback: commandCompact},
-		{name: "effort", usage: "/effort [level]", description: "Show or set how much the model reasons", callback: commandEffort},
+		{name: "effort", usage: "/effort [level]", description: "Pick how much the model reasons, or set a level", callback: commandEffort},
 		{name: "exit", usage: "/exit", description: "Exit the Goat", aliases: []string{"quit"}, callback: commandExit},
-		{name: "help", usage: "/help", description: "Display available commands", callback: commandHelp},
+		{name: "help", usage: "/help", description: "List the commands and keys", callback: commandHelp},
 		{name: "history", usage: "/history", description: "Show the conversation history path", callback: commandHistory},
-		{name: "model", usage: "/model [model|number|list]", description: "Pick the model; lists only providers with an API key", callback: commandModel},
+		{name: "model", usage: "/model [name|list]", description: "Pick the model, or switch to one by name", callback: commandModel},
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
@@ -113,11 +113,22 @@ func commandExit(ctx context.Context, c *config, args []string) error {
 }
 
 func commandHelp(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render("Welcome to the Goat!"))
-	fmt.Println(style.Muted.Render("Anything else you type is sent to the agent. Press Ctrl-C while it works to interrupt the turn."))
-	fmt.Println(style.Strong.Render("Commands:"))
+	width := terminalWidth()
+	paragraph := func(text string) string {
+		if !style.Enabled() {
+			return text
+		}
+		return wrapStyled(style.Muted.Render(text), width-1, "", "")
+	}
+	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Ctrl-C interrupts a turn."))
+	fmt.Println()
 	fmt.Println(renderHelpTable(commands))
-	fmt.Println(style.Muted.Render("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone."))
+	if style.Enabled() {
+		fmt.Println(style.Strong.Render("Keys"))
+		fmt.Println(strings.Join(renderShortcuts(width), "\n"))
+	}
+	fmt.Println()
+	fmt.Println(paragraph("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone."))
 	return nil
 }
 
@@ -322,6 +333,14 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 }
 
 // effectiveEffortDescription says what the provider will actually receive.
+// effortStatusText is the effort, with what the model receives when that differs.
+func effortStatusText(c *config) string {
+	if sent := effectiveEffortDescription(c); sent != string(c.reasoningEffort) {
+		return string(c.reasoningEffort) + style.Muted.Render(" (sent as "+sent+")")
+	}
+	return string(c.reasoningEffort)
+}
+
 func effectiveEffortDescription(c *config) string {
 	return provider.DescribeEffort(c.providers[c.model.Provider], c.model, c.reasoningEffort)
 }
@@ -329,7 +348,7 @@ func effectiveEffortDescription(c *config) string {
 func commandStatus(ctx context.Context, c *config, args []string) error {
 	rows := [][2]string{
 		{"Model:", style.Highlight.Render(c.model.String())},
-		{"Effort:", string(c.reasoningEffort) + style.Muted.Render(fmt.Sprintf(" (sent as %s)", effectiveEffortDescription(c)))},
+		{"Effort:", effortStatusText(c)},
 	}
 	for _, name := range provider.Names {
 		if source := provider.CredentialSource(name); source != "" {
@@ -375,7 +394,11 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
 	}
 	if wd, err := os.Getwd(); err == nil {
-		rows = append(rows, [2]string{"Workspace:", wd})
+		home, _ := os.UserHomeDir()
+		rows = append(rows, [2]string{"Workspace:", shortenHome(wd, home)})
+	}
+	if state, ok := readGitState(); ok {
+		rows = append(rows, [2]string{"Git:", state.footerText()})
 	}
 	fmt.Println(renderKeyValues(rows))
 	return nil
