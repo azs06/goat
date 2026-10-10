@@ -9,6 +9,9 @@ Deferred enhancements to implement later:
   - One undo step for everything a script changed.
   - A code-only mode that offers just run_code; it changes the tool list, so it must be fixed per conversation (the prompt fingerprint covers it).
   - Anthropic's server-side programmatic tool calling for Claude models (code_execution with allowed_callers); needs pause_turn handling, a container ID in the session, and its ~4 minute limit on a pending call fits badly with run_bash approval.
+  - Arrays nested about a million deep, built in a script, can still overflow the Go stack through join/toString and kill goat; only running scripts in a subprocess would contain that.
+  - After a script is abandoned in native code, the next run's heap watchdog takes its baseline while the old one may still be allocating, so it could be stopped for memory it did not use.
+  - Tool text reaches scripts with its headers ("File contents for x:"); a raw-content option for scripts would save models from parsing them (one live run miscounted lines because of the header).
   - Smoke-test Claude models writing scripts (only OpenAI gpt-6-luna and DeepSeek v4 pro were tried against the real APIs).
 
 Notes:

@@ -484,3 +484,18 @@ func TestLongResultsAreCompactWhenLogsCrowdThem(t *testing.T) {
 		t.Error("the result should be compact so it fits with the logs")
 	}
 }
+
+// The regular expression timeout ends a runaway match by itself, so a script stuck in
+// one is never left running for long.
+func TestRegexpMatchTimesOut(t *testing.T) {
+	limits := DefaultLimits
+	limits.Timeout = 30 * time.Second
+	start := time.Now()
+	result, err := Run(context.Background(), `async () => /^(a+)+b\1$/.test("a".repeat(40) + "c")`, echoHost(nil), limits)
+	if err != nil || result.Value != "false" {
+		t.Fatalf("got %q %v", result.Value, err)
+	}
+	if elapsed := time.Since(start); elapsed > regexpTimeout+2*time.Second {
+		t.Fatalf("the match ran %v", elapsed)
+	}
+}
