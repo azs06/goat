@@ -259,7 +259,49 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 	return nil
 }
 
+// effortHints describe each effort level in the picker and the command menu.
+var effortHints = map[provider.Effort]string{
+	provider.EffortNone:    "no reasoning; quickest replies",
+	provider.EffortMinimal: "barely any reasoning",
+	provider.EffortLow:     "light reasoning; fast and cheap",
+	provider.EffortMedium:  "balanced; the default",
+	provider.EffortHigh:    "thorough; better for hard changes",
+	provider.EffortXhigh:   "very thorough; slower",
+	provider.EffortMax:     "as much as the model allows; slowest",
+}
+
+func effortOptions(c *config) []selectOption {
+	options := make([]selectOption, 0, len(provider.EffortLevels))
+	for _, level := range provider.EffortLevels {
+		hint := effortHints[level]
+		if sent := provider.DescribeEffort(c.providers[c.model.Provider], c.model, level); sent != string(level) {
+			hint += " · sent as " + sent
+		}
+		options = append(options, selectOption{label: string(level), hint: hint, current: level == c.reasoningEffort})
+	}
+	return options
+}
+
 func commandEffort(ctx context.Context, c *config, args []string) error {
+	if len(args) == 0 {
+		chosen, err := selectOptionInteractive(ctx, c, "Reasoning effort for "+c.model.String(), effortOptions(c))
+		switch {
+		case errors.Is(err, errSelectorUnavailable):
+		case err != nil:
+			return err
+		case chosen < 0:
+			fmt.Println(formatNotice(fmt.Sprintf("Keeping effort %s.", c.reasoningEffort)))
+			return nil
+		default:
+			args = []string{string(provider.EffortLevels[chosen])}
+		}
+	}
+	sent := func() string {
+		if description := effectiveEffortDescription(c); description != string(c.reasoningEffort) {
+			return style.Muted.Render(" (sent to " + c.model.String() + " as " + description + ")")
+		}
+		return ""
+	}
 	if len(args) > 0 {
 		effort, err := provider.ParseEffort(args[0])
 		if err != nil {
@@ -267,9 +309,11 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 		}
 		c.reasoningEffort = effort
 		saveSession(c)
+		fmt.Println(formatSuccess("Effort set to "+string(effort)+".") + sent())
+		return nil
 	}
-	fmt.Println("Reasoning effort: " + style.Highlight.Render(string(c.reasoningEffort)) +
-		style.Muted.Render(fmt.Sprintf(" (sent to %s as %s). Levels: %s", c.model, effectiveEffortDescription(c), provider.JoinEfforts(provider.EffortLevels))))
+	fmt.Println("Reasoning effort: " + style.Highlight.Render(string(c.reasoningEffort)) + sent())
+	fmt.Println(style.Muted.Render("Levels: " + provider.JoinEfforts(provider.EffortLevels) + ". Use /effort <level> to change it."))
 	return nil
 }
 
@@ -327,25 +371,21 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 // chosen one. With no argument on a terminal it asks for a choice.
 func commandModel(ctx context.Context, c *config, args []string) error {
 	if len(args) == 1 && strings.EqualFold(args[0], "list") {
-		live := map[string][]string{}
-		for _, name := range provider.AvailableNames() {
-			provider, err := c.provider(name)
-			if err != nil {
-				continue
-			}
-			listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			models, err := provider.ListModels(listCtx)
-			cancel()
-			if err != nil {
-				warnf("could not list %s models: %v", name, shortError(err))
-			}
-			live[name] = models
-		}
-		printModelChoices(c, provider.ModelChoices(c.model, live))
+		printModelChoices(c, provider.ModelChoices(c.model, liveModels(ctx, c)))
 		return nil
 	}
 	if len(args) > 0 {
 		return switchModel(ctx, c, strings.Join(args, " "))
+	}
+
+	if picked, err := pickModelInteractive(ctx, c, provider.ModelChoices(c.model, nil), true); !errors.Is(err, errSelectorUnavailable) {
+		if err != nil || picked.IsZero() {
+			if err == nil {
+				fmt.Println(formatNotice(fmt.Sprintf("Keeping %s.", c.model)))
+			}
+			return err
+		}
+		return switchModel(ctx, c, picked.String())
 	}
 
 	printModelChoices(c, provider.ModelChoices(c.model, nil))
@@ -426,6 +466,104 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 }
 
 // pickModel resolves a number from the last listing, or a model name.
+// commandArgumentCompletions suggests values for the first argument of /effort, /model,
+// /approve and /undo in the command menu.
+func commandArgumentCompletions(c *config) func(command, partial string) []completion {
+	return func(command, partial string) []completion {
+		var items []completion
+		add := func(value, description string) {
+			if strings.HasPrefix(strings.ToLower(value), strings.ToLower(partial)) {
+				items = append(items, completion{display: value, description: description, text: "/" + command + " " + value, argument: true})
+			}
+		}
+		switch command {
+		case "effort":
+			for _, option := range effortOptions(c) {
+				description := option.hint
+				if option.current {
+					description = "current · " + description
+				}
+				add(option.label, description)
+			}
+		case "model":
+			for _, choice := range provider.ModelChoices(c.model, nil) {
+				description := choice.Provider
+				if hint := modelHints[choice.ID]; hint != "" {
+					description += " · " + hint
+				}
+				if choice == c.model {
+					description = "current · " + description
+				}
+				add(choice.ID, description)
+			}
+			add("list", "every model the providers report")
+		case "approve":
+			add("on", "run commands without asking")
+			add("off", "ask before each command")
+		case "undo":
+			add("preview", "show what would be restored")
+			add("skip", "give up on a change that cannot be restored")
+		}
+		return items
+	}
+}
+
+// modelHints describe the models the picker offers by default.
+var modelHints = map[string]string{
+	"gpt-6-luna":        "OpenAI's default",
+	"claude-opus-5-5":   "strong all-rounder; Anthropic's default",
+	"claude-fable-5-1":  "most capable Claude; slower and pricier",
+	"claude-sonnet-5-5": "fast everyday coding",
+	"claude-haiku-5-5":  "fastest and cheapest Claude",
+	"deepseek-v4-pro":   "DeepSeek's strongest model",
+	"deepseek-flash":    "fast and cheap",
+}
+
+// moreModelsLabel is the picker entry that lists every model the providers report.
+const moreModelsLabel = "Show every available model…"
+
+// pickModelInteractive lets the user choose from choices with the arrow keys. It
+// returns the zero model when they cancel, and errSelectorUnavailable when there is
+// no interactive terminal. offerMore adds an entry that fetches the full model lists.
+func pickModelInteractive(ctx context.Context, c *config, choices []provider.Model, offerMore bool) (provider.Model, error) {
+	options := make([]selectOption, 0, len(choices)+1)
+	for _, choice := range choices {
+		options = append(options, selectOption{label: choice.ID, hint: modelHints[choice.ID], group: choice.Provider, current: choice == c.model})
+	}
+	if offerMore {
+		options = append(options, selectOption{label: moreModelsLabel, hint: "asks each provider for its list"})
+	}
+	chosen, err := selectOptionInteractive(ctx, c, "Switch model", options)
+	if err != nil || chosen < 0 {
+		return provider.Model{}, err
+	}
+	if chosen < len(choices) {
+		return choices[chosen], nil
+	}
+	return pickModelInteractive(ctx, c, provider.ModelChoices(c.model, liveModels(ctx, c)), false)
+}
+
+// liveModels asks every provider with credentials for its models.
+func liveModels(ctx context.Context, c *config) map[string][]string {
+	live := map[string][]string{}
+	startSpinner("Listing models")
+	defer stopSpinner()
+	for _, name := range provider.AvailableNames() {
+		provider, err := c.provider(name)
+		if err != nil {
+			continue
+		}
+		listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		models, err := provider.ListModels(listCtx)
+		cancel()
+		if err != nil {
+			warnf("could not list %s models: %v", name, shortError(err))
+		}
+		live[name] = models
+	}
+	return live
+}
+
 func pickModel(c *config, raw string) (provider.Model, error) {
 	raw = strings.TrimSpace(raw)
 	if number, err := strconv.Atoi(raw); err == nil {

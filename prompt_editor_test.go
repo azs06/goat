@@ -8,13 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/style"
 )
 
 func completionNames(items []completion) []string {
 	names := make([]string, len(items))
 	for i, item := range items {
-		names[i] = item.name
+		names[i] = strings.TrimPrefix(item.display, "/")
 	}
 	return names
 }
@@ -31,6 +32,7 @@ func TestCommandCompletions(t *testing.T) {
 		"/zzz":       "",
 		"hello":      "",
 		"/model gpt": "",
+		"/help me":   "",
 	}
 	for text, want := range cases {
 		if got := strings.Join(completionNames(commandCompletions(text)), " "); got != want {
@@ -205,5 +207,38 @@ func TestPromptEditorRenderMultiLine(t *testing.T) {
 	out := style.StripANSI(e.render("F", 40))
 	if !strings.Contains(out, "❯ one\n  two\n") || e.cursorRow != 1 {
 		t.Fatalf("got %q cursorRow=%d", out, e.cursorRow)
+	}
+}
+
+func TestArgumentCompletions(t *testing.T) {
+	setCredentials(t, false, true)
+	cfg := &config{model: provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, reasoningEffort: provider.EffortHigh, providers: map[string]provider.Provider{}}
+	previous := argumentCompletions
+	argumentCompletions = commandArgumentCompletions(cfg)
+	t.Cleanup(func() { argumentCompletions = previous })
+
+	if got := strings.Join(completionNames(commandCompletions("/effort ")), " "); got != "none minimal low medium high xhigh max" {
+		t.Fatalf("effort levels: %q", got)
+	}
+	if got := strings.Join(completionNames(commandCompletions("/effort m")), " "); got != "minimal medium max" {
+		t.Fatalf("filtered levels: %q", got)
+	}
+	if got := commandCompletions("/model claude-s"); len(got) != 1 || got[0].display != "claude-sonnet-5-5" {
+		t.Fatalf("model completions: %+v", got)
+	}
+
+	// Enter on a highlighted value runs the command with it; with nothing typed after
+	// the space it runs the bare command, which opens the picker.
+	e := &promptEditor{}
+	if done, _ := typeKeys(t, e, "/", "e", "f", "f", "o", "r", "t", " ", "h", "\x1b[B", "\r"); !done || string(e.buf) != "/effort high" {
+		t.Fatalf("got %q", string(e.buf))
+	}
+	e = &promptEditor{}
+	if done, _ := typeKeys(t, e, "/", "e", "f", "f", "o", "r", "t", " ", "\r"); !done || string(e.buf) != "/effort" {
+		t.Fatalf("got %q", string(e.buf))
+	}
+	e = &promptEditor{}
+	if _, _ = typeKeys(t, e, "/", "e", "f", "f", "o", "r", "t", " ", "l", "\t"); string(e.buf) != "/effort low" {
+		t.Fatalf("Tab gave %q", string(e.buf))
 	}
 }

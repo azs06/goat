@@ -70,8 +70,8 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 
 | Command | |
 | --- | --- |
-| `/model` | Pick a model from a numbered list, or `/model <name or number>`. `/model list` also asks each provider for its models. Only providers with an API key are listed. |
-| `/effort [level]` | Show or set the reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
+| `/model [name]` | Pick a model with the arrow keys (type to filter), or `/model <name or number>`. The last entry, and `/model list`, ask each provider for every model. Only providers with an API key are listed. |
+| `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
 | `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
@@ -84,6 +84,10 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands. |
 | `/exit` (`/quit`) | Exit. |
+
+After a command and a space, the menu suggests its arguments: the effort levels for
+`/effort `, the models for `/model `, `on`/`off` for `/approve ` and so on. Pickers and
+menus take Up/Down to move, Enter to choose and Esc to cancel.
 
 The older commands (`help`, `exit`, `quit`, `status`, `compact`, `undo`, `tools`, `history`,
 `resume`, `reset`) also run when typed alone without the slash. Newer ones need the slash,

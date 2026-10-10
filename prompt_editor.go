@@ -16,15 +16,34 @@ import (
 // place of the footer: Up/Down move the selection, Tab completes it, Enter runs it and
 // Esc closes the menu. Piped input and plain output never use the editor.
 
+// completion is one entry of the menu: a command, or a value for a command's argument.
+// display is what the menu shows; text is what Tab and Enter put in the prompt.
 type completion struct {
-	name, description string
+	display, description, text string
+	// argument is set for argument values, which Enter runs straight away.
+	argument bool
 }
 
-// commandCompletions lists the commands text could be the start of: commands whose name
-// starts with what follows the slash, then aliases whose command did not already match.
-// Text that does not start with a slash or already has arguments gets none.
+// argumentCompletions, when set, offers values for a command's first argument, such as
+// the effort levels after "/effort ". It returns nil for commands without suggestions.
+var argumentCompletions func(command, partial string) []completion
+
+// commandCompletions lists what text could be completed to: after a slash, commands
+// whose name starts with what follows it, then aliases whose command did not already
+// match; after a command and a space, values for its first argument. Other text gets
+// none.
 func commandCompletions(text string) []completion {
-	if !strings.HasPrefix(text, "/") || strings.ContainsFunc(text, unicode.IsSpace) {
+	if !strings.HasPrefix(text, "/") {
+		return nil
+	}
+	if name, partial, found := strings.Cut(text[1:], " "); found {
+		cmd, ok := findCommand(strings.ToLower(name))
+		if !ok || argumentCompletions == nil || strings.ContainsFunc(partial, unicode.IsSpace) {
+			return nil
+		}
+		return argumentCompletions(cmd.name, partial)
+	}
+	if strings.ContainsFunc(text, unicode.IsSpace) {
 		return nil
 	}
 	prefix := strings.ToLower(text[1:])
@@ -37,7 +56,7 @@ func commandCompletions(text string) []completion {
 	var matches []completion
 	for _, name := range names {
 		if strings.HasPrefix(name, prefix) {
-			matches = append(matches, completion{name: name, description: commands[name].description})
+			matches = append(matches, completion{display: "/" + name, description: commands[name].description, text: "/" + name})
 		}
 	}
 	if prefix == "" {
@@ -52,7 +71,7 @@ func commandCompletions(text string) []completion {
 	for _, alias := range aliases {
 		target := commandAliases[alias]
 		if strings.HasPrefix(alias, prefix) && !strings.HasPrefix(target, prefix) {
-			matches = append(matches, completion{name: alias, description: "Same as /" + target})
+			matches = append(matches, completion{display: "/" + alias, description: "Same as /" + target, text: "/" + alias})
 		}
 	}
 	return matches
@@ -72,7 +91,7 @@ func renderCompletionMenu(items []completion, selected, width int) []string {
 
 	nameWidth := 0
 	for _, item := range items {
-		nameWidth = max(nameWidth, style.VisibleWidth(item.name)+1)
+		nameWidth = max(nameWidth, style.VisibleWidth(item.display))
 	}
 
 	available := width - 1
@@ -82,7 +101,7 @@ func renderCompletionMenu(items []completion, selected, width int) []string {
 		if i == selected {
 			marker = style.Glyphs().Prompt + " "
 		}
-		head := style.TruncateToWidth(marker+style.PadRight("/"+items[i].name, nameWidth+2), available)
+		head := style.TruncateToWidth(marker+style.PadRight(items[i].display, nameWidth+2), available)
 		description := style.TruncateToWidth(items[i].description, available-style.VisibleWidth(head))
 		if i == selected {
 			lines = append(lines, style.Selected.Render(head)+style.Muted.Render(description))
@@ -233,18 +252,28 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 			e.insert("\n")
 			return false, nil
 		}
-		// Enter runs the highlighted command unless the text already names one.
+		// Enter runs the highlighted command, or the command with the highlighted
+		// argument, unless the text already names a command.
 		if items := e.completions(); len(items) > 0 {
-			if _, exact := findCommand(strings.ToLower(string(e.buf[1:]))); !exact {
-				e.setText("/" + items[e.selected].name)
+			_, exact := findCommand(strings.ToLower(string(e.buf[1:])))
+			// "/effort " with nothing after the space runs /effort itself, which asks.
+			bareArgument := items[0].argument && strings.HasSuffix(string(e.buf), " ")
+			if !exact && !bareArgument {
+				e.setText(items[e.selected].text)
 			}
 		}
+		e.setText(strings.TrimRight(string(e.buf), " "))
 		return true, nil
 	case "\n", "\x1b\r", "\x1b\n": // Ctrl-J, Alt-Enter
 		e.insert("\n")
 	case "\t":
 		if items := e.completions(); len(items) > 0 {
-			e.setText("/" + items[e.selected].name + " ")
+			item := items[e.selected]
+			if item.argument {
+				e.setText(item.text)
+			} else {
+				e.setText(item.text + " ")
+			}
 		}
 	case "\x10", "\x1b[A", "\x1bOA": // Ctrl-P, Up
 		if items := e.completions(); len(items) > 0 {

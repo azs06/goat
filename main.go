@@ -477,6 +477,7 @@ func main() {
 	cfg.interactive = stdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve
+	argumentCompletions = commandArgumentCompletions(cfg)
 
 	printWelcome(cfg)
 
