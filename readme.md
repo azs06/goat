@@ -7,6 +7,18 @@ approval. From a certain point on, goat has been improving its own source code.
 
 /btw This is an experimental project.
 
+- Streams replies as formatted markdown, with syntax-highlighted code and clickable links.
+- Reads, searches and edits files through its own tools, with a diff for every change and
+  `/undo` for every file edit.
+- Runs shell commands only after you approve them, without your API keys in their
+  environment.
+- Lets you keep typing while it works: queued messages steer the turn in progress.
+- Picks models and effort with the arrow keys, keeps prompt history, completes paths, and
+  takes multi-line and pasted input.
+- Lays requests out for the providers' prompt caches and shows what each turn cost.
+- Reads project instructions from `AGENTS.md`, and has a plan mode that changes nothing.
+- Works the same in scripts: `goat -p "..."` prints just the reply.
+
 ## Quick start
 
 goat needs Go 1.25 or newer and an API key for at least one provider:
@@ -16,7 +28,8 @@ export OPENAI_API_KEY=...      # OpenAI models, and/or
 export ANTHROPIC_API_KEY=...   # Claude models (ANTHROPIC_AUTH_TOKEN also works), and/or
 export DEEPSEEK_API_KEY=...    # DeepSeek models
 
-go run .                       # or: go build -o goat . && ./goat
+go install github.com/azs06/goat@latest && goat
+# or, from a checkout: go run .   (or go build -o goat . && ./goat)
 ```
 
 Keys can also go in a `.env` file in the directory goat runs in. Only providers with a key
@@ -25,41 +38,45 @@ is its workspace.
 
 ## Using goat
 
-Type a prompt and press Enter. goat streams the reply as formatted markdown (code blocks syntax-highlighted, links
-clickable in terminals that support them) and shows
-each tool call as it happens, with a short summary of the result and a diff for file
-edits. Press Ctrl-C while it is working to interrupt the turn; the next prompt continues
-from where it stopped. Ctrl-C at an empty prompt asks you to press it again to exit, and
-Ctrl-D exits straight away.
+Type a request and press Enter. goat streams the reply and shows each tool call as it
+happens, with a short summary of the result and a diff for file edits; `/output` shows a
+result in full. Press Ctrl-C while it is working to interrupt the turn; the next prompt
+continues from where it stopped. Ctrl-C at an empty prompt asks you to press it again to
+exit, and Ctrl-D exits straight away.
 
-You can keep typing while goat works: the line under the spinner takes a message, and
-Enter queues it. Queued text goes to the model with the next tool results, so it can
-change course mid-turn; anything still queued when the turn ends is sent as the next
-prompt. Slash commands wait until the turn is over. Up on an empty line takes the last
-queued message back to edit. After Ctrl-C or a failed turn nothing queued is sent; it is
-put back in the prompt instead. While the reply is streaming the line is hidden, but what you type is
-kept. Queueing needs an interactive color terminal.
+The prompt sits between two rules. The footer under it shows the model, the effort, the
+git branch with the number of changed files, and the conversation's approximate size;
+`?` on an empty prompt replaces it with the keyboard shortcuts.
 
-The prompt sits between two rules, with a footer showing the model, the effort, the git
-branch and how many files are changed, and the conversation's approximate size. Typing `/` opens a menu of matching commands in place of
-the footer:
+### The prompt
 
 | Key | |
 | --- | --- |
-| Up/Down, Ctrl-P/Ctrl-N | Move the menu selection, move between lines of a longer prompt, or bring back earlier prompts |
-| Tab | Complete the selected command so you can add arguments, or complete the file path before the cursor (several matches open a menu; `@path` works too) |
-| Enter | Run the selected command, or send the prompt |
+| Enter | Send the prompt, or run the command selected in the menu |
 | Ctrl-J, Alt-Enter, `\` then Enter | Start a new line |
+| Up/Down, Ctrl-P/Ctrl-N | Move in a menu, move between the lines of a longer prompt, or bring back earlier prompts (kept across sessions) |
+| Tab | Complete the selected command, or the file path before the cursor (also after `@`); several matches open a menu |
 | Esc | Close the menu |
 | Left/Right, Home/End, Ctrl-A/Ctrl-E | Move the cursor; Home and End stay on the current line |
 | Alt-Left/Alt-Right, Alt-B/Alt-F | Move by word |
 | Ctrl-U, Ctrl-K, Ctrl-W | Delete to the start of the line, to the end, or the word before the cursor |
+| `?` | On an empty prompt, show these keys |
 
-Pasted text keeps its line breaks and is never sent before you press Enter. `?` on an
-empty prompt shows these keys in place of the footer, and `/help` lists them with the
-commands.
+Typing `/` opens a menu of matching commands; after a command and a space it suggests the
+command's arguments, such as the effort levels after `/effort `. Pasted text keeps its
+line breaks and is never sent before you press Enter.
 
-Command-line flags:
+### Typing while goat works
+
+The line under the spinner takes a message while a turn runs, and Enter queues it. Queued
+text goes to the model with the next tool results, so it can change course mid-turn;
+anything still queued when the turn ends is sent as the next prompt. Slash commands wait
+until the turn is over. Up on an empty line takes the last queued message back to edit.
+After Ctrl-C or a failed turn nothing queued is sent; it is put back in the prompt
+instead. While the reply is streaming the line is hidden, but what you type is kept.
+Queueing needs an interactive color terminal.
+
+### Command line
 
 ```sh
 goat                          # start, resuming the last conversation
@@ -84,8 +101,8 @@ escape sequences, and each line of piped input is one prompt or command:
 printf 'summarize main.go\n/exit\n' | goat > summary.txt
 ```
 
-Nobody can approve `run_bash` commands in that mode, so they are declined unless
-`GOAT_AUTO_APPROVE_BASH=1` is set.
+Nobody can approve `run_bash` commands in that mode, so they are declined unless `-y` or
+`GOAT_AUTO_APPROVE_BASH=1` is given.
 
 ## Commands
 
@@ -108,12 +125,11 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/theme` | Reload the theme file and show which one is in use. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
-| `/help` | List the commands. |
+| `/help` | List the commands and keys. |
 | `/exit` (`/quit`) | Exit. |
 
-After a command and a space, the menu suggests its arguments: the effort levels for
-`/effort `, the models for `/model `, `on`/`off` for `/approve ` and so on. Pickers and
-menus take Up/Down to move, Enter to choose and Esc to cancel.
+The pickers (`/model`, `/effort`, `/output`) take Up/Down to move, typing to filter,
+Enter to choose and Esc to cancel.
 
 The older commands (`help`, `exit`, `quit`, `status`, `compact`, `undo`, `tools`, `history`,
 `resume`, `reset`) also run when typed alone without the slash. Newer ones need the slash,
@@ -139,8 +155,8 @@ workspace.
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
 repository git decides; elsewhere the root `.gitignore` is read); `include_ignored=true`
 searches everything. Every tool that changes files accepts `preview=true`, which returns a
-diff without changing anything. A turn can make up to 40 rounds of tool calls; past that goat stops and asks you
-to send another message to continue.
+diff without changing anything. A turn can make up to 40 rounds of tool calls; past that
+goat stops and asks you to send another message to continue.
 
 ## Cost
 
@@ -163,9 +179,9 @@ Put notes for the agent in `AGENTS.md` at the workspace root (`GOAT.md` or `CLAU
 are used when there is no `AGENTS.md`), and personal ones in `~/.config/goat/AGENTS.md`.
 They are sent at the start of every new conversation, including one that starts from a
 `/compact` summary, together with the git branch and the list of uncommitted changes when
-the workspace is a repository. They go with the first message rather than into the system prompt,
-so the cached prompt prefix stays the same and editing them costs no cache. `/status`
-shows which files are in use.
+the workspace is a repository. They go with the first message rather than into the system
+prompt, so the cached prompt prefix stays the same and editing them costs no cache.
+`/status` shows which files are in use.
 
 ## Models and providers
 
@@ -308,6 +324,16 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `GOAT_REDUCED_MOTION` | | Keep the spinner still (it updates once a second) |
 | `NO_COLOR` | | Turn styling off |
 | `GOAT_FORCE_COLOR` | | Style output even when stdout is not a terminal, for example when piping through a pager that understands colors |
+
+goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` when set):
+
+| File | |
+| --- | --- |
+| `.env` in the workspace | API keys and other variables, loaded at startup |
+| `AGENTS.md` (or `GOAT.md`, `CLAUDE.md`) in the workspace | Project instructions |
+| `~/.config/goat/AGENTS.md` | Your own instructions for every project |
+| `~/.config/goat/theme.json` | Theme |
+| `~/.config/goat/prices.json` | Model prices for cost reporting |
 
 ## Project layout
 
