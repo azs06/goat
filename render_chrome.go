@@ -49,7 +49,7 @@ func renderRule(width int) string {
 // goat always printed.
 func renderBanner(model, effort, cwd, git string, width int) string {
 	if !style.Enabled() {
-		return fmt.Sprintf("Welcome to G.O.A.T agent\nModel: %s (effort %s). Type /help for commands.", model, effort)
+		return fmt.Sprintf("Welcome to G.O.A.T 🐐 agent\nModel: %s (effort %s). Type /help for commands.", model, effort)
 	}
 	g := style.Glyphs()
 	if width > maxBannerWidth {
@@ -65,7 +65,7 @@ func renderBanner(model, effort, cwd, git string, width int) string {
 	}
 	dimRow := func(text string) string { return row(style.Muted.Render(style.TruncateToWidth(text, inner))) }
 
-	title := style.TruncateToWidth("✻ Welcome to G.O.A.T", inner)
+	title := style.TruncateToWidth("✻ Welcome to G.O.A.T 🐐", inner)
 	lines := []string{
 		style.Accent.Render(g.TopLeft + strings.Repeat(g.HLine, width-2) + g.TopRight),
 		row(style.Title.Render(title)),

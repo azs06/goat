@@ -79,7 +79,7 @@ func TestProcessPipedCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	for _, want := range []string{"Welcome to G.O.A.T agent", "Model:     anthropic:claude-opus-5-5", "Conversation", "read_file", "unknown command", "Goodbye"} {
+	for _, want := range []string{"Welcome to G.O.A.T 🐐 agent", "Model:     anthropic:claude-opus-5-5", "Conversation", "read_file", "unknown command", "Goodbye"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

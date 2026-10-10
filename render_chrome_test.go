@@ -56,7 +56,7 @@ func TestRenderBanner(t *testing.T) {
 	withColor(t, false)
 	plain := renderBanner("openai:gpt-6", "medium", "~/code", "", 80)
 	chromeAssertPlain(t, "banner", plain)
-	if !strings.Contains(plain, "Welcome to G.O.A.T agent") || !strings.Contains(plain, "Model: openai:gpt-6 (effort medium)") {
+	if !strings.Contains(plain, "Welcome to G.O.A.T 🐐 agent") || !strings.Contains(plain, "Model: openai:gpt-6 (effort medium)") {
 		t.Errorf("plain banner lost its text: %q", plain)
 	}
 
