@@ -3,7 +3,9 @@ package provider
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -150,19 +152,117 @@ func ModelChoices(current Model, extra map[string][]string) []Model {
 	}
 
 	for _, provider := range AvailableNames() {
+		// The current model stays listed even when the picker would not offer it.
 		if current.Provider == provider {
 			add(current)
 		}
-		for _, id := range curatedModels(provider) {
-			add(Model{Provider: provider, ID: id})
-		}
 		live := append([]string(nil), extra[provider]...)
 		sort.Strings(live)
-		for _, id := range live {
+		for _, id := range pickerModels(provider, append(curatedModels(provider), live...)) {
 			add(Model{Provider: provider, ID: id})
 		}
 	}
 	return choices
+}
+
+// pickerModels narrows a provider's models to the ones the picker offers: OpenAI's
+// GPT-5.6 and GPT-6 series, Claude's 5.5 models and Claude Fable 5.1, and DeepSeek's
+// newest pro and flash models. Any model can still be chosen by name.
+func pickerModels(provider string, ids []string) []string {
+	switch provider {
+	case OpenAI:
+		return filterModels(ids, func(id string) bool {
+			return hasModelPrefix(id, "gpt-5.6") || hasModelPrefix(id, "gpt-6")
+		})
+	case Anthropic:
+		return filterModels(ids, func(id string) bool {
+			for _, family := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"} {
+				if hasModelPrefix(id, family) {
+					return true
+				}
+			}
+			return false
+		})
+	case DeepSeek:
+		return newestDeepSeekModels(ids)
+	default:
+		return ids
+	}
+}
+
+func filterModels(ids []string, keep func(id string) bool) []string {
+	var kept []string
+	for _, id := range ids {
+		if keep(strings.ToLower(id)) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
+// hasModelPrefix matches prefix itself and its variants ("gpt-6-luna", "gpt-6.1",
+// "claude-opus-5-5-20261001"), but not a different version that starts the same way
+// ("gpt-60", "gpt-5.60").
+func hasModelPrefix(id, prefix string) bool {
+	if !strings.HasPrefix(id, prefix) {
+		return false
+	}
+	rest := id[len(prefix):]
+	return rest == "" || rest[0] == '-' || rest[0] == '.' && !strings.Contains(prefix, ".")
+}
+
+var deepSeekVersionPattern = regexp.MustCompile(`-v(\d+(?:\.\d+)*)`)
+
+// newestDeepSeekModels keeps the highest-versioned pro model and flash model, in that
+// order. An ID without a version, such as deepseek-flash, counts as the oldest.
+func newestDeepSeekModels(ids []string) []string {
+	var newest []string
+	for _, tier := range []string{"pro", "flash"} {
+		best, bestVersion := "", []int(nil)
+		for _, id := range ids {
+			lower := strings.ToLower(id)
+			if !strings.Contains(lower, "-"+tier) {
+				continue
+			}
+			version := deepSeekVersion(lower)
+			if best == "" || compareVersions(version, bestVersion) > 0 {
+				best, bestVersion = id, version
+			}
+		}
+		if best != "" {
+			newest = append(newest, best)
+		}
+	}
+	return newest
+}
+
+func deepSeekVersion(id string) []int {
+	match := deepSeekVersionPattern.FindStringSubmatch(id)
+	if match == nil {
+		return nil
+	}
+	var version []int
+	for _, part := range strings.Split(match[1], ".") {
+		number, _ := strconv.Atoi(part)
+		version = append(version, number)
+	}
+	return version
+}
+
+func compareVersions(a, b []int) int {
+	for i := 0; i < max(len(a), len(b)); i++ {
+		var x, y int
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if x != y {
+			return x - y
+		}
+	}
+	return 0
 }
 
 // isOpenAIChatModel filters OpenAI's model list down to models the agent can chat with.

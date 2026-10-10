@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -95,5 +96,36 @@ func TestOpenAIModelListFilter(t *testing.T) {
 		if got := isOpenAIChatModel(id); got != want {
 			t.Errorf("%s: got %v, want %v", id, got, want)
 		}
+	}
+}
+
+func TestPickerModels(t *testing.T) {
+	cases := []struct {
+		provider string
+		ids      []string
+		want     string
+	}{
+		{OpenAI, []string{"gpt-6-luna", "gpt-6", "gpt-6.1-mini", "gpt-5.6", "gpt-5.6-codex", "gpt-5.5", "gpt-5.60", "gpt-60", "gpt-4o", "o3"}, "gpt-6-luna,gpt-6,gpt-6.1-mini,gpt-5.6,gpt-5.6-codex"},
+		{Anthropic, []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "claude-opus-5-5-20261001", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"}, "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,claude-fable-5-1,claude-opus-5-5-20261001"},
+		{DeepSeek, []string{"deepseek-v4-pro", "deepseek-flash"}, "deepseek-v4-pro,deepseek-flash"},
+		{DeepSeek, []string{"deepseek-v4-pro", "deepseek-flash", "deepseek-v4.1-pro", "deepseek-v4-flash", "deepseek-v3-pro"}, "deepseek-v4.1-pro,deepseek-v4-flash"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(pickerModels(c.provider, c.ids), ","); got != c.want {
+			t.Errorf("%s %v:\n got %s\nwant %s", c.provider, c.ids, got, c.want)
+		}
+	}
+}
+
+func TestModelChoicesKeepTheCurrentModel(t *testing.T) {
+	setCredentials(t, true, false)
+	current := Model{OpenAI, "gpt-4.1"}
+	choices := ModelChoices(current, map[string][]string{OpenAI: {"gpt-5.5", "gpt-6.1"}})
+	var ids []string
+	for _, choice := range choices {
+		ids = append(ids, choice.ID)
+	}
+	if got := strings.Join(ids, ","); got != "gpt-4.1,gpt-6-luna,gpt-6.1" {
+		t.Fatalf("expected the current model plus the 5.6/6 series, got %s", got)
 	}
 }

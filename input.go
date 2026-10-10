@@ -8,22 +8,27 @@ import (
 	"io"
 	"strings"
 	"unicode"
+
+	"github.com/azs06/goat/internal/style"
 )
 
-type lineResult struct {
-	text       string
-	terminated bool
-	err        error
+type keyResult struct {
+	key string
+	err error
 }
 
-// lineReader reads input lines without blocking callers that need to give up when their
-// context is cancelled. A read abandoned that way stays in flight, and the next
-// ReadLine receives its line, so typed input is never dropped. It is not safe for
-// concurrent use.
+// lineReader reads input without blocking callers that need to give up when their
+// context is cancelled. It reads one key at a time, so the same reader serves both
+// whole lines (ReadLine) and the prompt editor's keystrokes (readKey). A read abandoned
+// on cancellation stays in flight, and the next read receives its key, and a line
+// cancelled halfway is kept for the next ReadLine, so typed input is never dropped. It
+// is not safe for concurrent use.
 type lineReader struct {
 	reader   *bufio.Reader
-	results  chan lineResult
+	results  chan keyResult
 	inFlight bool
+	// partial is the start of a line whose ReadLine was cancelled before its newline.
+	partial string
 	// lastTerminated reports whether the last line read ended with a newline; a line
 	// ended by Ctrl-D at a terminal does not, so no newline was echoed after it.
 	lastTerminated bool
@@ -32,31 +37,89 @@ type lineReader struct {
 func newLineReader(r io.Reader) *lineReader {
 	return &lineReader{
 		reader:  bufio.NewReader(r),
-		results: make(chan lineResult, 1),
+		results: make(chan keyResult, 1),
 	}
 }
 
 // ReadLine returns the next line without its line ending, or io.EOF once input is closed.
 func (r *lineReader) ReadLine(ctx context.Context) (string, error) {
+	for {
+		key, err := r.readKey(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) && r.partial != "" {
+				return r.takeLine(false), nil
+			}
+			return "", err
+		}
+		if key == "\n" {
+			return r.takeLine(true), nil
+		}
+		r.partial += key
+	}
+}
+
+func (r *lineReader) takeLine(terminated bool) string {
+	line := strings.TrimSuffix(r.partial, "\r")
+	r.partial = ""
+	r.lastTerminated = terminated
+	return line
+}
+
+// readKey returns the next key: one rune, or a whole escape sequence such as the
+// "\x1b[A" an arrow key sends.
+func (r *lineReader) readKey(ctx context.Context) (string, error) {
 	if !r.inFlight {
 		r.inFlight = true
 		go func() {
-			line, err := r.reader.ReadString('\n')
-			if errors.Is(err, io.EOF) && line != "" {
-				err = nil
-			}
-			r.results <- lineResult{text: strings.TrimRight(line, "\r\n"), terminated: strings.HasSuffix(line, "\n"), err: err}
+			key, err := readKeyFrom(r.reader)
+			r.results <- keyResult{key: key, err: err}
 		}()
 	}
 
 	select {
 	case result := <-r.results:
 		r.inFlight = false
-		r.lastTerminated = result.terminated
-		return result.text, result.err
+		return result.key, result.err
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// readKeyFrom reads one rune, or one escape sequence when an ESC arrives with more
+// bytes right behind it. A lone ESC (the Escape key) has nothing buffered after it.
+func readKeyFrom(br *bufio.Reader) (string, error) {
+	first, _, err := br.ReadRune()
+	if err != nil {
+		return "", err
+	}
+	if first != 0x1b || br.Buffered() == 0 {
+		return string(first), nil
+	}
+	next, _, err := br.ReadRune()
+	if err != nil {
+		return string(first), nil
+	}
+	seq := []rune{first, next}
+	switch next {
+	case '[': // CSI: parameters, then a final byte in @..~
+		for br.Buffered() > 0 {
+			ch, _, err := br.ReadRune()
+			if err != nil {
+				break
+			}
+			seq = append(seq, ch)
+			if ch >= 0x40 && ch <= 0x7e {
+				break
+			}
+		}
+	case 'O': // SS3: one more byte
+		if br.Buffered() > 0 {
+			if ch, _, err := br.ReadRune(); err == nil {
+				seq = append(seq, ch)
+			}
+		}
+	}
+	return string(seq), nil
 }
 
 var errBashCommandDeclined = errors.New("the user declined to run this command")
@@ -85,14 +148,14 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	resume := suspendInputGuard()
 	defer resume()
 
-	if colorEnabled {
+	if style.Enabled() {
 		fmt.Print(renderApprovalCard(command, workdir, terminalWidth()))
 	} else {
 		fmt.Printf("\nAllow run_bash in %s?\n%s\n[y]es / [n]o / [a]lways this session (or type feedback to decline): ", escapeControlChars(workdir), indentBlock(escapeControlChars(command), "    "))
 	}
 	answer, err := a.input.ReadLine(ctx)
 	if err != nil {
-		if colorEnabled && errors.Is(err, context.Canceled) {
+		if style.Enabled() && errors.Is(err, context.Canceled) {
 			// Redraw the prompt row to wipe the "^C" the terminal echoed onto it.
 			fmt.Print("\r\x1b[K" + renderApprovalPrompt())
 		}

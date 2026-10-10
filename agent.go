@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 const (
@@ -33,6 +35,10 @@ type conversationState struct {
 
 var streamRetrySleeper = sleepWithContext
 
+// takeSteering, when set, returns what the user typed while the turn was working, to
+// be sent to the model with the next tool results.
+var takeSteering func() string
+
 // turnCheckpoint, when set, receives the state after every tool round so it can be
 // saved before the turn finishes.
 var turnCheckpoint func(conversationState)
@@ -56,7 +62,7 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 // the window title. The spinner is cleared just before anything is drawn.
 func printModelText(md *markdownStream, text string) {
 	text = escapeControlChars(strings.ReplaceAll(text, "\r", ""))
-	if !colorEnabled || md == nil {
+	if !style.Enabled() || md == nil {
 		fmt.Print(text)
 		return
 	}
@@ -73,7 +79,7 @@ func streamAttempt(ctx context.Context, p provider.Provider, req provider.Reques
 	startSpinner("Thinking")
 	defer func() {
 		stopSpinner()
-		if colorEnabled {
+		if style.Enabled() {
 			fmt.Print(md.Flush())
 		}
 	}()
@@ -205,7 +211,7 @@ func prepareToolOutputForModel(toolName, output string) string {
 // toolRenderWidth is the width tool blocks are fitted to. Plain output (pipes, logs,
 // NO_COLOR) is never clipped, so logs keep the full command and error text.
 func toolRenderWidth() int {
-	if !colorEnabled {
+	if !style.Enabled() {
 		return math.MaxInt32
 	}
 	return terminalWidth()
@@ -237,7 +243,7 @@ func runToolCalls(ctx context.Context, providerName string, resp *provider.Respo
 		}
 
 		logToolCallStart(toolCall)
-		recordHistory(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, ContextTokens: resp.Usage.ContextTokens(), Provider: providerName})
+		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage))
 
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
@@ -298,7 +304,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	for round := 1; ; round++ {
 		resp, printedText, err := executeStreamedResponse(ctx, p, req)
 		// The markdown renderer ends every line itself; plain streamed text may not.
-		if printedText && !colorEnabled {
+		if printedText && !style.Enabled() {
 			fmt.Println()
 		}
 		if err != nil {
@@ -334,7 +340,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 		next := conversationState{conversation: resp.Conversation, pendingToolResults: results}
 		if len(results) == 0 {
-			recordHistory(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, ContextTokens: resp.Usage.ContextTokens(), Provider: providerName})
+			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage))
 			if stopErr != nil {
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			}
@@ -361,6 +367,13 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		if takeSteering != nil {
+			if text := takeSteering(); text != "" {
+				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
+				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
+				req.UserText = text
+			}
+		}
 	}
 }
 

@@ -10,11 +10,13 @@ import (
 	"unicode"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 // The application chrome: the welcome banner, the prompt frame and footer, the
 // run_bash approval card and command listings. Everything here returns strings, so it
-// can be tested; callers decide where they go. Plain mode (colorEnabled false) gets
+// can be tested; callers decide where they go. Plain mode (style.Enabled() false) gets
 // plain text with no escapes.
 
 const maxBannerWidth = 70
@@ -39,16 +41,16 @@ func renderRule(width int) string {
 	if width < 1 {
 		width = 1
 	}
-	return styleSubtle(strings.Repeat(glyphs().hline, width))
+	return style.Subtle.Render(strings.Repeat(style.Glyphs().HLine, width))
 }
 
 // renderBanner is the welcome box shown at startup. In plain mode it is the two lines
 // goat always printed.
 func renderBanner(model, effort, cwd string, width int) string {
-	if !colorEnabled {
+	if !style.Enabled() {
 		return fmt.Sprintf("Welcome to G.O.A.T agent\nModel: %s (effort %s). Type /help for commands.", model, effort)
 	}
-	g := glyphs()
+	g := style.Glyphs()
 	if width > maxBannerWidth {
 		width = maxBannerWidth
 	}
@@ -58,20 +60,20 @@ func renderBanner(model, effort, cwd string, width int) string {
 	inner := width - 4 // "│ " and " │"
 
 	row := func(content string) string {
-		return styleAccent(g.vline) + " " + padRight(content, inner) + " " + styleAccent(g.vline)
+		return style.Accent.Render(g.VLine) + " " + style.PadRight(content, inner) + " " + style.Accent.Render(g.VLine)
 	}
-	dimRow := func(text string) string { return row(styleDim(truncateToWidth(text, inner))) }
+	dimRow := func(text string) string { return row(style.Muted.Render(style.TruncateToWidth(text, inner))) }
 
-	title := truncateToWidth("✻ Welcome to G.O.A.T", inner)
+	title := style.TruncateToWidth("✻ Welcome to G.O.A.T", inner)
 	lines := []string{
-		styleAccent(g.topLeft + strings.Repeat(g.hline, width-2) + g.topRight),
-		row(paint(title, sgrBold, fgAccent)),
+		style.Accent.Render(g.TopLeft + strings.Repeat(g.HLine, width-2) + g.TopRight),
+		row(style.Title.Render(title)),
 		row(""),
-		dimRow("model  " + model + " " + g.dot + " effort " + effort),
+		dimRow("model  " + model + " " + g.Dot + " effort " + effort),
 		dimRow("cwd    " + cwd),
 		row(""),
-		dimRow("/help for commands " + g.dot + " ctrl-c interrupts a turn"),
-		styleAccent(g.bottomLeft + strings.Repeat(g.hline, width-2) + g.bottomRight),
+		dimRow("/help for commands " + g.Dot + " ctrl-c interrupts a turn"),
+		style.Accent.Render(g.BottomLeft + strings.Repeat(g.HLine, width-2) + g.BottomRight),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -79,8 +81,8 @@ func renderBanner(model, effort, cwd string, width int) string {
 // renderFooter joins the status parts with dots into one dim line that fits in width-1
 // cells; the last column is left free so the cursor never wraps.
 func renderFooter(parts []string, width int) string {
-	line := "  " + strings.Join(parts, " "+glyphs().dot+" ")
-	return styleSubtle(truncateToWidth(line, width-1))
+	line := "  " + strings.Join(parts, " "+style.Glyphs().Dot+" ")
+	return style.Subtle.Render(style.TruncateToWidth(line, width-1))
 }
 
 // formatTokenCount renders a token count as "850" or "12k".
@@ -93,7 +95,7 @@ func formatTokenCount(tokens int64) string {
 
 // promptPrefix is what the interactive prompt line starts with.
 func promptPrefix() string {
-	return styleAccent(glyphs().prompt) + " "
+	return style.Prompt.Render(style.Glyphs().Prompt) + " "
 }
 
 // renderPromptFrame draws the rule, the empty prompt line, a second rule and the
@@ -101,7 +103,7 @@ func promptPrefix() string {
 // is printed first and the cursor moved afterwards so it works at the bottom of the
 // screen, where printing scrolls.
 func renderPromptFrame(footer string, width int) string {
-	col := visibleWidth(promptPrefix()) + 1
+	col := style.VisibleWidth(promptPrefix()) + 1
 	return renderRule(width-1) + "\n" + promptPrefix() + "\n" + renderRule(width-1) + "\n" + footer +
 		fmt.Sprintf("\x1b[2A\x1b[%dG", col)
 }
@@ -137,7 +139,7 @@ func echoedWidth(text string) int {
 // rule above the prompt line and clears everything from there down: the rule, the
 // input, and the rule and footer under it.
 func renderPromptCleanup(text string, width int) string {
-	rows := inputRows(visibleWidth(promptPrefix()), text, width)
+	rows := inputRows(style.VisibleWidth(promptPrefix()), text, width)
 	return fmt.Sprintf("\x1b[%dA\r\x1b[J", rows+1)
 }
 
@@ -146,29 +148,29 @@ func renderPromptCleanup(text string, width int) string {
 // so re-showing the line cannot move the cursor.
 func renderUserMessage(text string, width int) string {
 	text = escapeControlChars(text)
-	if !colorEnabled {
-		return glyphs().prompt + " " + text
+	if !style.Enabled() {
+		return style.Glyphs().Prompt + " " + text
 	}
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		prefix := "  "
 		if i == 0 {
-			prefix = glyphs().prompt + " "
+			prefix = style.Glyphs().Prompt + " "
 		}
 		// The highlighted pad space is dropped when the line already ends exactly at
 		// the right edge, where it would wrap onto a row of its own.
 		pad := " "
-		if width > 0 && (visibleWidth(prefix)+visibleWidth(line))%width == 0 {
+		if width > 0 && (style.VisibleWidth(prefix)+style.VisibleWidth(line))%width == 0 {
 			pad = ""
 		}
-		lines[i] = paint(prefix, fgAccent, bgPrompt) + paint(line+pad, sgrBold, bgPrompt)
+		lines[i] = style.UserMarker.Render(prefix) + style.UserMessage.Render(line+pad)
 	}
 	return strings.Join(lines, "\n")
 }
 
 // renderWorked is the summary under a finished turn.
 func renderWorked(elapsed time.Duration) string {
-	return styleSubtle("✻ Worked for " + formatElapsed(elapsed.Truncate(time.Second)))
+	return style.Subtle.Render("✻ Worked for " + formatElapsed(elapsed.Truncate(time.Second)))
 }
 
 // renderApprovalCard is the framed run_bash approval question, ending with the input
@@ -176,21 +178,21 @@ func renderWorked(elapsed time.Duration) string {
 // are hard-wrapped, never cut, to fit width so every row keeps the bar and the whole
 // command is visible before it is approved.
 func renderApprovalCard(command, workdir string, width int) string {
-	g := glyphs()
-	bar := styleWarn(g.vline) + " "
+	g := style.Glyphs()
+	bar := style.Warning.Render(g.VLine) + " "
 	room := width - 3 // the bar, its space, and the last column left free
 	if room < 10 {
 		room = 10
 	}
 	var b strings.Builder
-	title := styleWarn(g.topLeft+g.hline+" ") + paint("Run command?", sgrBold, fgYellow)
+	title := style.Warning.Render(g.TopLeft+g.HLine+" ") + style.ApprovalTitle.Render("Run command?")
 	where := "in " + escapeControlChars(workdir)
-	if visibleWidth(title)+2+visibleWidth(where) <= room+2 {
-		b.WriteString("\n" + title + "  " + styleDim(where) + "\n")
+	if style.VisibleWidth(title)+2+style.VisibleWidth(where) <= room+2 {
+		b.WriteString("\n" + title + "  " + style.Muted.Render(where) + "\n")
 	} else {
 		b.WriteString("\n" + title + "\n")
 		for _, row := range hardWrap(where, room) {
-			b.WriteString(bar + styleDim(row) + "\n")
+			b.WriteString(bar + style.Muted.Render(row) + "\n")
 		}
 	}
 	for _, line := range strings.Split(strings.ReplaceAll(escapeControlChars(command), "\t", "    "), "\n") {
@@ -204,12 +206,12 @@ func renderApprovalCard(command, workdir string, width int) string {
 
 // renderApprovalPrompt is the last row of the approval card, where the answer is typed.
 func renderApprovalPrompt() string {
-	g := glyphs()
-	return styleWarn(g.bottomLeft+g.hline+" ") +
-		styleAccent("[y]") + styleDim("es "+g.dot+" ") +
-		styleAccent("[n]") + styleDim("o "+g.dot+" ") +
-		styleAccent("[a]") + styleDim("lways "+g.dot+" or type feedback ") +
-		styleAccent(g.prompt) + " "
+	g := style.Glyphs()
+	return style.Warning.Render(g.BottomLeft+g.HLine+" ") +
+		style.Accent.Render("[y]") + style.Muted.Render("es "+g.Dot+" ") +
+		style.Accent.Render("[n]") + style.Muted.Render("o "+g.Dot+" ") +
+		style.Accent.Render("[a]") + style.Muted.Render("lways "+g.Dot+" or type feedback ") +
+		style.Accent.Render(g.Prompt) + " "
 }
 
 // hardWrap splits plain text into rows of at most width runes.
@@ -237,13 +239,13 @@ func renderHelpTable(cmds map[string]*cliCommand) string {
 	lines := make([]string, 0, len(names))
 	for _, name := range names {
 		cmd := cmds[name]
-		line := "  " + padRight(styleAccent(cmd.usage), 28) + " " + styleDim(cmd.description)
+		line := "  " + style.PadRight(style.Accent.Render(cmd.usage), 28) + " " + style.Muted.Render(cmd.description)
 		if len(cmd.aliases) > 0 {
 			aliases := make([]string, len(cmd.aliases))
 			for i, alias := range cmd.aliases {
 				aliases[i] = "/" + alias
 			}
-			line += styleSubtle(" (also " + strings.Join(aliases, ", ") + ")")
+			line += style.Subtle.Render(" (also " + strings.Join(aliases, ", ") + ")")
 		}
 		lines = append(lines, line)
 	}
@@ -254,13 +256,13 @@ func renderHelpTable(cmds map[string]*cliCommand) string {
 func renderKeyValues(rows [][2]string) string {
 	width := 0
 	for _, row := range rows {
-		if w := visibleWidth(row[0]); w > width {
+		if w := style.VisibleWidth(row[0]); w > width {
 			width = w
 		}
 	}
 	lines := make([]string, len(rows))
 	for i, row := range rows {
-		lines[i] = padRight(styleDim(row[0]), width) + " " + row[1]
+		lines[i] = style.PadRight(style.Muted.Render(row[0]), width) + " " + row[1]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -269,13 +271,13 @@ func renderKeyValues(rows [][2]string) string {
 func renderModelChoices(choices []provider.Model, current provider.Model) string {
 	lines := make([]string, len(choices))
 	for i, choice := range choices {
-		number := styleSubtle(fmt.Sprintf("%2d.", i+1))
+		number := style.Subtle.Render(fmt.Sprintf("%2d.", i+1))
 		if choice == current {
 			marker := "*"
-			if colorEnabled {
-				marker = paint(glyphs().prompt, sgrBold, fgAccent)
+			if style.Enabled() {
+				marker = style.Highlight.Render(style.Glyphs().Prompt)
 			}
-			lines[i] = marker + " " + number + " " + paint(choice.String(), sgrBold, fgAccent)
+			lines[i] = marker + " " + number + " " + style.Highlight.Render(choice.String())
 			continue
 		}
 		lines[i] = "  " + number + " " + choice.String()

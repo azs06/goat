@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 func withToolTestColor(t *testing.T, enabled bool) {
 	t.Helper()
-	previous := colorEnabled
-	colorEnabled = enabled
-	t.Cleanup(func() { colorEnabled = previous })
+	t.Cleanup(style.SetEnabled(enabled))
+	t.Cleanup(style.SetTrueColor(false))
 }
 
 func toolTestCall(name, args string) provider.ToolCall {
@@ -58,10 +59,10 @@ func TestRenderToolHeaderTruncatesToWidth(t *testing.T) {
 	for _, color := range []bool{false, true} {
 		withToolTestColor(t, color)
 		header := renderToolHeader(toolTestCall("run_bash", `{"command":"`+strings.Repeat("x", 200)+`"}`), 40)
-		if visibleWidth(header) > 40 {
-			t.Fatalf("color=%v: header is %d cells wide: %q", color, visibleWidth(header), header)
+		if style.VisibleWidth(header) > 40 {
+			t.Fatalf("color=%v: header is %d cells wide: %q", color, style.VisibleWidth(header), header)
 		}
-		if !strings.HasSuffix(stripANSI(header), glyphs().ellipsis+")") {
+		if !strings.HasSuffix(style.StripANSI(header), style.Glyphs().Ellipsis+")") {
 			t.Fatalf("color=%v: truncated header should end with an ellipsis: %q", color, header)
 		}
 	}
@@ -70,10 +71,10 @@ func TestRenderToolHeaderTruncatesToWidth(t *testing.T) {
 func TestRenderToolHeaderColor(t *testing.T) {
 	withToolTestColor(t, true)
 	header := renderToolHeader(toolTestCall("read_file", `{"path":"main.go"}`), 80)
-	if !strings.Contains(header, "\x1b["+sgrBold+"mRead") || !strings.Contains(header, fgAccent) {
+	if !strings.Contains(header, style.Strong.Style().Open()+"Read") || !strings.Contains(header, style.Accent.Style().Open()) {
 		t.Fatalf("header should have a bold name and accent bullet: %q", header)
 	}
-	if got := stripANSI(header); got != "● Read(main.go)" {
+	if got := style.StripANSI(header); got != "● Read(main.go)" {
 		t.Fatalf("stripped header = %q", got)
 	}
 }
@@ -132,7 +133,7 @@ func TestRenderToolResultDiff(t *testing.T) {
 
 	withToolTestColor(t, true)
 	colored := renderToolResult(c, output, nil, 0, 80)
-	if !strings.Contains(colored, "\x1b["+fgGreen+"m+new") || !strings.Contains(colored, "\x1b["+fgRed+"m-old") {
+	if !strings.Contains(colored, style.DiffAdded.Style().Open()+"+new") || !strings.Contains(colored, style.DiffRemoved.Style().Open()+"-old") {
 		t.Fatalf("diff lines should be green and red: %q", colored)
 	}
 }
@@ -157,7 +158,7 @@ func TestRenderToolResultErrors(t *testing.T) {
 
 	withToolTestColor(t, true)
 	colored := renderToolResult(toolTestCall("read_file", `{}`), "", errors.New("no such file"), 0, 80)
-	if !strings.Contains(colored, "\x1b["+fgRed+"mError: no such file") {
+	if !strings.Contains(colored, style.Error.Style().Open()+"Error: no such file") {
 		t.Fatalf("error should be red: %q", colored)
 	}
 }
@@ -178,7 +179,7 @@ func TestRenderToolOutputEscapesControlChars(t *testing.T) {
 		withToolTestColor(t, color)
 		output := "Bash output for \"x\" in .:\n\x1b[31mred\rhidden"
 		got := renderToolResult(toolTestCall("run_bash", `{"command":"x"}`), output, nil, 0, 80)
-		if strings.Contains(got, "\r") || strings.Contains(stripANSI(got), "\x1b") {
+		if strings.Contains(got, "\r") || strings.Contains(style.StripANSI(got), "\x1b") {
 			t.Fatalf("color=%v: control characters reached the terminal: %q", color, got)
 		}
 		if !strings.Contains(got, `\x1b[31mred\x0dhidden`) {
@@ -194,7 +195,7 @@ func TestRenderToolResultClipsLongLines(t *testing.T) {
 	withToolTestColor(t, false)
 	output := "Bash output for \"x\" in .:\nfirst\n" + strings.Repeat("y", 300)
 	for _, line := range strings.Split(renderToolResult(toolTestCall("run_bash", `{}`), output, nil, 0, 60), "\n") {
-		if visibleWidth(line) > 60 {
+		if style.VisibleWidth(line) > 60 {
 			t.Fatalf("line wider than 60 cells: %q", line)
 		}
 	}
@@ -215,7 +216,7 @@ func TestRenderToolHeaderLongFlagsFit(t *testing.T) {
 	withToolTestColor(t, true)
 	c := toolTestCall("run_bash", `{"command":"go test ./... -run SomethingLong","workdir":"internal/some/very/long/nested/directory/path/here"}`)
 	for _, width := range []int{40, 20} {
-		if got := visibleWidth(renderToolHeader(c, width)); got > width {
+		if got := style.VisibleWidth(renderToolHeader(c, width)); got > width {
 			t.Errorf("width %d: header is %d cells", width, got)
 		}
 	}

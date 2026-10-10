@@ -3,33 +3,34 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 func withColor(t *testing.T, on bool) {
 	t.Helper()
-	prev := colorEnabled
-	colorEnabled = on
-	t.Cleanup(func() { colorEnabled = prev })
+	t.Cleanup(style.SetEnabled(on))
+	t.Cleanup(style.SetTrueColor(false))
 }
 
 func renderPlain(line string, width int) string {
 	out, _ := renderMarkdownLine(line, mdState{}, width)
-	return stripANSI(out)
+	return style.StripANSI(out)
 }
 
 func TestRenderMarkdownHeadings(t *testing.T) {
 	withColor(t, true)
 	h1, _ := renderMarkdownLine("# Title", mdState{}, 80)
-	if stripANSI(h1) != "Title" || !strings.Contains(h1, fgAccent) || !strings.Contains(h1, "\x1b[1;") {
+	if style.StripANSI(h1) != "Title" || !strings.Contains(h1, style.Heading.Style().Open()) {
 		t.Fatalf("h1 = %q", h1)
 	}
 	h3, _ := renderMarkdownLine("### Sub ###", mdState{}, 80)
-	if stripANSI(h3) != "Sub" || strings.Contains(h3, fgAccent) {
+	if style.StripANSI(h3) != "Sub" || !strings.Contains(h3, style.Subheading.Style().Open()) {
 		t.Fatalf("h3 = %q", h3)
 	}
 	// Bold inside a heading re-opens the heading style afterwards.
 	h2, _ := renderMarkdownLine("## a **b** c", mdState{}, 80)
-	if !strings.Contains(h2, sgrReset+"\x1b[1;"+fgAccent+"m c") {
+	if !strings.Contains(h2, style.Reset+style.Heading.Style().Open()+" c") {
 		t.Fatalf("h2 = %q", h2)
 	}
 }
@@ -37,14 +38,14 @@ func TestRenderMarkdownHeadings(t *testing.T) {
 func TestRenderInlineEmphasisAndCode(t *testing.T) {
 	withColor(t, true)
 	cases := map[string]string{
-		"**bold** text":   "\x1b[1mbold" + sgrReset + " text",
-		"an *italic* one": "an \x1b[3mitalic" + sgrReset + " one",
-		"an _italic_ one": "an \x1b[3mitalic" + sgrReset + " one",
-		"*a* *b*":         "\x1b[3ma" + sgrReset + " \x1b[3mb" + sgrReset,
-		"use `x*y*z` now": "use \x1b[" + fgMagenta + "mx*y*z" + sgrReset + " now",
+		"**bold** text":   "\x1b[1mbold" + style.Reset + " text",
+		"an *italic* one": "an \x1b[3mitalic" + style.Reset + " one",
+		"an _italic_ one": "an \x1b[3mitalic" + style.Reset + " one",
+		"*a* *b*":         "\x1b[3ma" + style.Reset + " \x1b[3mb" + style.Reset,
+		"use `x*y*z` now": "use " + style.InlineCode.Style().Open() + "x*y*z" + style.Reset + " now",
 	}
 	for in, want := range cases {
-		if got := renderInline(in, nil); got != want {
+		if got := renderInline(in, style.Style{}); got != want {
 			t.Errorf("renderInline(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -59,7 +60,7 @@ func TestRenderInlineLeavesIdentifiersAlone(t *testing.T) {
 		"unclosed **bold and `code",
 		"***",
 	} {
-		if got := renderInline(in, nil); got != in {
+		if got := renderInline(in, style.Style{}); got != in {
 			t.Errorf("renderInline(%q) = %q, want unchanged", in, got)
 		}
 	}
@@ -74,16 +75,16 @@ func TestRenderMarkdownCodeFence(t *testing.T) {
 		out, st = renderMarkdownLine(line, st, 20)
 		rows = append(rows, out)
 	}
-	if stripANSI(rows[0]) != "╭─ go" {
+	if style.StripANSI(rows[0]) != "╭─ go" {
 		t.Errorf("open = %q", rows[0])
 	}
-	if stripANSI(rows[1]) != "│ x := a*b*c // **not bold**" || strings.Contains(rows[1], "\x1b[1m") {
+	if style.StripANSI(rows[1]) != "│ x := a*b*c // **not bold**" || strings.Contains(rows[1], "\x1b[1m") {
 		t.Errorf("code row = %q (must not be wrapped or styled as markdown)", rows[1])
 	}
-	if stripANSI(rows[2]) != "│ " {
+	if style.StripANSI(rows[2]) != "│ " {
 		t.Errorf("blank code row = %q", rows[2])
 	}
-	if stripANSI(rows[3]) != "╰─" || st.inFence {
+	if style.StripANSI(rows[3]) != "╰─" || st.inFence {
 		t.Errorf("close = %q, state %+v", rows[3], st)
 	}
 	if !strings.Contains(rows[4], "\x1b[1mb") {
@@ -134,7 +135,7 @@ func TestRenderMarkdownWrapping(t *testing.T) {
 	// next row's indent.
 	out, _ := renderMarkdownLine("- **aaa bbb ccc**", mdState{}, 9)
 	rows := strings.Split(out, "\n")
-	if len(rows) != 2 || !strings.HasSuffix(rows[0], sgrReset) || !strings.HasPrefix(rows[1], "  \x1b[1m") {
+	if len(rows) != 2 || !strings.HasSuffix(rows[0], style.Reset) || !strings.HasPrefix(rows[1], "  \x1b[1m") {
 		t.Fatalf("styled wrap = %q", rows)
 	}
 
@@ -156,7 +157,7 @@ func TestMarkdownStreamLayout(t *testing.T) {
 		t.Fatal("an incomplete line was printed before its newline")
 	}
 	out.WriteString(md.Flush())
-	got := stripANSI(out.String())
+	got := style.StripANSI(out.String())
 	want := "\n● Hello world\n\n  • a\n  tail\n"
 	if got != want {
 		t.Fatalf("stream = %q, want %q", got, want)
@@ -170,7 +171,7 @@ func TestMarkdownStreamLayout(t *testing.T) {
 }
 
 func TestTrackSGRIgnoresNonStyleSequences(t *testing.T) {
-	if got := trackSGR("", "\x1b[2J\x1b[31mred"); got != "\x1b[31m" {
+	if got := style.ActiveAfter("", "\x1b[2J\x1b[31mred"); got != "\x1b[31m" {
 		t.Errorf("got %q", got)
 	}
 }

@@ -1,0 +1,30 @@
+{
+  "$comment": "goat's built-in theme: black and white. The grays are exact entries of the 256-color grayscale ramp.",
+  "styles": {
+    ":root": "--white: #eeeeee; --light: #e4e4e4; --silver: #d0d0d0; --gray-light: #bcbcbc; --gray: #8a8a8a; --gray-dim: #808080; --gray-dark: #585858; --shade: #303030",
+
+    "accent": "color: var(--white)",
+    "muted": "color: var(--gray)",
+    "subtle": "color: var(--gray-dark)",
+    "strong": "font-weight: bold",
+    "emphasis": "font-style: italic",
+    "highlight": "color: var(--white); font-weight: bold",
+    "title": "color: var(--white); font-weight: bold",
+    "heading": "color: var(--white); font-weight: bold",
+    "subheading": "font-weight: bold",
+    "quote": "color: var(--gray); font-style: italic",
+    "code": "color: var(--gray-light)",
+    "code-comment": "color: var(--gray-dark)",
+    "inline-code": "color: var(--light)",
+    "success": "color: var(--white)",
+    "error": "color: var(--gray-dim)",
+    "warning": "color: var(--silver)",
+    "approval-title": "color: var(--silver); font-weight: bold",
+    "diff-added": "color: var(--white)",
+    "diff-removed": "color: var(--gray-dim)",
+    "prompt": "color: var(--white)",
+    "user-marker": "color: var(--white); background-color: var(--shade)",
+    "user-message": "font-weight: bold; background-color: var(--shade)",
+    "selected": "color: var(--white); font-weight: bold"
+  }
+}

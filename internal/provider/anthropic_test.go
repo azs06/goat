@@ -30,3 +30,11 @@ func TestAnthropicLegacyAliasesAndFallbackModels(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicCacheTTL(t *testing.T) {
+	for raw, want := range map[string]string{"": "", "5m": "", "1h": "1h", " 1H ": "1h", "bogus": ""} {
+		if got := string(anthropicCacheTTL(raw)); got != want {
+			t.Errorf("%q: got %q, want %q", raw, got, want)
+		}
+	}
+}

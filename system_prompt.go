@@ -6,6 +6,10 @@ import (
 )
 
 // SystemPrompt lists the tools from agentTools so the prompt and the tool schema never drift.
+// It and agentTools must stay the same for the whole process: every provider caches the
+// tools and system prompt as the start of each request's prefix, so anything that varies
+// here (a date, the working directory, git state) would make every request a cache miss.
+// Send changing context in the conversation instead.
 var SystemPrompt = buildSystemPrompt()
 
 func buildSystemPrompt() string {

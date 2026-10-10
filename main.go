@@ -16,6 +16,8 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 type config struct {
@@ -220,8 +222,8 @@ func envFlag(name string) bool {
 // activeInputGuard is the guard of the command or turn currently running, if any.
 var activeInputGuard *terminalInputGuard
 
-func runWithInputGuard(work func() error) error {
-	guard, err := beginTerminalInputGuard()
+func runWithInputGuard(cbreak bool, work func() error) error {
+	guard, err := beginTerminalInputGuard(cbreak)
 	if err != nil {
 		return err
 	}
@@ -240,6 +242,8 @@ func runWithInputGuard(work func() error) error {
 // the middle of a turn, and returns the function that turns it off again.
 func suspendInputGuard() func() {
 	resumeSpinner := pauseSpinner()
+	capture := activeKeyCapture
+	capture.pause()
 	suspended := time.Now()
 	guard := activeInputGuard
 	if err := guard.suspend(); err != nil {
@@ -250,6 +254,7 @@ func suspendInputGuard() func() {
 		if err := guard.resume(); err != nil {
 			warnf("failed to disable terminal echo: %v", err)
 		}
+		capture.resume()
 		resumeSpinner()
 	}
 }
@@ -287,6 +292,13 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 			return err
 		}
 		warnf("%v; continuing with the full conversation", err)
+	}
+
+	// Messages queued while the turn works go to the model with the next tool results.
+	if cfg.interactive && style.Enabled() {
+		previousSteering := takeSteering
+		takeSteering = takeQueuedText
+		defer func() { takeSteering = previousSteering }()
 	}
 
 	// Save after every tool round and whatever the outcome, so a crash or Ctrl-C never
@@ -330,14 +342,20 @@ func handleInput(cfg *config, text string) error {
 		return err
 	}
 
+	// On an interactive color terminal, what is typed while the work runs is queued.
+	queueing := cfg.interactive && style.Enabled()
 	started := time.Now()
-	err = runWithInputGuard(func() error {
+	err = runWithInputGuard(queueing, func() error {
+		if queueing {
+			startKeyCapture(ctx, cfg.input)
+			defer stopKeyCapture()
+		}
 		if cmd != nil {
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
 	})
-	if cmd == nil && err == nil && colorEnabled {
+	if cmd == nil && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
 			fmt.Println("\n" + renderWorked(elapsed))
@@ -356,7 +374,7 @@ func printWelcome(cfg *config) {
 	}
 	if cfg.approver.autoApprove {
 		message := "run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH)."
-		if colorEnabled {
+		if style.Enabled() {
 			message = formatWarning(message)
 		}
 		fmt.Println(message)
@@ -379,7 +397,8 @@ func footerParts(cfg *config) []string {
 
 // readPrompt shows the prompt and reads one line. On an interactive color terminal the
 // prompt sits between two rules with a status footer below, and once submitted the
-// frame is replaced by the highlighted message. gap puts a blank line above the prompt.
+// frame is replaced by the highlighted message. There the line is typed in the prompt
+// editor, which completes slash commands. gap puts a blank line above the prompt.
 // On an interactive terminal Ctrl-C returns context.Canceled instead of killing goat.
 func readPrompt(cfg *config, gap bool) (string, error) {
 	ctx := context.Background()
@@ -389,7 +408,7 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 		defer stop()
 	}
 
-	fancy := cfg.interactive && colorEnabled
+	fancy := cfg.interactive && style.Enabled()
 	if !fancy {
 		fmt.Print("G.O.A.T > ")
 		text, err := cfg.input.ReadLine(ctx)
@@ -403,7 +422,17 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 	if gap {
 		fmt.Println()
 	}
-	fmt.Print(renderPromptFrame(renderFooter(footerParts(cfg), width), width))
+	footer := renderFooter(footerParts(cfg), width)
+	if text, ok, err := editPrompt(ctx, cfg.input, footer, width); ok {
+		if err == nil && strings.TrimSpace(text) != "" {
+			fmt.Println(renderUserMessage(text, width))
+		}
+		return text, err
+	}
+
+	// The terminal could not be put in cbreak mode: read a whole line with the
+	// terminal echoing it.
+	fmt.Print(renderPromptFrame(footer, width))
 	text, err := cfg.input.ReadLine(ctx)
 	if err != nil {
 		// The cursor is still on the prompt line: clear from the rule above it down.
@@ -435,6 +464,7 @@ func main() {
 	}
 
 	provider.Warnf = warnf
+	applyTheme()
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)
 	cfg.interactive = stdinIsTerminal()
@@ -446,7 +476,14 @@ func main() {
 	gap := true
 	var lastInterrupt time.Time
 	for {
-		text, err := readPrompt(cfg, gap)
+		// Messages queued during the last turn run before the prompt comes back.
+		var err error
+		text, queued := nextQueuedInput()
+		if queued {
+			fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
+		} else {
+			text, err = readPrompt(cfg, gap)
+		}
 		gap = true
 		if errors.Is(err, context.Canceled) {
 			if time.Since(lastInterrupt) < exitConfirmWindow {
@@ -471,14 +508,19 @@ func main() {
 
 		err = handleInput(cfg, text)
 		stopSpinner()
+		if err != nil {
+			// Nothing queued is sent after a turn that was interrupted or failed; it
+			// waits in the prompt instead.
+			returnQueueToPrompt(cfg.input)
+		}
 		switch {
 		case err == nil:
 		case errors.Is(err, errExitRequested):
 			fmt.Println("Closing the Goat... Goodbye!")
 			return
 		case errors.Is(err, context.Canceled):
-			if colorEnabled {
-				fmt.Println("\n" + formatWarning("Interrupted "+glyphs().dot+" tell goat what to do instead"))
+			if style.Enabled() {
+				fmt.Println("\n" + formatWarning("Interrupted "+style.Glyphs().Dot+" tell goat what to do instead"))
 			} else {
 				fmt.Println("\nInterrupted.")
 			}

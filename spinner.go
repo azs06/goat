@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 // spinner shows an animated status line ("✻ Thinking… 4s · ctrl-c to interrupt") while
@@ -18,7 +21,13 @@ type spinner struct {
 	started time.Time
 	stop    chan struct{}
 	done    chan struct{}
-	drawn   bool
+	frame   int
+	// rows is how many lines the block took up when last drawn, 0 when nothing is on
+	// screen. The cursor is always on its last line.
+	rows int
+	// cleared is set once the spinner is gone for good, so a late redraw from a key
+	// typed at the same moment cannot bring it back.
+	cleared bool
 }
 
 var (
@@ -37,7 +46,7 @@ func startSpinner(label string) {
 }
 
 func startSpinnerAt(label string, started time.Time) {
-	if !colorEnabled {
+	if !style.Enabled() {
 		return
 	}
 	stopSpinner()
@@ -91,10 +100,11 @@ func (s *spinner) run() {
 	ticker := time.NewTicker(spinnerInterval)
 	defer ticker.Stop()
 
-	frame := 0
 	for {
-		s.draw(frame)
-		frame++
+		s.mu.Lock()
+		s.frame++
+		s.mu.Unlock()
+		s.draw()
 		select {
 		case <-s.stop:
 			s.clear()
@@ -104,28 +114,72 @@ func (s *spinner) run() {
 	}
 }
 
-func (s *spinner) draw(frame int) {
+// redrawSpinner draws the active spinner again straight away, after the text typed
+// under it changed.
+func redrawSpinner() {
+	spinnerMu.Lock()
+	s := activeSpinner
+	spinnerMu.Unlock()
+	if s != nil {
+		s.draw()
+	}
+}
+
+// draw replaces the block on screen: the status line, then the queued messages and the
+// line being typed while a turn runs. No line is wider than the terminal, so the block
+// never wraps and clearing it only has to move up its row count.
+func (s *spinner) draw() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.cleared {
+		return
+	}
 
+	frame := s.frame
 	elapsed := time.Since(s.started).Truncate(time.Second)
 	glyph := spinnerFrames[frame%len(spinnerFrames)]
-	line := styleAccent(glyph+" "+s.label+glyphs().ellipsis) + " " + styleSubtle(fmt.Sprintf("(%s · ctrl-c to interrupt)", formatElapsed(elapsed)))
+	line := style.Accent.Render(glyph+" "+s.label+style.Glyphs().Ellipsis) + " " + style.Subtle.Render(fmt.Sprintf("(%s · ctrl-c to interrupt)", formatElapsed(elapsed)))
 	// \r and erase-line redraw in place; the line is cut to the terminal width so it
 	// never wraps, which would leave stale copies behind.
-	if visibleWidth(line) >= terminalWidth() {
-		line = styleAccent(glyph + " " + s.label + glyphs().ellipsis)
+	width := terminalWidth()
+	if style.VisibleWidth(line) >= width {
+		line = style.Accent.Render(glyph + " " + s.label + style.Glyphs().Ellipsis)
 	}
-	fmt.Fprint(os.Stdout, "\r\x1b[2K"+line)
-	s.drawn = true
+	below, cursor := queuedInputLines(width)
+
+	var b strings.Builder
+	b.WriteString(s.eraseBlock())
+	b.WriteString(line)
+	for _, extra := range below {
+		b.WriteString("\n\r\x1b[2K" + extra)
+	}
+	if len(below) > 0 {
+		fmt.Fprintf(&b, "\x1b[%dG", cursor)
+	}
+	fmt.Fprint(os.Stdout, b.String())
+	s.rows = 1 + len(below)
+}
+
+// eraseBlock moves to the first line of the block and clears from there down. The
+// caller holds s.mu.
+func (s *spinner) eraseBlock() string {
+	if s.rows == 0 {
+		return "\r\x1b[2K"
+	}
+	up := ""
+	if s.rows > 1 {
+		up = fmt.Sprintf("\x1b[%dA", s.rows-1)
+	}
+	return up + "\r\x1b[J"
 }
 
 func (s *spinner) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.drawn {
-		fmt.Fprint(os.Stdout, "\r\x1b[2K")
-		s.drawn = false
+	s.cleared = true
+	if s.rows > 0 {
+		fmt.Fprint(os.Stdout, s.eraseBlock())
+		s.rows = 0
 	}
 }
 

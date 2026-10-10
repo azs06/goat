@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 var errExitRequested = errors.New("exit requested")
@@ -44,6 +46,7 @@ func init() {
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
+		{name: "theme", usage: "/theme", description: "Reload the theme file and show which one is in use", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
 		{name: "undo", usage: "/undo [preview|skip]", description: "Undo the latest file change (/undo skip gives up on one that cannot be restored)", callback: commandUndo},
 	}
@@ -106,11 +109,11 @@ func commandExit(ctx context.Context, c *config, args []string) error {
 }
 
 func commandHelp(ctx context.Context, c *config, args []string) error {
-	fmt.Println(styleBold("Welcome to the Goat!"))
-	fmt.Println(styleDim("Anything else you type is sent to the agent. Press Ctrl-C while it works to interrupt the turn."))
-	fmt.Println(styleBold("Commands:"))
+	fmt.Println(style.Strong.Render("Welcome to the Goat!"))
+	fmt.Println(style.Muted.Render("Anything else you type is sent to the agent. Press Ctrl-C while it works to interrupt the turn."))
+	fmt.Println(style.Strong.Render("Commands:"))
 	fmt.Println(renderHelpTable(commands))
-	fmt.Println(styleDim("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone."))
+	fmt.Println(style.Muted.Render("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone."))
 	return nil
 }
 
@@ -157,10 +160,10 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(styleBold("Available tools:"))
+	fmt.Println(style.Strong.Render("Available tools:"))
 	bullet := "-"
-	if colorEnabled {
-		bullet = styleAccent(glyphs().bullet)
+	if style.Enabled() {
+		bullet = style.Accent.Render(style.Glyphs().Bullet)
 	}
 	for _, name := range availableToolNames() {
 		fmt.Println(bullet + " " + name)
@@ -212,13 +215,13 @@ func commandHistory(ctx context.Context, c *config, args []string) error {
 	}
 
 	if info, err := os.Stat(resolvedPath); err == nil {
-		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", relPath, styleDim(fmt.Sprintf("(%d bytes)", info.Size())))}}))
+		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", relPath, style.Muted.Render(fmt.Sprintf("(%d bytes)", info.Size())))}}))
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 
-	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", relPath + " " + styleDim("(not created yet)")}}))
+	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", relPath + " " + style.Muted.Render("(not created yet)")}}))
 	return nil
 }
 
@@ -246,12 +249,12 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 	}
 	if c.approver.autoApprove {
 		message := "run_bash commands run without asking "
-		if colorEnabled {
+		if style.Enabled() {
 			message = formatWarning(message)
 		}
-		fmt.Println(message + styleDim("(/approve off to ask again)."))
+		fmt.Println(message + style.Muted.Render("(/approve off to ask again)."))
 	} else {
-		fmt.Println(formatSuccess("run_bash asks before every command ") + styleDim("(/approve on to stop asking for this session)."))
+		fmt.Println(formatSuccess("run_bash asks before every command ") + style.Muted.Render("(/approve on to stop asking for this session)."))
 	}
 	return nil
 }
@@ -265,8 +268,8 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 		saveSession(c)
 	}
-	fmt.Println("Reasoning effort: " + paint(string(c.reasoningEffort), sgrBold, fgAccent) +
-		styleDim(fmt.Sprintf(" (sent to %s as %s). Levels: %s", c.model, effectiveEffortDescription(c), provider.JoinEfforts(provider.EffortLevels))))
+	fmt.Println("Reasoning effort: " + style.Highlight.Render(string(c.reasoningEffort)) +
+		style.Muted.Render(fmt.Sprintf(" (sent to %s as %s). Levels: %s", c.model, effectiveEffortDescription(c), provider.JoinEfforts(provider.EffortLevels))))
 	return nil
 }
 
@@ -277,14 +280,14 @@ func effectiveEffortDescription(c *config) string {
 
 func commandStatus(ctx context.Context, c *config, args []string) error {
 	rows := [][2]string{
-		{"Model:", paint(c.model.String(), sgrBold, fgAccent)},
-		{"Effort:", string(c.reasoningEffort) + styleDim(fmt.Sprintf(" (sent as %s)", effectiveEffortDescription(c)))},
+		{"Model:", style.Highlight.Render(c.model.String())},
+		{"Effort:", string(c.reasoningEffort) + style.Muted.Render(fmt.Sprintf(" (sent as %s)", effectiveEffortDescription(c)))},
 	}
 	for _, name := range provider.Names {
 		if source := provider.CredentialSource(name); source != "" {
-			rows = append(rows, [2]string{"Provider:", padRight(name, 9) + " " + styleSuccess("available") + styleDim(" ("+source+")")})
+			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+source+")")})
 		} else {
-			rows = append(rows, [2]string{"Provider:", styleDim(padRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
 		}
 	}
 
@@ -302,9 +305,16 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	rows = append(rows, [2]string{"Session:", conversation})
 	if entries, err := loadConversationHistoryEntries(); err == nil {
 		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d", estimateConversationTokens(entries), autoCompactThreshold(c))})
+		if usage := conversationCacheUsage(entries); usage.responses > 0 {
+			cache := fmt.Sprintf("%d%% of %d input tokens read from cache over %d response(s)", usage.read*100/usage.promptTokens, usage.promptTokens, usage.responses)
+			if usage.written > 0 {
+				cache += fmt.Sprintf("; %d written", usage.written)
+			}
+			rows = append(rows, [2]string{"Cache:", cache})
+		}
 	}
 	if c.approver != nil {
-		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: styleWarn("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
+		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
 	}
 	if wd, err := os.Getwd(); err == nil {
 		rows = append(rows, [2]string{"Workspace:", wd})
@@ -340,7 +350,7 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 
 	printModelChoices(c, provider.ModelChoices(c.model, nil))
 	if !c.interactive {
-		fmt.Println(styleDim("Use /model <number or model> to switch, or /model list for every available model."))
+		fmt.Println(style.Muted.Render("Use /model <number or model> to switch, or /model list for every available model."))
 		return nil
 	}
 
@@ -355,10 +365,10 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
 	if len(choices) == 0 {
-		fmt.Println(styleWarn("No models are available: set OPENAI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY."))
+		fmt.Println(style.Warning.Render("No models are available: set OPENAI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY."))
 		return
 	}
-	fmt.Println(styleBold("Models") + styleDim(" (only providers with an API key are listed):"))
+	fmt.Println(style.Strong.Render("Models") + style.Muted.Render(" (only providers with an API key are listed):"))
 	fmt.Println(renderModelChoices(choices, c.model))
 }
 

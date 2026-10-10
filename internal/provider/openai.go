@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -27,6 +30,11 @@ type openAIProvider struct {
 	client *openai.Client
 	create OpenAICreateFunc
 	stream OpenAIStreamFunc
+
+	mu sync.Mutex
+	// noExtendedCache holds the models that rejected prompt_cache_retention, so it is
+	// not sent for them again this session.
+	noExtendedCache map[string]bool
 }
 
 // OpenAICreateFunc makes one Responses API call without streaming.
@@ -182,18 +190,74 @@ func openAIInput(req Request) responses.ResponseNewParamsInputUnion {
 	return responses.ResponseNewParamsInputUnion{OfInputItemList: items}
 }
 
+// OpenAI caches prompt prefixes automatically. Two settings raise the hit rate:
+// prompt_cache_key routes requests that share a prefix to the same cache, and
+// prompt_cache_retention "24h" keeps cached prefixes past the few minutes of idle time
+// they otherwise survive.
+// https://platform.openai.com/docs/guides/prompt-caching
+
+// openAIPromptCacheKey names the prefix every goat conversation starts with, the
+// instructions and the tools, so it changes only when they do.
+func openAIPromptCacheKey(system string, tools []ToolSpec) string {
+	hash := sha256.New()
+	hash.Write([]byte(system))
+	hash.Write([]byte{0})
+	encoded, _ := json.Marshal(tools)
+	hash.Write(encoded)
+	return "goat-" + hex.EncodeToString(hash.Sum(nil))[:16]
+}
+
+// openAIExtendedCacheModel is false for model families documented without 24h
+// retention. Any other model is asked for it; one that rejects it is retried without.
+func openAIExtendedCacheModel(model string) bool {
+	lower := strings.ToLower(model)
+	for _, prefix := range []string{"gpt-4o", "gpt-4-", "gpt-3", "chatgpt-", "o1", "o3", "o4"} {
+		if strings.HasPrefix(lower, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *openAIProvider) requestParams(req Request) responses.ResponseNewParams {
 	params := newPlainResponseParams(req.Model, req.Effort, openAIInput(req), req.Conversation.ResponseID, req.System)
 	params.Tools = openAITools(req.Tools)
+	params.PromptCacheKey = openai.String(openAIPromptCacheKey(req.System, req.Tools))
+	p.mu.Lock()
+	rejected := p.noExtendedCache[req.Model]
+	p.mu.Unlock()
+	if !rejected && openAIExtendedCacheModel(req.Model) {
+		params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention24h
+	}
 	return params
 }
 
 func (p *openAIProvider) Send(ctx context.Context, req Request, onText func(string)) (*Response, bool, error) {
-	resp, printed, err := p.createStreamedResponse(ctx, p.requestParams(req), onText)
+	params := p.requestParams(req)
+	resp, printed, err := p.createStreamedResponse(ctx, params, onText)
+	if err != nil && !printed && params.PromptCacheRetention != "" && isCacheRetentionRejection(err) {
+		// Retry once with the default retention and stop asking for 24h for this model.
+		p.mu.Lock()
+		if p.noExtendedCache == nil {
+			p.noExtendedCache = map[string]bool{}
+		}
+		p.noExtendedCache[req.Model] = true
+		p.mu.Unlock()
+		params.PromptCacheRetention = ""
+		resp, printed, err = p.createStreamedResponse(ctx, params, onText)
+	}
 	if err != nil {
 		return nil, printed, err
 	}
 	return convertOpenAIResponse(resp, req.Conversation), printed, nil
+}
+
+func isCacheRetentionRejection(err error) bool {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(apiErr.Param+" "+apiErr.Message), "prompt_cache_retention")
 }
 
 func convertOpenAIResponse(resp *responses.Response, previous Conversation) *Response {

@@ -203,16 +203,16 @@ func TestModelListIncludesLiveModels(t *testing.T) {
 	chdirForTest(t, workspace)
 	setCredentials(t, false, true)
 
-	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: provider.DefaultAnthropicModel}, &fakeProvider{name: provider.Anthropic, listed: []string{"claude-live-1"}})
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: provider.DefaultAnthropicModel}, &fakeProvider{name: provider.Anthropic, listed: []string{"claude-opus-5-5-20261001", "claude-opus-4-8"}})
 	if err := commandModel(context.Background(), cfg, []string{"list"}); err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	found := false
+	listed := map[string]bool{}
 	for _, choice := range cfg.lastModelChoices {
-		found = found || choice.ID == "claude-live-1"
+		listed[choice.ID] = true
 	}
-	if !found {
-		t.Fatalf("expected the live model in the list, got %v", cfg.lastModelChoices)
+	if !listed["claude-opus-5-5-20261001"] || listed["claude-opus-4-8"] {
+		t.Fatalf("expected the live 5.5 model and not the older one, got %v", cfg.lastModelChoices)
 	}
 }
 

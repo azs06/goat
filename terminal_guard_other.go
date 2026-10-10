@@ -2,11 +2,14 @@
 
 package main
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 type terminalInputGuard struct{}
 
-func beginTerminalInputGuard() (*terminalInputGuard, error) {
+func beginTerminalInputGuard(cbreak bool) (*terminalInputGuard, error) {
 	return &terminalInputGuard{}, nil
 }
 
@@ -33,4 +36,8 @@ func stdinIsTerminal() bool {
 
 func stdoutColumns() int {
 	return 0
+}
+
+func enterCbreakMode() (func(), error) {
+	return nil, errors.New("cbreak mode is not supported on this platform")
 }

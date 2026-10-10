@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 func chromeWithColor(t *testing.T, enabled bool) {
 	t.Helper()
-	previous := colorEnabled
-	colorEnabled = enabled
-	t.Cleanup(func() { colorEnabled = previous })
+	t.Cleanup(style.SetEnabled(enabled))
+	t.Cleanup(style.SetTrueColor(false))
 }
 
 func chromeAssertPlain(t *testing.T, name, text string) {
@@ -38,13 +39,13 @@ func TestShortenHome(t *testing.T) {
 
 func TestTruncateToWidth(t *testing.T) {
 	chromeWithColor(t, true)
-	if got := truncateToWidth("hello", 10); got != "hello" {
+	if got := style.TruncateToWidth("hello", 10); got != "hello" {
 		t.Errorf("short text changed: %q", got)
 	}
-	if got := truncateToWidth("hello world", 6); got != "hello…" {
+	if got := style.TruncateToWidth("hello world", 6); got != "hello…" {
 		t.Errorf("got %q", got)
 	}
-	if got := truncateToWidth("hello", 0); got != "" {
+	if got := style.TruncateToWidth("hello", 0); got != "" {
 		t.Errorf("zero width: %q", got)
 	}
 }
@@ -61,16 +62,16 @@ func TestRenderBanner(t *testing.T) {
 	for _, width := range []int{20, 50, 200} {
 		banner := renderBanner("anthropic:claude-opus-5-5", "high", "~/a/very/long/path/that/does/not/fit/in/a/narrow/terminal", width)
 		lines := strings.Split(banner, "\n")
-		boxWidth := visibleWidth(lines[0])
+		boxWidth := style.VisibleWidth(lines[0])
 		if boxWidth > maxBannerWidth || boxWidth > width && width >= 20 {
 			t.Errorf("width %d: box is %d wide", width, boxWidth)
 		}
 		for _, line := range lines {
-			if visibleWidth(line) != boxWidth {
-				t.Errorf("width %d: ragged line %q", width, stripANSI(line))
+			if style.VisibleWidth(line) != boxWidth {
+				t.Errorf("width %d: ragged line %q", width, style.StripANSI(line))
 			}
 		}
-		if !strings.Contains(stripANSI(banner), "✻ Welcome") {
+		if !strings.Contains(style.StripANSI(banner), "✻ Welcome") {
 			t.Errorf("width %d: banner lost its title", width)
 		}
 	}
@@ -79,10 +80,10 @@ func TestRenderBanner(t *testing.T) {
 func TestRenderFooterFitsWidth(t *testing.T) {
 	chromeWithColor(t, true)
 	footer := renderFooter([]string{"anthropic:claude-opus-5-5", "effort high", "~12k ctx", "auto-approve on", "/help for commands"}, 40)
-	if w := visibleWidth(footer); w > 39 {
+	if w := style.VisibleWidth(footer); w > 39 {
 		t.Errorf("footer is %d wide, want at most 39", w)
 	}
-	if !strings.Contains(stripANSI(renderFooter([]string{"m", "effort low"}, 80)), "m · effort low") {
+	if !strings.Contains(style.StripANSI(renderFooter([]string{"m", "effort low"}, 80)), "m · effort low") {
 		t.Errorf("footer parts not joined")
 	}
 }
@@ -135,14 +136,14 @@ func TestRenderUserMessage(t *testing.T) {
 	chromeWithColor(t, false)
 	chromeAssertPlain(t, "user message", renderUserMessage("fix it", 80))
 	chromeWithColor(t, true)
-	if got := stripANSI(renderUserMessage("fix it", 80)); got != "❯ fix it " {
+	if got := style.StripANSI(renderUserMessage("fix it", 80)); got != "❯ fix it " {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestRenderWorked(t *testing.T) {
 	chromeWithColor(t, true)
-	if got := stripANSI(renderWorked(12*time.Second + 400*time.Millisecond)); got != "✻ Worked for 12s" {
+	if got := style.StripANSI(renderWorked(12*time.Second + 400*time.Millisecond)); got != "✻ Worked for 12s" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -153,7 +154,7 @@ func TestRenderApprovalCard(t *testing.T) {
 	if strings.Contains(raw, "\x1b[2J") {
 		t.Errorf("command escape reached the terminal: %q", raw)
 	}
-	card := stripANSI(raw)
+	card := style.StripANSI(raw)
 	for _, want := range []string{"╭─ Run command?", "in sub dir", "│ echo hi", "│ rm -rf \\x1b[2Jbuild", "[y]es · [n]o · [a]lways", "❯ "} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card missing %q:\n%s", want, card)
@@ -171,8 +172,8 @@ func TestRenderHelpTable(t *testing.T) {
 
 	chromeWithColor(t, true)
 	colored := renderHelpTable(commands)
-	if stripANSI(colored) != plain {
-		t.Errorf("colored help differs from plain once unstyled:\n%s", stripANSI(colored))
+	if style.StripANSI(colored) != plain {
+		t.Errorf("colored help differs from plain once unstyled:\n%s", style.StripANSI(colored))
 	}
 }
 
@@ -196,19 +197,19 @@ func TestRenderModelChoices(t *testing.T) {
 	}
 
 	chromeWithColor(t, true)
-	if colored := stripANSI(renderModelChoices([]provider.Model{a, b}, b)); !strings.Contains(colored, "❯  2. "+b.String()) {
+	if colored := style.StripANSI(renderModelChoices([]provider.Model{a, b}, b)); !strings.Contains(colored, "❯  2. "+b.String()) {
 		t.Errorf("colored listing = %q", colored)
 	}
 }
 
 func TestRenderUserMessageEscapesAndFitsWidth(t *testing.T) {
 	chromeWithColor(t, true)
-	if raw := renderUserMessage("up\x1b[Aarrow", 80); strings.Contains(stripANSI(raw), "\x1b") {
+	if raw := renderUserMessage("up\x1b[Aarrow", 80); strings.Contains(style.StripANSI(raw), "\x1b") {
 		t.Errorf("control characters reached the terminal: %q", raw)
 	}
 	// "❯ " plus 48 cells fills a 50-column row exactly; the pad would wrap.
-	if got := stripANSI(renderUserMessage(strings.Repeat("A", 48), 50)); visibleWidth(got) != 50 {
-		t.Errorf("pad space should be dropped at the edge: %d cells", visibleWidth(got))
+	if got := style.StripANSI(renderUserMessage(strings.Repeat("A", 48), 50)); style.VisibleWidth(got) != 50 {
+		t.Errorf("pad space should be dropped at the edge: %d cells", style.VisibleWidth(got))
 	}
 	if got := inputRows(2, "ab\x1b[A", 6); got != 2 {
 		t.Errorf("ESC echoes as two cells: got %d rows", got)
@@ -217,11 +218,11 @@ func TestRenderUserMessageEscapesAndFitsWidth(t *testing.T) {
 
 func TestRenderApprovalCardWrapsLongCommands(t *testing.T) {
 	chromeWithColor(t, true)
-	card := stripANSI(renderApprovalCard("echo "+strings.Repeat("x", 120), ".", 50))
+	card := style.StripANSI(renderApprovalCard("echo "+strings.Repeat("x", 120), ".", 50))
 	lines := strings.Split(card, "\n")
 	joined := ""
 	for _, line := range lines[2 : len(lines)-1] {
-		if !strings.HasPrefix(line, "│ ") || visibleWidth(line) > 49 {
+		if !strings.HasPrefix(line, "│ ") || style.VisibleWidth(line) > 49 {
 			t.Errorf("row not framed or too wide: %q", line)
 		}
 		joined += strings.TrimPrefix(line, "│ ")

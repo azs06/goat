@@ -31,12 +31,26 @@ type historyEntry struct {
 	Status     string `json:"status,omitempty"`
 	// ContextTokens is the total token usage of the response this entry came from.
 	ContextTokens int64 `json:"context_tokens,omitempty"`
+	// PromptTokens is the response's whole input, of which CacheReadTokens were read from
+	// the provider's prompt cache and CacheWriteTokens written to it.
+	PromptTokens     int64 `json:"prompt_tokens,omitempty"`
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 	// Provider is the API the entry belongs to; empty for entries from before goat
 	// supported more than one.
 	Provider string `json:"provider,omitempty"`
 	// ConversationID ties the entry to one conversation, so a conversation brought back
 	// with /resume finds its own history again. Empty for older entries.
 	ConversationID string `json:"conversation_id,omitempty"`
+}
+
+// withUsage records a response's token usage on entry.
+func withUsage(entry historyEntry, usage provider.Usage) historyEntry {
+	entry.ContextTokens = usage.ContextTokens()
+	entry.PromptTokens = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
+	entry.CacheReadTokens = usage.CacheReadTokens
+	entry.CacheWriteTokens = usage.CacheWriteTokens
+	return entry
 }
 
 // activeConversationID is the conversation new history entries belong to. When it is
@@ -174,4 +188,27 @@ func recordHistory(entry historyEntry) {
 	if err := historyEntryAppender(entry); err != nil {
 		warnf("failed to save history: %v", err)
 	}
+}
+
+// cacheUsage sums the prompt cache usage of the active conversation's responses.
+type cacheUsage struct {
+	responses                   int
+	promptTokens, read, written int64
+}
+
+func conversationCacheUsage(entries []historyEntry) cacheUsage {
+	var usage cacheUsage
+	seen := map[string]bool{}
+	for _, entry := range historyEntriesSinceLastReset(entries) {
+		// Every tool call of a response carries the same usage; count it once.
+		if entry.PromptTokens == 0 || entry.ResponseID == "" || seen[entry.ResponseID] {
+			continue
+		}
+		seen[entry.ResponseID] = true
+		usage.responses++
+		usage.promptTokens += entry.PromptTokens
+		usage.read += entry.CacheReadTokens
+		usage.written += entry.CacheWriteTokens
+	}
+	return usage
 }

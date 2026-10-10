@@ -3,6 +3,8 @@ package main
 import (
 	"regexp"
 	"strings"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 // markdownStream renders streamed assistant text as styled markdown for a color
@@ -73,7 +75,7 @@ func (m *markdownStream) renderLine(line string) string {
 	for _, row := range strings.Split(rendered, "\n") {
 		prefix := "  "
 		if !m.started {
-			prefix = glyphs().bullet + " "
+			prefix = style.Glyphs().Bullet + " "
 			m.started = true
 		}
 		if row == "" {
@@ -105,22 +107,22 @@ var (
 // state for the next line. Code blocks and tables are never wrapped.
 func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 	line = strings.ReplaceAll(line, "\t", "    ")
-	g := glyphs()
+	g := style.Glyphs()
 
 	if st.inFence {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, st.fenceSeq) && strings.Trim(trimmed, st.fenceSeq[:1]) == "" {
-			return paint(g.bottomLeft+g.hline, fgSubtle), mdState{}
+			return style.Subtle.Render(g.BottomLeft + g.HLine), mdState{}
 		}
-		return paint(g.vline, fgSubtle) + " " + renderCodeLine(line), st
+		return style.Subtle.Render(g.VLine) + " " + renderCodeLine(line), st
 	}
 
 	if m := mdFencePattern.FindStringSubmatch(line); m != nil {
-		label := g.topLeft + g.hline
+		label := g.TopLeft + g.HLine
 		if m[2] != "" {
 			label += " " + m[2]
 		}
-		return paint(label, fgSubtle), mdState{inFence: true, fenceSeq: m[1]}
+		return style.Subtle.Render(label), mdState{inFence: true, fenceSeq: m[1]}
 	}
 
 	if strings.HasPrefix(strings.TrimSpace(line), "|") {
@@ -128,62 +130,62 @@ func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 	}
 
 	if m := mdHeadingPattern.FindStringSubmatch(line); m != nil {
-		codes := []string{sgrBold}
+		role := style.Subheading
 		if len(m[1]) <= 2 {
-			codes = append(codes, fgAccent)
+			role = style.Heading
 		}
-		return wrapStyled(styleSpan(m[2], codes), width, "", ""), st
+		return wrapStyled(styleSpan(m[2], role.Style()), width, "", ""), st
 	}
 
 	if mdRulePattern.MatchString(line) {
-		return paint(strings.Repeat(g.hline, max(width, 1)), fgSubtle), st
+		return style.Subtle.Render(strings.Repeat(g.HLine, max(width, 1))), st
 	}
 
 	if m := mdBulletPattern.FindStringSubmatch(line); m != nil {
-		marker := m[1] + styleDim("•") + " "
+		marker := m[1] + style.Muted.Render("•") + " "
 		hang := m[1] + "  "
-		return wrapStyled(renderInline(m[2], nil), width, marker, hang), st
+		return wrapStyled(renderInline(m[2], style.Style{}), width, marker, hang), st
 	}
 
 	if m := mdNumberedPattern.FindStringSubmatch(line); m != nil {
-		marker := m[1] + styleDim(m[2]) + " "
+		marker := m[1] + style.Muted.Render(m[2]) + " "
 		hang := m[1] + strings.Repeat(" ", len(m[2])+1)
-		return wrapStyled(renderInline(m[3], nil), width, marker, hang), st
+		return wrapStyled(renderInline(m[3], style.Style{}), width, marker, hang), st
 	}
 
 	if m := mdQuotePattern.FindStringSubmatch(line); m != nil {
-		bar := paint(g.vline, fgSubtle) + " "
-		return wrapStyled(styleSpan(m[1], []string{fgMuted, sgrItalic}), width, bar, bar), st
+		bar := style.Subtle.Render(g.VLine) + " "
+		return wrapStyled(styleSpan(m[1], style.Quote.Style()), width, bar, bar), st
 	}
 
 	indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
-	return wrapStyled(renderInline(strings.TrimLeft(line, " "), nil), width, indent, indent), st
+	return wrapStyled(renderInline(strings.TrimLeft(line, " "), style.Style{}), width, indent, indent), st
 }
 
 // renderCodeLine tints a line inside a fenced code block: whole-line comments are
-// subtle, everything else is cyan.
+// the code-comment role, everything else the code role.
 func renderCodeLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 	if strings.HasPrefix(trimmed, "//") || trimmed == "#" || strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "-- ") {
-		return paint(line, fgSubtle)
+		return style.CodeComment.Render(line)
 	}
-	return paint(line, fgCyan)
+	return style.Code.Render(line)
 }
 
 // styleSpan renders text's inline markdown inside an outer style.
-func styleSpan(text string, codes []string) string {
-	if !colorEnabled || text == "" {
-		return renderInline(text, nil)
+func styleSpan(text string, outer style.Style) string {
+	if !style.Enabled() || text == "" {
+		return renderInline(text, style.Style{})
 	}
-	return sgrOpen(codes) + renderInline(text, codes) + sgrReset
+	return outer.Open() + renderInline(text, outer) + style.Reset
 }
 
 // renderInline styles `code`, **bold**, __bold__, *italic* and _italic_ spans. active
-// holds the codes of the enclosing style, which are re-opened after each inner span.
+// is the style of the enclosing span, which is re-opened after each inner span.
 // Emphasis is conservative: a delimiter must not touch a letter or digit on its outer
 // side, so snake_case_names and 2*3*4 are left alone.
-func renderInline(text string, active []string) string {
-	if !colorEnabled {
+func renderInline(text string, active style.Style) string {
+	if !style.Enabled() {
 		return text
 	}
 	var out strings.Builder
@@ -197,7 +199,7 @@ func renderInline(text string, active []string) string {
 				if len(inner) > 2 && inner[0] == ' ' && inner[len(inner)-1] == ' ' {
 					inner = inner[1 : len(inner)-1]
 				}
-				out.WriteString(sgrOpen(append(cloneCodes(active), fgMagenta)) + inner + sgrReset + sgrOpen(active))
+				out.WriteString(active.Merge(style.InlineCode.Style()).Open() + inner + style.Reset + active.Open())
 				i = end + n
 				continue
 			}
@@ -208,12 +210,12 @@ func renderInline(text string, active []string) string {
 			n := runLength(text, i, c)
 			if n <= 2 && (i == 0 || !isWordByte(text[i-1])) && i+n < len(text) && !isSpaceByte(text[i+n]) {
 				if end := findEmphasisClose(text, i+n, c, n); end >= 0 {
-					code := sgrItalic
+					role := style.Emphasis
 					if n == 2 {
-						code = sgrBold
+						role = style.Strong
 					}
-					inner := append(cloneCodes(active), code)
-					out.WriteString(sgrOpen(inner) + renderInline(text[i+n:end], inner) + sgrReset + sgrOpen(active))
+					inner := active.Merge(role.Style())
+					out.WriteString(inner.Open() + renderInline(text[i+n:end], inner) + style.Reset + active.Open())
 					i = end + n
 					continue
 				}
@@ -286,10 +288,6 @@ func isSpaceByte(b byte) bool {
 	return b == ' ' || b == '\t'
 }
 
-func cloneCodes(codes []string) []string {
-	return append([]string(nil), codes...)
-}
-
 // wrapStyled word-wraps styled text to width visible cells. The first row starts with
 // first and the rest with rest. A style open at a row break is closed at the end of
 // the row and re-opened after the next row's prefix, so it never colors the indent.
@@ -298,11 +296,11 @@ func wrapStyled(text string, width int, first, rest string) string {
 	words := strings.Split(text, " ")
 	var rows []string
 	row := first
-	rowWidth := visibleWidth(first)
+	rowWidth := style.VisibleWidth(first)
 	empty := true
 	active := ""
 	for _, word := range words {
-		wordWidth := visibleWidth(word)
+		wordWidth := style.VisibleWidth(word)
 		switch {
 		case empty:
 			row += word
@@ -310,34 +308,17 @@ func wrapStyled(text string, width int, first, rest string) string {
 			empty = false
 		case rowWidth+1+wordWidth > width && wordWidth > 0:
 			if active != "" {
-				row += sgrReset
+				row += style.Reset
 			}
 			rows = append(rows, row)
 			row = rest + active + word
-			rowWidth = visibleWidth(rest) + wordWidth
+			rowWidth = style.VisibleWidth(rest) + wordWidth
 		default:
 			row += " " + word
 			rowWidth += 1 + wordWidth
 		}
-		active = trackSGR(active, word)
+		active = style.ActiveAfter(active, word)
 	}
 	rows = append(rows, row)
 	return strings.Join(rows, "\n")
-}
-
-// trackSGR returns the SGR escapes still in effect after text, given those in effect
-// before it: a reset clears them, any other SGR adds to them. Other CSI sequences are
-// not styles and are never replayed.
-func trackSGR(active, text string) string {
-	for _, esc := range ansiPattern.FindAllString(text, -1) {
-		if !strings.HasSuffix(esc, "m") {
-			continue
-		}
-		if esc == sgrReset {
-			active = ""
-		} else {
-			active += esc
-		}
-	}
-	return active
 }

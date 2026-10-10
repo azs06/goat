@@ -36,6 +36,9 @@ type anthropicProvider struct {
 	client        anthropic.Client
 	customBaseURL bool
 	fallbacks     bool
+	// cacheTTL is the lifetime of the prompt cache entries goat writes: empty for the
+	// API's default of 5 minutes, or "1h".
+	cacheTTL anthropic.BetaCacheControlEphemeralTTL
 	// deepseek is set when the adapter talks to DeepSeek's Anthropic-compatible API.
 	deepseek *deepSeekSettings
 
@@ -51,7 +54,8 @@ type anthropicModelCapabilities struct {
 
 // NewAnthropicWith talks to the endpoint the client options name instead of the one in
 // the environment, as tests do. official makes it behave as it does against Anthropic's
-// own API, with fallbacks and automatic caching on.
+// own API, with fallbacks and automatic caching on;
+// otherwise the transcript's cache breakpoint is placed by hand.
 func NewAnthropicWith(official bool, opts ...option.RequestOption) Provider {
 	return &anthropicProvider{
 		client:        anthropic.NewClient(opts...),
@@ -66,8 +70,30 @@ func NewAnthropic() Provider {
 		client:        anthropic.NewClient(),
 		customBaseURL: strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")) != "",
 		fallbacks:     !envFlagOff("GOAT_ANTHROPIC_FALLBACKS"),
+		cacheTTL:      anthropicCacheTTL(os.Getenv("GOAT_ANTHROPIC_CACHE_TTL")),
 		capabilities:  map[string]anthropicModelCapabilities{},
 	}
+}
+
+// anthropicCacheTTL reads GOAT_ANTHROPIC_CACHE_TTL. The default 5-minute entries cost
+// 1.25x to write and stay warm as long as requests keep coming; "1h" entries cost 2x
+// to write but survive the user stepping away between prompts.
+func anthropicCacheTTL(raw string) anthropic.BetaCacheControlEphemeralTTL {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1h", "60m":
+		return anthropic.BetaCacheControlEphemeralTTLTTL1h
+	case "", "5m":
+		return ""
+	default:
+		Warnf("GOAT_ANTHROPIC_CACHE_TTL=%q is not 5m or 1h; using 5m", raw)
+		return ""
+	}
+}
+
+func (p *anthropicProvider) cacheControl() anthropic.BetaCacheControlEphemeralParam {
+	control := anthropic.NewBetaCacheControlEphemeralParam()
+	control.TTL = p.cacheTTL
+	return control
 }
 
 func envFlagOff(name string) bool {
@@ -196,18 +222,26 @@ func (p *anthropicProvider) disableFallbacks() {
 	p.mu.Unlock()
 }
 
-func (p *anthropicProvider) baseParams(ctx context.Context, model, system string, effort Effort) anthropic.BetaMessageNewParams {
+// baseParams builds a request. cached marks it as part of a conversation whose prefix
+// later requests repeat: tools and system get their own cache breakpoint, which still
+// hits after an /effort change invalidates the cached messages, and on Anthropic's own
+// API automatic caching moves a second breakpoint to the end of the growing transcript
+// (Send places it by hand elsewhere). One-off requests are not cached, since writing a
+// cache entry costs more than plain input and nothing would read it back.
+func (p *anthropicProvider) baseParams(ctx context.Context, model, system string, effort Effort, cached bool) anthropic.BetaMessageNewParams {
 	caps := p.modelCapabilities(ctx, model)
 	params := anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(model),
 		MaxTokens: caps.maxTokens,
 	}
 	if strings.TrimSpace(system) != "" {
-		params.System = []anthropic.BetaTextBlockParam{{Text: system, CacheControl: anthropic.NewBetaCacheControlEphemeralParam()}}
+		params.System = []anthropic.BetaTextBlockParam{{Text: system}}
+		if cached {
+			params.System[0].CacheControl = p.cacheControl()
+		}
 	}
-	if !p.customBaseURL {
-		// Automatic caching moves the cache breakpoint to the end of the growing transcript.
-		params.CacheControl = anthropic.NewBetaCacheControlEphemeralParam()
+	if cached && !p.customBaseURL {
+		params.CacheControl = p.cacheControl()
 	}
 	if p.deepseek != nil {
 		applyDeepSeekReasoning(&params, effort)
@@ -291,7 +325,9 @@ func toolResultsFor(uses []storedContentBlock, results []ToolResult) []ToolResul
 	return answered
 }
 
-func newAnthropicUserMessage(results []ToolResult, text string) (json.RawMessage, error) {
+// newAnthropicUserMessage builds the next user message. When cacheControl is set it
+// marks the message's last block as a cache breakpoint.
+func newAnthropicUserMessage(results []ToolResult, text string, cacheControl *anthropic.BetaCacheControlEphemeralParam) (json.RawMessage, error) {
 	var blocks []anthropic.BetaContentBlockParamUnion
 	for _, result := range results {
 		blocks = append(blocks, anthropic.NewBetaToolResultBlock(result.CallID, result.Output, result.IsError))
@@ -301,6 +337,11 @@ func newAnthropicUserMessage(results []ToolResult, text string) (json.RawMessage
 	}
 	if len(blocks) == 0 {
 		return nil, nil
+	}
+	if cacheControl != nil {
+		if control := blocks[len(blocks)-1].GetCacheControl(); control != nil {
+			*control = *cacheControl
+		}
 	}
 	return json.Marshal(anthropic.NewBetaUserMessage(blocks...))
 }
@@ -458,7 +499,7 @@ func anthropicUsage(usage anthropic.BetaUsage) Usage {
 func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(string)) (*Response, bool, error) {
 	history := req.Conversation.Messages
 	results := toolResultsFor(unansweredToolUses(history), req.ToolResults)
-	userMessage, err := newAnthropicUserMessage(results, req.UserText)
+	userMessage, err := newAnthropicUserMessage(results, req.UserText, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -468,9 +509,20 @@ func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(s
 		messages = append(messages, userMessage)
 	}
 
-	params := p.baseParams(ctx, req.Model, req.System, req.Effort)
+	params := p.baseParams(ctx, req.Model, req.System, req.Effort, true)
 	params.Tools = anthropicTools(req.Tools)
 	params.Messages = replayMessages(messages)
+	if p.customBaseURL && p.deepseek == nil && userMessage != nil {
+		// Without automatic caching the transcript breakpoint goes on the new message by
+		// hand. Only the request carries it: a marker kept in the stored transcript would
+		// stay behind on every later request and use up the four allowed.
+		control := p.cacheControl()
+		marked, err := newAnthropicUserMessage(results, req.UserText, &control)
+		if err != nil {
+			return nil, false, err
+		}
+		params.Messages[len(params.Messages)-1] = param.Override[anthropic.BetaMessageParam](marked)
+	}
 
 	streamed, printed, err := p.streamWithFallbackRetry(ctx, params, onText)
 	if err != nil {
@@ -519,7 +571,7 @@ func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(s
 }
 
 func (p *anthropicProvider) Complete(ctx context.Context, model, system, prompt string) (string, error) {
-	params := p.baseParams(ctx, model, system, EffortLow)
+	params := p.baseParams(ctx, model, system, EffortLow, false)
 	params.Messages = []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(prompt))}
 
 	streamed, _, err := p.streamWithFallbackRetry(ctx, params, nil)

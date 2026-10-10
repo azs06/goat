@@ -302,6 +302,13 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 	if last.Type != "assistant" || last.ResponseID != "msg_2" || last.ContextTokens != 180 || last.Provider != provider.Anthropic {
 		t.Fatalf("expected the assistant entry with usage, got %+v", last)
 	}
+	if last.PromptTokens != 130 || last.CacheReadTokens != 20 || last.CacheWriteTokens != 10 {
+		t.Errorf("expected the cache usage recorded, got %+v", last)
+	}
+	// The first response's usage is on its tool call entry; it counts once.
+	if usage := conversationCacheUsage(entries); usage.responses != 2 || usage.promptTokens != 260 || usage.read != 40 || usage.written != 20 {
+		t.Errorf("expected the cache usage of two responses, got %+v", usage)
+	}
 }
 
 func TestAnthropicCustomBaseURLSkipsOfficialOnlyFeatures(t *testing.T) {
@@ -319,6 +326,59 @@ func TestAnthropicCustomBaseURLSkipsOfficialOnlyFeatures(t *testing.T) {
 	}
 	if _, ok := body["cache_control"]; ok {
 		t.Error("expected no automatic caching behind a custom base URL")
+	}
+}
+
+func lastBlockCacheControl(message any) any {
+	blocks := message.(map[string]any)["content"].([]any)
+	return blocks[len(blocks)-1].(map[string]any)["cache_control"]
+}
+
+func TestAnthropicCustomBaseURLMarksOnlyTheNewestMessageForCaching(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
+	fake := newFakeAnthropic(t,
+		newSSE("msg_1").toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
+		newSSE("msg_2").text("Done.").stop("end_turn", ""),
+	)
+	conv, err := sendPromptStream(context.Background(), fake.provider(false), "list files", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
+	if err != nil {
+		t.Fatalf("sendPromptStream: %v", err)
+	}
+
+	first := messagesOf(t, fake.request(0))
+	if lastBlockCacheControl(first[0]) == nil {
+		t.Error("expected a cache breakpoint on the prompt")
+	}
+	second := messagesOf(t, fake.request(1))
+	if lastBlockCacheControl(second[0]) != nil {
+		t.Error("expected the earlier breakpoint to be gone from the next request")
+	}
+	if lastBlockCacheControl(second[2]) == nil {
+		t.Error("expected a cache breakpoint on the tool results")
+	}
+	for i, raw := range conv.conversation.Messages {
+		if strings.Contains(string(raw), "cache_control") {
+			t.Errorf("expected the stored transcript to carry no breakpoints, message %d: %s", i, raw)
+		}
+	}
+}
+
+func TestAnthropicOneOffCallsAreNotCached(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
+	fake := newFakeAnthropic(t, newSSE("msg_1").text("summary").stop("end_turn", ""))
+	if _, err := fake.provider(true).Complete(context.Background(), "claude-opus-5-5", "Summarize.", "history"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	body := fake.request(0).body
+	if _, ok := body["cache_control"]; ok {
+		t.Error("expected no automatic caching on a one-off call")
+	}
+	if system := body["system"].([]any)[0].(map[string]any); system["cache_control"] != nil {
+		t.Errorf("expected no breakpoint on a one-off system prompt, got %v", system)
 	}
 }
 

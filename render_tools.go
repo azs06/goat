@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+
+	"github.com/azs06/goat/internal/style"
 )
 
 // Tool calls render as Claude Code style blocks: a bulleted header naming the tool and
@@ -94,7 +96,7 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 			flags = append(flags, strings.TrimSpace(str("operation")+" "+jsonPath))
 		}
 	case "copy_file", "move_file", "copy_dir", "move_dir":
-		summary = str("source_path") + " " + glyphs().arrow + " " + str("destination_path")
+		summary = str("source_path") + " " + style.Glyphs().Arrow + " " + str("destination_path")
 		flag("overwrite")
 	case "undo_last_change":
 	case "run_bash":
@@ -126,32 +128,32 @@ func oneLine(text string) string {
 
 // renderToolHeader is the "● Name(summary)" line for a tool call, fitted to width.
 func renderToolHeader(call provider.ToolCall, width int) string {
-	g := glyphs()
+	g := style.Glyphs()
 	name := escapeControlChars(toolDisplayName(call.Name))
 	summary, flags := toolArgSummary(call.Name, call.Arguments)
 	summary = escapeControlChars(summary)
 	flagText := ""
 	if len(flags) > 0 {
 		// Flags get at most half the width, so the main argument always has room.
-		flagText = truncateToWidth(escapeControlChars(strings.Join(flags, ", ")), width/2)
-		if colorEnabled {
-			flagText = " " + g.dot + " " + flagText
+		flagText = style.TruncateToWidth(escapeControlChars(strings.Join(flags, ", ")), width/2)
+		if style.Enabled() {
+			flagText = " " + g.Dot + " " + flagText
 		} else {
 			flagText = " [" + flagText + "]"
 		}
 	}
 
-	fixed := len([]rune(g.bullet)) + 1 + len([]rune(name)) + len([]rune(flagText))
+	fixed := len([]rune(g.Bullet)) + 1 + len([]rune(name)) + len([]rune(flagText))
 	if summary != "" {
 		fixed += 2
-		summary = truncateToWidth(summary, width-fixed)
+		summary = style.TruncateToWidth(summary, width-fixed)
 	}
 
-	line := styleAccent(g.bullet) + " " + styleBold(name)
+	line := style.Accent.Render(g.Bullet) + " " + style.Strong.Render(name)
 	if summary != "" {
-		line += styleDim("(") + summary + styleDim(")")
+		line += style.Muted.Render("(") + summary + style.Muted.Render(")")
 	}
-	return line + styleSubtle(flagText)
+	return line + style.Subtle.Render(flagText)
 }
 
 // renderToolResult is the block shown under a tool header once the call finishes.
@@ -178,20 +180,20 @@ func renderToolResult(call provider.ToolCall, output string, err error, elapsed 
 	suffix := ""
 	if elapsed >= time.Second {
 		// Plain output brackets the time so it cannot be read as the tool's own output.
-		if colorEnabled {
-			suffix = fmt.Sprintf(" %s %.1fs", glyphs().dot, elapsed.Seconds())
+		if style.Enabled() {
+			suffix = fmt.Sprintf(" %s %.1fs", style.Glyphs().Dot, elapsed.Seconds())
 		} else {
 			suffix = fmt.Sprintf(" [%.1fs]", elapsed.Seconds())
 		}
 	}
-	first = truncateToWidth(first, width-visibleWidth(toolResultLead())-visibleWidth(suffix))
+	first = style.TruncateToWidth(first, width-style.VisibleWidth(toolResultLead())-style.VisibleWidth(suffix))
 	switch {
 	case interrupted:
-		first = styleWarn(first)
+		first = style.Warning.Render(first)
 	case err != nil:
-		first = styleError(first)
+		first = style.Error.Render(first)
 	}
-	first += styleSubtle(suffix)
+	first += style.Subtle.Render(suffix)
 
 	limit := toolResultPreviewLines
 	if diff {
@@ -202,17 +204,17 @@ func renderToolResult(call provider.ToolCall, output string, err error, elapsed 
 
 // toolResultLead and toolResultIndent prefix the first and following lines of a result.
 func toolResultLead() string {
-	if !colorEnabled {
-		return "  " + glyphs().result + " "
+	if !style.Enabled() {
+		return "  " + style.Glyphs().Result + " "
 	}
-	return "  " + glyphs().result + "  "
+	return "  " + style.Glyphs().Result + "  "
 }
 
 func toolResultIndent() string {
-	if !colorEnabled {
+	if !style.Enabled() {
 		return toolResultLead()
 	}
-	return strings.Repeat(" ", visibleWidth(toolResultLead()))
+	return strings.Repeat(" ", style.VisibleWidth(toolResultLead()))
 }
 
 // summarizeToolOutput turns a successful tool output into a short first line and the
@@ -351,9 +353,9 @@ func plural(n int, noun string) string {
 // layoutToolResult hangs first and up to limit body lines under the result connector,
 // clipping each line to width and noting how many lines were left out.
 func layoutToolResult(first string, body []string, limit int, diff bool, width int) string {
-	g := glyphs()
+	g := style.Glyphs()
 	indent := toolResultIndent()
-	room := width - visibleWidth(indent)
+	room := width - style.VisibleWidth(indent)
 
 	for len(body) > 0 && strings.TrimSpace(body[len(body)-1]) == "" {
 		body = body[:len(body)-1]
@@ -365,33 +367,33 @@ func layoutToolResult(first string, body []string, limit int, diff bool, width i
 	}
 
 	var b strings.Builder
-	b.WriteString(styleSubtle(toolResultLead()) + first)
+	b.WriteString(style.Subtle.Render(toolResultLead()) + first)
 	for _, line := range body {
-		line = truncateToWidth(strings.ReplaceAll(line, "\t", "    "), room)
+		line = style.TruncateToWidth(strings.ReplaceAll(line, "\t", "    "), room)
 		if diff {
 			line = styleDiffLine(line)
 		} else {
-			line = styleDim(line)
+			line = style.Muted.Render(line)
 		}
-		b.WriteString("\n" + styleSubtle(indent) + line)
+		b.WriteString("\n" + style.Subtle.Render(indent) + line)
 	}
 	if hidden > 0 {
-		b.WriteString("\n" + styleSubtle(indent) + styleSubtle(fmt.Sprintf("%s +%s", g.ellipsis, plural(hidden, "line"))))
+		b.WriteString("\n" + style.Subtle.Render(indent) + style.Subtle.Render(fmt.Sprintf("%s +%s", g.Ellipsis, plural(hidden, "line"))))
 	}
 	return b.String()
 }
 
-// styleDiffLine colors one diff line: additions green, removals red, file labels and
-// truncation markers subtle, context dim.
+// styleDiffLine styles one diff line: additions and removals with the diff roles, file
+// labels and truncation markers subtle, context muted.
 func styleDiffLine(line string) string {
 	switch {
 	case strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "..."):
-		return styleSubtle(line)
+		return style.Subtle.Render(line)
 	case strings.HasPrefix(line, "+"):
-		return styleSuccess(line)
+		return style.DiffAdded.Render(line)
 	case strings.HasPrefix(line, "-"):
-		return styleError(line)
+		return style.DiffRemoved.Render(line)
 	default:
-		return styleDim(line)
+		return style.Muted.Render(line)
 	}
 }
