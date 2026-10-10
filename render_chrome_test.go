@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -182,6 +183,54 @@ func TestRenderHelpTable(t *testing.T) {
 	for _, line := range strings.Split(colored, "\n") {
 		if style.VisibleWidth(line) >= terminalWidth() {
 			t.Errorf("line too wide: %q", line)
+		}
+	}
+}
+
+func TestRenderToolList(t *testing.T) {
+	withColor(t, false)
+	plain := renderToolList()
+	chromeAssertPlain(t, "tool list", plain)
+	for _, spec := range tools.Specs {
+		if !strings.Contains(plain, spec.Name) {
+			t.Errorf("plain tool list lacks %s", spec.Name)
+		}
+	}
+	for _, want := range []string{"Read-only", "plan mode allows these", "File changes", "Shell", "blocked in plan mode",
+		"read_file (path)\n    Read a file from a relative path in the workspace.\n", "grep_files (path, query)", "run_bash (command)"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("plain tool list lacks %q:\n%s", want, plain)
+		}
+	}
+
+	if strings.Contains(plain, "Set preview=true") {
+		t.Errorf("expected only each description's first sentence:\n%s", plain)
+	}
+
+	// Colored, the summaries wrap but every word survives.
+	withColor(t, true)
+	colored := style.StripANSI(renderToolList())
+	flat := strings.Join(strings.Fields(colored), " ")
+	for _, spec := range tools.Specs {
+		if !strings.Contains(flat, strings.Join(strings.Fields(firstSentence(spec.Description)), " ")) {
+			t.Errorf("colored tool list lost %s's summary:\n%s", spec.Name, colored)
+		}
+	}
+	for _, line := range strings.Split(colored, "\n") {
+		if style.VisibleWidth(line) >= terminalWidth() {
+			t.Errorf("line too wide: %q", line)
+		}
+	}
+}
+
+func TestFirstSentence(t *testing.T) {
+	for in, want := range map[string]string{
+		"Read a file. Set preview=true.": "Read a file.",
+		"Glob like *.go or cmd/*.go.":    "Glob like *.go or cmd/*.go.",
+		"No period":                      "No period",
+	} {
+		if got := firstSentence(in); got != want {
+			t.Errorf("firstSentence(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

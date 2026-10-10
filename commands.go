@@ -178,14 +178,9 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render("Available tools:"))
-	bullet := "-"
-	if style.Enabled() {
-		bullet = style.Accent.Render(style.Glyphs().Bullet)
-	}
-	for _, name := range tools.Names() {
-		fmt.Println(bullet + " " + name)
-	}
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.Specs))))
+	fmt.Println()
+	fmt.Println(renderToolList())
 	return nil
 }
 

@@ -84,6 +84,13 @@ func Names() []string {
 	return names
 }
 
+// RequiredArguments returns the names of the arguments a tool requires, in the order
+// its schema lists them.
+func RequiredArguments(spec provider.ToolSpec) []string {
+	required, _ := spec.Parameters["required"].([]string)
+	return required
+}
+
 func findSpec(name string) (provider.ToolSpec, bool) {
 	for _, tool := range Specs {
 		if tool.Name == name {
@@ -104,7 +111,7 @@ func validateToolArguments(spec provider.ToolSpec, raw string) error {
 		return fmt.Errorf("tool arguments are not a valid JSON object: %w", err)
 	}
 
-	required, _ := spec.Parameters["required"].([]string)
+	required := RequiredArguments(spec)
 	var missing []string
 	for _, name := range required {
 		if value, ok := arguments[name]; !ok || string(value) == "null" {

@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -354,6 +355,60 @@ func renderHelpTable(cmds map[string]*cliCommand) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderToolList lists the tools the model can call, grouped by what plan mode does
+// with them. Each tool gets its name and required arguments, then the first sentence of
+// the description it is offered to the model with, on its own line so it has the full
+// width.
+func renderToolList() string {
+	g := style.Glyphs()
+	row := func(spec provider.ToolSpec) string {
+		label := style.Accent.Render(spec.Name)
+		if required := tools.RequiredArguments(spec); len(required) > 0 {
+			label += " " + style.Subtle.Render("("+strings.Join(required, ", ")+")")
+		}
+		summary := firstSentence(spec.Description)
+		if !style.Enabled() {
+			return "  " + label + "\n    " + summary
+		}
+		return "  " + label + "\n" + style.Wrap(style.Muted.Render(summary), terminalWidth()-1, "    ", "    ")
+	}
+
+	groups := []struct {
+		title, hint string
+		policy      tools.PlanModePolicy
+	}{
+		{"Read-only", "plan mode allows these", tools.PlanModeAllowed},
+		{"File changes", "plan mode runs these only as previews", tools.PlanModePreview},
+		{"Shell", "blocked in plan mode", tools.PlanModeBlocked},
+	}
+	var lines []string
+	for _, group := range groups {
+		var rows []string
+		for _, spec := range tools.Specs {
+			if tools.PlanModePolicyFor(spec.Name) == group.policy {
+				rows = append(rows, row(spec))
+			}
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, style.Strong.Render(group.title)+" "+style.Subtle.Render(g.Dot+" "+group.hint))
+		lines = append(lines, rows...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// firstSentence returns text up to and including its first ". ", or all of it.
+func firstSentence(text string) string {
+	if i := strings.Index(text, ". "); i >= 0 {
+		return text[:i+1]
+	}
+	return text
 }
 
 // renderKeyValues aligns rows of key and value; keys are dim.
