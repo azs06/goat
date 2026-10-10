@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
@@ -69,8 +70,20 @@ func conversationHistoryPath() string {
 	return defaultHistoryPath
 }
 
+// historyCache keeps the parsed history log between reads. The log only grows, so a
+// read parses just the lines appended since the last one; a different or shorter file
+// is read again from the start.
+var historyCache struct {
+	sync.Mutex
+	path    string
+	info    os.FileInfo
+	offset  int64
+	entries []historyEntry
+}
+
 // loadConversationHistoryEntries skips lines it cannot decode, such as a line cut short
-// by a crash, so one bad line does not make the whole history unreadable.
+// by a crash, so one bad line does not make the whole history unreadable. The returned
+// slice must not be modified.
 func loadConversationHistoryEntries() ([]historyEntry, error) {
 	resolvedPath, _, err := resolveStatePath(conversationHistoryPath())
 	if err != nil {
@@ -85,25 +98,45 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 		return nil, fmt.Errorf("open history file: %w", err)
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("read history file: %w", err)
+	}
+
+	historyCache.Lock()
+	defer historyCache.Unlock()
+	if historyCache.path != resolvedPath || historyCache.info == nil || !os.SameFile(historyCache.info, info) || info.Size() < historyCache.offset {
+		historyCache.path, historyCache.offset, historyCache.entries = resolvedPath, 0, nil
+	}
+	historyCache.info = info
+	if info.Size() == historyCache.offset {
+		return historyCache.entries[:len(historyCache.entries):len(historyCache.entries)], nil
+	}
+	if _, err := file.Seek(historyCache.offset, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("read history file: %w", err)
+	}
 
 	reader := bufio.NewReader(file)
-	var entries []historyEntry
 	skipped := 0
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return nil, fmt.Errorf("read history file: %w", readErr)
 		}
-
-		if line = bytes.TrimSpace(line); len(line) > 0 {
+		// A last line without its newline may still be being written; it is read
+		// next time, unless it is the end of a file that stopped growing.
+		if readErr != nil && len(line) > 0 && !json.Valid(bytes.TrimSpace(line)) {
+			break
+		}
+		historyCache.offset += int64(len(line))
+		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
 			var entry historyEntry
-			if err := json.Unmarshal(line, &entry); err != nil {
+			if err := json.Unmarshal(trimmed, &entry); err != nil {
 				skipped++
 			} else {
-				entries = append(entries, entry)
+				historyCache.entries = append(historyCache.entries, entry)
 			}
 		}
-
 		if readErr != nil {
 			break
 		}
@@ -112,7 +145,7 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 		warnf("skipped %d unreadable line(s) in %s", skipped, conversationHistoryPath())
 	}
 
-	return entries, nil
+	return historyCache.entries[:len(historyCache.entries):len(historyCache.entries)], nil
 }
 
 func appendHistoryEntry(entry historyEntry) error {

@@ -58,7 +58,7 @@ func rawWriteFile(filePath, content string) error {
 		return err
 	}
 
-	return os.WriteFile(resolvedPath, []byte(content), 0644)
+	return writeFileAtomic(resolvedPath, []byte(content), 0644)
 }
 
 func removeWorkspacePathIfExists(filePath string) error {
@@ -544,6 +544,10 @@ func saveOperationRecords(records []operationRecord) error {
 	}
 	defer os.Remove(tempFile.Name())
 	if _, err := tempFile.Write(encoded); err != nil {
+		tempFile.Close()
+		return err
+	}
+	if err := tempFile.Sync(); err != nil {
 		tempFile.Close()
 		return err
 	}

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+
+      - name: Test (race detector, coverage)
+        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./...
+
+      - name: Coverage floor
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%", "", $3); print $3}')"
+          echo "Total coverage: ${total}%"
+          awk -v total="$total" -v floor=70 'BEGIN { if (total + 0 < floor) { print "coverage below " floor "%"; exit 1 } }'
+
+      - name: Fuzz (short)
+        run: |
+          for target in FuzzResolveToolPath FuzzRenderMarkdownLine FuzzPromptEditorKeys; do
+            go test -run '^$' -fuzz "^${target}\$" -fuzztime 20s .
+          done
+          go test -run '^$' -fuzz '^FuzzParseTheme$' -fuzztime 20s ./internal/style/
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build for every supported platform
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null . || exit 1
+          done

@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Glyphs with ASCII fallbacks for plain output.
+// GlyphSet is the glyphs goat draws with; plain output uses ASCII fallbacks.
 type GlyphSet struct {
 	Bullet, Result, OK, Fail, Prompt, Arrow, Warn, Info, Dot, Ellipsis string
 	HLine, VLine, TopLeft, TopRight, BottomLeft, BottomRight           string

@@ -307,17 +307,26 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 ## Development
 
 ```sh
+gofmt -l .                      # should print nothing
 go vet ./...
-go test ./...
+staticcheck ./...               # configured in staticcheck.conf
+go test -race ./...
+go test -run '^$' -fuzz FuzzResolveToolPath -fuzztime 30s .
 ```
 
-The tests run against fake provider servers, so they need no API keys. When you change
-anything that prints, also check that piped output stays free of escape sequences; this
-should print `0`:
+The tests run against fake provider servers, so they need no API keys. Fuzz targets cover
+path resolution (`FuzzResolveToolPath`), markdown rendering (`FuzzRenderMarkdownLine`),
+the prompt editor (`FuzzPromptEditorKeys`) and theme parsing (`FuzzParseTheme`, in
+`internal/style`). CI (`.github/workflows/ci.yml`) runs all of the above on Linux and
+macOS, with a 70% coverage floor and a cross-build for every platform.
+
+When you change anything that prints, also check that piped output stays free of escape
+sequences; this should print `0`:
 
 ```sh
 printf '/status\n/exit\n' | go run . | grep -c $'\x1b'
 ```
 
-See [`TODO.md`](TODO.md) for planned work. Not built yet: prompt history (Up/Down only
-move the command menu), multi-line input and bracketed paste.
+See [`TODO.md`](TODO.md) for planned work.
+
+goat is released under the [MIT License](LICENSE).
