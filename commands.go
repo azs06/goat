@@ -40,6 +40,7 @@ func init() {
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
 		{name: "plan", usage: "/plan [on|off]", description: "Toggle plan mode: goat reads and plans but changes nothing", callback: commandPlan},
+		{name: "codemode", usage: "/codemode [on|off]", description: "Toggle code mode: goat can batch tool calls in one run_code script", callback: commandCodeMode},
 		{name: "diff", usage: "/diff [staged]", description: "Show the uncommitted changes in the workspace's git repository", callback: commandDiff},
 		{name: "copy", usage: "/copy", description: "Copy the last reply to the clipboard", callback: commandCopy},
 		{name: "export", usage: "/export [file]", description: "Write the conversation to a Markdown file", callback: commandExport},
@@ -178,7 +179,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.Specs))))
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs))))
 	fmt.Println()
 	fmt.Println(renderToolList())
 	return nil
@@ -391,6 +392,9 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	if c.planMode {
 		rows = append(rows, [2]string{"Plan mode:", "on (changes are refused)"})
 	}
+	if c.codeMode {
+		rows = append(rows, [2]string{"Code mode:", "on (tool calls can be batched in run_code)"})
+	}
 	if c.approver != nil {
 		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
 	}
@@ -541,6 +545,9 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 		case "plan":
 			add("on", "read and plan only")
 			add("off", "allow changes again")
+		case "codemode":
+			add("on", "batch tool calls in run_code scripts")
+			add("off", "call tools one at a time")
 		case "undo":
 			add("preview", "show what would be restored")
 			add("skip", "give up on a change that cannot be restored")

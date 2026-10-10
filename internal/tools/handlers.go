@@ -14,9 +14,15 @@ import (
 type Options struct {
 	// PlanMode refuses tools that change anything; read-only tools and previews run.
 	PlanMode bool
+	// CodeMode lets run_code run. Without it run_code is refused with ErrCodeModeOff.
+	CodeMode bool
 	// ApproveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	ApproveBash func(ctx context.Context, command, workdir string) error
+	// CallID is the ID of the call being run; run_code names its calls after it.
+	CallID string
+	// Nested, when set, is told about each call a run_code script makes.
+	Nested NestedObserver
 }
 
 // toolHandler runs one tool with its raw JSON arguments, already validated against the
@@ -44,7 +50,8 @@ var toolHandlers = map[string]toolHandler{
 }
 
 // Execute validates and runs one tool call. In plan mode only the read-only tools and
-// previews run, and run_bash commands go through opts.ApproveBash first.
+// previews run, run_bash commands go through opts.ApproveBash first, and run_code only
+// runs in code mode.
 func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (string, error) {
 	spec, ok := findSpec(toolCall.Name)
 	handler := toolHandlers[toolCall.Name]
@@ -53,6 +60,9 @@ func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (str
 	}
 	if err := validateToolArguments(spec, toolCall.Arguments); err != nil {
 		return "", err
+	}
+	if toolCall.Name == RunCode && !opts.CodeMode {
+		return "", ErrCodeModeOff
 	}
 	if opts.PlanMode && !allowedInPlanMode(toolCall) {
 		return "", ErrPlanMode

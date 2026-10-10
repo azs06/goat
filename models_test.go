@@ -238,7 +238,7 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 	if err != nil || saved == nil {
 		t.Fatalf("load: %v", err)
 	}
-	if saved.Model != "anthropic:claude-opus-5-5" || saved.Effort != "xhigh" || len(saved.Conversation.Messages) != 1 || saved.PendingToolResults[0].CallID != "toolu_1" || saved.PromptFingerprint != promptFingerprint() {
+	if saved.Model != "anthropic:claude-opus-5-5" || saved.Effort != "xhigh" || len(saved.Conversation.Messages) != 1 || saved.PendingToolResults[0].CallID != "toolu_1" || saved.PromptFingerprint != promptFingerprint(false) {
 		t.Fatalf("unexpected session %+v", saved)
 	}
 
@@ -292,13 +292,19 @@ func TestLoadConfigRestoresMatchingSessionAndSetsAsideOthers(t *testing.T) {
 	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 
-	session := savedSession{Version: sessionVersion, Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}, PromptFingerprint: promptFingerprint()}
+	session := savedSession{Version: sessionVersion, Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}, PromptFingerprint: promptFingerprint(false)}
 	if err := writeSessionFile(sessionPath, session); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	cfg := loadConfig(cliOptions{})
 	if cfg.model.Provider != provider.Anthropic || len(cfg.conversation.conversation.Messages) != 1 || cfg.staleConversation {
 		t.Fatalf("expected the saved conversation, got %v %+v stale=%v", cfg.model, cfg.conversation, cfg.staleConversation)
+	}
+
+	session.PromptFingerprint = promptFingerprint(true)
+	writeSessionFile(sessionPath, session)
+	if cfg := loadConfig(cliOptions{}); cfg.staleConversation {
+		t.Fatal("a conversation built in code mode is not stale")
 	}
 
 	session.PromptFingerprint = "older-goat"

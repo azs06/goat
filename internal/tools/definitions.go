@@ -72,7 +72,8 @@ func buildSpecs() []provider.ToolSpec {
 	}
 }
 
-// Specs are the tools offered to the model, in the order they are listed.
+// Specs are the tools offered to the model, in the order they are listed. Code mode
+// offers CodeModeSpecs instead.
 var Specs = buildSpecs()
 
 // Names returns the name of every tool in Specs.
@@ -92,7 +93,7 @@ func RequiredArguments(spec provider.ToolSpec) []string {
 }
 
 func findSpec(name string) (provider.ToolSpec, bool) {
-	for _, tool := range Specs {
+	for _, tool := range CodeModeSpecs {
 		if tool.Name == name {
 			return tool, true
 		}

@@ -26,6 +26,9 @@ const (
 	// PlanModeBlocked tools never run in plan mode; what run_bash does cannot be known
 	// in advance.
 	PlanModeBlocked
+	// PlanModePerCall tools run in plan mode, and each call they make is checked on
+	// its own: run_code scripts can read and preview, but not change anything.
+	PlanModePerCall
 )
 
 func (p PlanModePolicy) String() string {
@@ -36,6 +39,8 @@ func (p PlanModePolicy) String() string {
 		return "preview"
 	case PlanModeBlocked:
 		return "blocked"
+	case PlanModePerCall:
+		return "per call"
 	}
 	return fmt.Sprintf("PlanModePolicy(%d)", int(p))
 }
@@ -46,18 +51,22 @@ func PlanModePolicyFor(name string) PlanModePolicy {
 	if readOnlyTools[name] {
 		return PlanModeAllowed
 	}
-	if name == "run_bash" {
+	switch name {
+	case "run_bash":
 		return PlanModeBlocked
+	case RunCode:
+		return PlanModePerCall
 	}
 	return PlanModePreview
 }
 
 // allowedInPlanMode reports whether a call leaves the workspace unchanged: a read-only
 // tool, or a file tool asked only for a preview. run_bash is never allowed, since what
-// a command does cannot be known in advance.
+// a command does cannot be known in advance. run_code is, because the calls its script
+// makes are checked one by one.
 func allowedInPlanMode(call provider.ToolCall) bool {
 	switch PlanModePolicyFor(call.Name) {
-	case PlanModeAllowed:
+	case PlanModeAllowed, PlanModePerCall:
 		return true
 	case PlanModeBlocked:
 		return false

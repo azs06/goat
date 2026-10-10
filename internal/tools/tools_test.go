@@ -66,8 +66,17 @@ func TestPlanModeRefusesChanges(t *testing.T) {
 	}
 }
 
+// allToolNames names every tool, run_code included.
+func allToolNames() []string {
+	var names []string
+	for _, spec := range CodeModeSpecs {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
 func TestEveryToolHasAHandler(t *testing.T) {
-	names := Names()
+	names := allToolNames()
 	for _, name := range names {
 		if toolHandlers[name] == nil {
 			t.Errorf("tool %s has a schema but no handler", name)
@@ -87,11 +96,12 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 		"copy_dir": PlanModePreview, "move_dir": PlanModePreview, "delete_dir": PlanModePreview,
 		"undo_last_change": PlanModePreview,
 		"run_bash":         PlanModeBlocked,
+		"run_code":         PlanModePerCall,
 	}
-	if len(want) != len(Names()) {
-		t.Fatalf("the policy table covers %d of %d tools", len(want), len(Names()))
+	if len(want) != len(allToolNames()) {
+		t.Fatalf("the policy table covers %d of %d tools", len(want), len(allToolNames()))
 	}
-	for _, name := range Names() {
+	for _, name := range allToolNames() {
 		if got := PlanModePolicyFor(name); got != want[name] {
 			t.Errorf("PlanModePolicyFor(%s) = %v, want %v", name, got, want[name])
 		}
@@ -115,6 +125,12 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 			if call("{}") || call(`{"preview":true}`) {
 				t.Errorf("%s: a blocked tool should never be allowed", name)
 			}
+		case PlanModePerCall:
+			if !call("{}") {
+				t.Errorf("%s: a per-call tool should be allowed; its calls are checked", name)
+			}
+		default:
+			t.Errorf("%s: policy %v is not covered", name, PlanModePolicyFor(name))
 		}
 	}
 }

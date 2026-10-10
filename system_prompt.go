@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/tools"
 )
 
@@ -12,16 +13,28 @@ import (
 // tools and system prompt as the start of each request's prefix, so anything that varies
 // here (a date, the working directory, git state) would make every request a cache miss.
 // Send changing context in the conversation instead.
-var systemPrompt = buildSystemPrompt()
+var systemPrompt = buildSystemPrompt(tools.Specs)
 
-func buildSystemPrompt() string {
+// codeModeSystemPrompt is systemPrompt for code mode: it also lists run_code and ends
+// with the goat API that run_code scripts call.
+var codeModeSystemPrompt = buildSystemPrompt(tools.CodeModeSpecs) + "\n\n" + tools.CodeModeGuide(maxToolOutputCharsForModel, maxToolOutputLinesForModel)
+
+// promptFor returns the system prompt and tools offered with code mode on or off.
+func promptFor(codeMode bool) (string, []provider.ToolSpec) {
+	if codeMode {
+		return codeModeSystemPrompt, tools.CodeModeSpecs
+	}
+	return systemPrompt, tools.Specs
+}
+
+func buildSystemPrompt(specs []provider.ToolSpec) string {
 	var builder strings.Builder
 	builder.WriteString(`You are a helpful AI coding agent.
 
 When a user asks a question or makes a request, make a function call plan. You can use the following tools:
 
 `)
-	for _, tool := range tools.Specs {
+	for _, tool := range specs {
 		fmt.Fprintf(&builder, "- %s: %s\n", tool.Name, tool.Description)
 	}
 	builder.WriteString(`

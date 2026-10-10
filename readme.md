@@ -17,6 +17,8 @@ approval. From a certain point on, goat has been improving its own source code.
   takes multi-line and pasted input.
 - Lays requests out for the providers' prompt caches and shows what each turn cost.
 - Reads project instructions from `AGENTS.md`, and has a plan mode that changes nothing.
+- Has a code mode: the model can write one JavaScript script that calls many tools, and
+  only the script's result comes back into the conversation.
 - Works the same in scripts: `goat -p "..."` prints just the reply.
 
 ## Quick start
@@ -45,7 +47,8 @@ continues from where it stopped. Ctrl-C at an empty prompt asks you to press it 
 exit, and Ctrl-D exits straight away.
 
 The prompt sits between two rules. The footer under it shows the model, the effort, the
-git branch with the number of changed files, and the conversation's approximate size;
+git branch with the number of changed files, and the conversation's approximate size
+(plus `plan mode` or `code mode` when they are on);
 `?` on an empty prompt replaces it with the keyboard shortcuts.
 
 ### The prompt
@@ -83,6 +86,7 @@ goat                          # start, resuming the last conversation
 goat "fix the failing test"   # start and run this prompt first
 goat -n                       # start a new conversation (the old one stays for /resume)
 goat --plan                   # start in plan mode: read and plan, change nothing
+goat --codemode               # start in code mode: batch tool calls in run_code scripts
 goat -m claude-sonnet-5-5 -e high
 goat -p "summarize main.go"   # one prompt, reply on stdout, exit code 1 on failure
 git diff | goat -p "review this diff" > review.md
@@ -117,6 +121,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/retry` | Send the last prompt again. |
 | `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Output taller than the terminal is paged: Space for the next page, Enter for a line, `G` for the rest, `q` to stop. |
 | `/plan [on\|off]` | Plan mode: goat reads and investigates but changes nothing. File tools only run as previews and `run_bash` is refused; the footer shows `plan mode`. `goat --plan` starts in it. |
+| `/codemode [on\|off]` | Code mode: the model can batch tool calls in one `run_code` script (see [Code mode](#code-mode)); the footer shows `code mode`. `goat --codemode` or `GOAT_CODEMODE=1` starts in it. |
 | `/diff [staged]` | Show the uncommitted changes in the workspace's git repository, paged like `/output`. |
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
@@ -151,12 +156,71 @@ workspace.
 | `copy_dir`, `move_dir`, `delete_dir` | Directory operations |
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
+| `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
 
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
 repository git decides; elsewhere the root `.gitignore` is read); `include_ignored=true`
 searches everything. Every tool that changes files accepts `preview=true`, which returns a
 diff without changing anything. A turn can make up to 40 rounds of tool calls; past that
 goat stops and asks you to send another message to continue.
+
+## Code mode
+
+With code mode on (`/codemode`, `goat --codemode` or `GOAT_CODEMODE=1`), the model can
+answer with one `run_code` call holding a JavaScript async function instead of a string of
+separate tool calls. The script calls the tools as functions on a `goat` object, each
+taking the tool's arguments as one object and resolving to the text that tool returns:
+
+```js
+async () => {
+  const found = await goat.find_files({ path: "internal", pattern: "*_test.go" });
+  const counts = [];
+  for (const path of found.split("\n").slice(1).filter(line => !line.startsWith("(truncated"))) {
+    const text = await goat.read_file({ path });
+    counts.push({ path, tests: text.split("\n").filter(l => l.startsWith("func Test")).length });
+  }
+  return counts.sort((a, b) => b.tests - a.tests).slice(0, 3);
+}
+```
+
+Only what the script returns and what it prints with `console.log` go back to the model,
+so a loop over many files, a search followed by reads, or filtering a long output takes
+one round trip and keeps the intermediate text out of the conversation. The calls the
+script makes are shown indented under it as they run.
+
+- Every call goes through the same checks as a direct call: workspace paths, the `.env`
+  and `.goat` refusals, plan mode, and approval for each `run_bash` command. Each change is
+  its own `/undo` step.
+- The script runs in an embedded JavaScript engine ([goja](https://github.com/dop251/goja))
+  with nothing but `goat` and `console`: no file, network, environment or process access,
+  no `require`, no timers. It is plain JavaScript; TypeScript annotations are a syntax
+  error.
+- A script may make 50 calls and run for 2 minutes; time spent waiting for you to approve
+  a command does not count, and each command keeps its own 30-second limit. Ctrl-C stops
+  the script. Its result is cut to the same size as any other tool output. `JSON.parse`
+  refuses input nested more than 5000 levels deep, and one regular expression match may
+  take at most 2 seconds (one that runs out of time counts as no match).
+- A failed call rejects with an error the script can catch. An uncaught error, or a failed
+  call nothing awaited, ends the script, and the model gets the error, the line it came
+  from and the console output; changes made before it are kept. Declining a command stops
+  the script, so your answer goes straight to the model.
+
+`run_code` and the description of its API (about 1,900 tokens) are sent only while code
+mode is on; with it off, goat sends exactly what it would without code mode. Turning it on
+or off mid-conversation is fine, but the next request misses the prompt cache once. Code
+mode is off by default and, like plan mode, is not saved with the session.
+
+Code mode pays off on tasks that take many tool calls and that the shell cannot do in one
+command. A benchmark of four read-only tasks (gpt-6-luna and deepseek-v4-pro, three runs
+of each, measured against goat with code mode off) found:
+
+- Without the shell, it cut wall time by 40-52% and input tokens by about 70%. gpt-6-luna
+  answered all 12 tasks correctly with it, against 9 of 12 without, because long tool
+  output got cut off.
+- With the shell, gpt-6-luna was 31% faster. deepseek-v4-pro was 48% slower and used 49%
+  more input, because it often wrapped a single shell command in a script.
+- For a single-step task, the extra prompt is pure cost: 1.5 to 1.7 times the input
+  tokens.
 
 ## Cost
 
@@ -251,6 +315,9 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   still be undone.
 - In plan mode (`/plan`, `--plan`) nothing in the workspace changes: file tools only run
   as previews and `run_bash` is refused.
+- A `run_code` script can only call goat's own tools, each with the checks above; the
+  engine it runs in gives it no other access to files, the network, the environment or
+  processes.
 - `run_bash` asks before each command. Answer `y` to run it, `n` to decline, `a` to allow
   every command for the rest of the session, or type feedback to decline with a reason the
   model sees. Commands time out after 30 seconds, and everything a command started is
@@ -318,6 +385,7 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `OPENAI_REASONING_EFFORT` | `medium` | Effort when there is no saved session |
 | `GOAT_AUTO_COMPACT_TOKENS` | `80000` (OpenAI), `150000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits |
 | `GOAT_AUTO_APPROVE_BASH` | `false` | Run `run_bash` commands without asking |
+| `GOAT_CODEMODE` | `false` | Start in code mode |
 | `GOAT_ANTHROPIC_FALLBACKS` | `on` | Server-side refusal fallbacks for Claude models |
 | `GOAT_ANTHROPIC_CACHE_TTL` | `5m` | Lifetime of Claude prompt cache entries, `5m` or `1h` |
 | `GOAT_THEME` | `~/.config/goat/theme.json` | Theme file |
@@ -344,15 +412,16 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `commands.go` | Slash commands |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
-| `plan_mode.go` | Plan mode |
+| `plan_mode.go`, `code_mode.go` | Plan mode; code mode and drawing a script's calls |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go` | The interactive line editor, arrow-key pickers, messages queued during a turn and input reading |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
+| `internal/codemode/` | The JavaScript sandbox `run_code` scripts run in: limits, console capture and the generated `goat` API declaration |
 | `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
 | `internal/terminal/` | Terminal modes (echo, cbreak) and size |
-| `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules and the handler that runs each one |
+| `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules, the handler that runs each one, and `run_code` |
 | `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
 
 ## Development
