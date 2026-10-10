@@ -2,15 +2,24 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/azs06/goat/internal/provider"
 )
 
 const defaultHistoryPath = ".goat/history.jsonl"
+
+// maxHistoryFieldChars caps the text saved per history field. The model only ever sees
+// truncated tool output, so the full text of a large file or command output is not kept.
+const maxHistoryFieldChars = 32000
 
 type historyEntry struct {
 	Timestamp  string `json:"timestamp"`
@@ -20,6 +29,23 @@ type historyEntry struct {
 	Arguments  string `json:"arguments,omitempty"`
 	ResponseID string `json:"response_id,omitempty"`
 	Status     string `json:"status,omitempty"`
+	// ContextTokens is the total token usage of the response this entry came from.
+	ContextTokens int64 `json:"context_tokens,omitempty"`
+	// Provider is the API the entry belongs to; empty for entries from before goat
+	// supported more than one.
+	Provider string `json:"provider,omitempty"`
+	// ConversationID ties the entry to one conversation, so a conversation brought back
+	// with /resume finds its own history again. Empty for older entries.
+	ConversationID string `json:"conversation_id,omitempty"`
+}
+
+// activeConversationID is the conversation new history entries belong to. When it is
+// empty (a conversation started before entries carried IDs) the conversation is
+// everything since the last reset entry.
+var activeConversationID string
+
+func newConversationID() string {
+	return fmt.Sprintf("c%d", time.Now().UnixNano())
 }
 
 // this is defined as a variable to allow overriding in tests
@@ -29,8 +55,10 @@ func conversationHistoryPath() string {
 	return defaultHistoryPath
 }
 
+// loadConversationHistoryEntries skips lines it cannot decode, such as a line cut short
+// by a crash, so one bad line does not make the whole history unreadable.
 func loadConversationHistoryEntries() ([]historyEntry, error) {
-	resolvedPath, _, err := resolveToolPath(conversationHistoryPath())
+	resolvedPath, _, err := resolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return nil, err
 	}
@@ -44,24 +72,30 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
-
+	reader := bufio.NewReader(file)
 	var entries []historyEntry
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	skipped := 0
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, fmt.Errorf("read history file: %w", readErr)
 		}
 
-		var entry historyEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			return nil, fmt.Errorf("decode history entry: %w", err)
+		if line = bytes.TrimSpace(line); len(line) > 0 {
+			var entry historyEntry
+			if err := json.Unmarshal(line, &entry); err != nil {
+				skipped++
+			} else {
+				entries = append(entries, entry)
+			}
 		}
-		entries = append(entries, entry)
+
+		if readErr != nil {
+			break
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan history file: %w", err)
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "[warn] skipped %d unreadable line(s) in %s\n", skipped, conversationHistoryPath())
 	}
 
 	return entries, nil
@@ -72,7 +106,7 @@ func appendHistoryEntry(entry historyEntry) error {
 		entry.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 
-	resolvedPath, _, err := resolveToolPath(conversationHistoryPath())
+	resolvedPath, _, err := resolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return err
 	}
@@ -101,27 +135,42 @@ func appendHistoryEntry(entry historyEntry) error {
 }
 
 func loadLatestConversationResponseID() (string, error) {
+	responseID, _, err := latestResumableConversation()
+	return responseID, err
+}
+
+// latestResumableConversation finds the OpenAI response the history log last ended on,
+// and the conversation that response belongs to, for resuming without a session file.
+// Only OpenAI conversations can be resumed from a response ID alone.
+func latestResumableConversation() (string, string, error) {
 	entries, err := loadConversationHistoryEntries()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	latestResponseID := ""
+	latestResponseID, conversationID := "", ""
 	for _, entry := range entries {
 		switch entry.Type {
 		case "reset":
-			latestResponseID = ""
+			latestResponseID, conversationID = "", ""
 		case "assistant":
-			if strings.TrimSpace(entry.ResponseID) != "" {
-				latestResponseID = strings.TrimSpace(entry.ResponseID)
+			if entry.Provider != "" && entry.Provider != provider.OpenAI {
+				latestResponseID, conversationID = "", ""
+			} else if strings.TrimSpace(entry.ResponseID) != "" {
+				latestResponseID, conversationID = strings.TrimSpace(entry.ResponseID), entry.ConversationID
 			}
 		}
 	}
 
-	return latestResponseID, nil
+	return latestResponseID, conversationID, nil
 }
 
 func recordHistory(entry historyEntry) {
+	if entry.ConversationID == "" {
+		entry.ConversationID = activeConversationID
+	}
+	entry.Content = truncateToolOutputCharsForModel(entry.Content, maxHistoryFieldChars)
+	entry.Arguments = truncateToolOutputCharsForModel(entry.Arguments, maxHistoryFieldChars)
 	if err := historyEntryAppender(entry); err != nil {
 		fmt.Fprintf(os.Stderr, "[warn] failed to save history: %v\n", err)
 	}

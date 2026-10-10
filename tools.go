@@ -12,25 +12,88 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
+// bashToolTimeout is a variable so tests can shorten it.
+var bashToolTimeout = 30 * time.Second
+
 const (
-	bashToolTimeout     = 30 * time.Second
+	// bashPipeWaitDelay is how long run_bash keeps reading output after the shell exits,
+	// in case a background process it started still holds the output pipe open.
+	bashPipeWaitDelay   = 2 * time.Second
 	defaultFindLimit    = 200
 	defaultGrepLimit    = 100
 	defaultTreeLimit    = 200
 	maxSearchFileSize   = 1 << 20
+	maxReadFileSize     = 1 << 20
 	maxDiffPreviewLines = 200
+	// maxDiffCells bounds the LCS table behind a diff preview (about 16 MB of int32s).
+	maxDiffCells = 4_000_000
+
+	// stateDirName holds goat's history, operation log, and undo snapshots.
+	stateDirName = ".goat"
 )
 
 var errSearchLimitReached = errors.New("search limit reached")
 
-func resolveToolPath(path string) (string, string, error) {
-	cleanPath := filepath.Clean(strings.TrimSpace(path))
-	if cleanPath == "" {
+// isMissing reports whether err means a path does not exist, including when one of its
+// parents is now a file rather than a directory.
+func isMissing(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func escapesRoot(relPath string) bool {
+	return relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator))
+}
+
+// isStateDirName also matches spellings that name the same directory on
+// case-insensitive filesystems and on Windows, which ignores trailing dots and spaces.
+func isStateDirName(name string) bool {
+	return strings.EqualFold(strings.TrimRight(name, ". "), stateDirName)
+}
+
+func isStatePath(relPath string) bool {
+	first, _, _ := strings.Cut(filepath.ToSlash(relPath), "/")
+	return isStateDirName(first)
+}
+
+// isInsideExistingDir reports whether path is dir or lies inside it, comparing file
+// identity so that symlinks, case variants and short names cannot hide the match.
+func isInsideExistingDir(path, dir string) bool {
+	dirInfo, err := os.Stat(dir)
+	if err != nil || !dirInfo.IsDir() {
+		return false
+	}
+
+	for current := path; ; current = filepath.Dir(current) {
+		if info, err := os.Stat(current); err == nil && os.SameFile(info, dirInfo) {
+			return true
+		}
+		if filepath.Dir(current) == current {
+			return false
+		}
+	}
+}
+
+// sameExistingFile reports whether both paths exist and are the same file.
+func sameExistingFile(firstResolvedPath, secondResolvedPath string) bool {
+	firstInfo, err := os.Stat(firstResolvedPath)
+	if err != nil {
+		return false
+	}
+	secondInfo, err := os.Stat(secondResolvedPath)
+	return err == nil && os.SameFile(firstInfo, secondInfo)
+}
+
+// resolveStatePath resolves a path inside the workspace, including goat's own state
+// directory. Tools that act for the model must use resolveToolPath instead.
+func resolveStatePath(path string) (string, string, error) {
+	if strings.TrimSpace(path) == "" {
 		return "", "", fmt.Errorf("path is required")
 	}
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
 	if filepath.IsAbs(cleanPath) {
 		return "", "", fmt.Errorf("path must be relative to the workspace")
 	}
@@ -45,11 +108,73 @@ func resolveToolPath(path string) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve path: %w", err)
 	}
-	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+	if escapesRoot(relPath) {
 		return "", "", fmt.Errorf("path escapes the workspace")
 	}
 
 	return resolvedPath, relPath, nil
+}
+
+// resolveToolPath resolves a path the model asked for. Besides staying inside the
+// workspace lexically, the path must not reach outside it, or into goat's state
+// directory, through a symlink.
+func resolveToolPath(path string) (string, string, error) {
+	resolvedPath, relPath, err := resolveStatePath(path)
+	if err != nil {
+		return "", "", err
+	}
+	if isStatePath(relPath) {
+		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
+	}
+
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("determine workspace root: %w", err)
+	}
+	realRelPath, err := realPathRelativeToRoot(workspaceRoot, resolvedPath)
+	if err != nil {
+		return "", "", err
+	}
+	if escapesRoot(realRelPath) {
+		return "", "", fmt.Errorf("path escapes the workspace through a symlink")
+	}
+	if isStatePath(realRelPath) || isInsideExistingDir(resolvedPath, filepath.Join(workspaceRoot, stateDirName)) {
+		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
+	}
+
+	return resolvedPath, relPath, nil
+}
+
+// realPathRelativeToRoot resolves symlinks in the longest existing prefix of
+// resolvedPath and returns where the path really points, relative to the real root.
+func realPathRelativeToRoot(workspaceRoot, resolvedPath string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace root: %w", err)
+	}
+
+	existing := resolvedPath
+	var missing []string
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		} else if !isMissing(err) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break
+		}
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
+	}
+
+	realExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks: %w", err)
+	}
+
+	return filepath.Rel(realRoot, filepath.Join(append([]string{realExisting}, missing...)...))
 }
 
 func workspaceRelativePath(resolvedPath string) (string, error) {
@@ -67,13 +192,39 @@ func workspaceRelativePath(resolvedPath string) (string, error) {
 }
 
 func shouldSkipDir(name string) bool {
-	return name == ".git" || name == ".goat"
+	return name == ".git" || isStateDirName(name)
 }
 
 func readFile(filePath string) (string, error) {
 	resolvedPath, _, err := resolveToolPath(filePath)
 	if err != nil {
 		return "", err
+	}
+
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// readFileForModel reads a file for read_file, refusing files too large to be useful
+// once the output is truncated for the model.
+func readFileForModel(filePath string) (string, error) {
+	resolvedPath, _, err := resolveToolPath(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory; use read_dir or tree_dir", filepath.Clean(filePath))
+	}
+	if info.Size() > maxReadFileSize {
+		return "", fmt.Errorf("%s is %d bytes, over the %d byte read_file limit; use grep_files or run_bash (for example sed -n '1,200p') to read part of it", filepath.Clean(filePath), info.Size(), maxReadFileSize)
 	}
 
 	data, err := os.ReadFile(resolvedPath)
@@ -133,6 +284,12 @@ func readFileBytesIfExists(filePath string) ([]byte, bool, error) {
 func writeFile(filePath, content string) error {
 	if strings.TrimSpace(filePath) == "" {
 		return fmt.Errorf("missing path")
+	}
+
+	if resolvedPath, _, err := resolveToolPath(filePath); err != nil {
+		return err
+	} else if info, err := os.Stat(resolvedPath); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory", filepath.Clean(filePath))
 	}
 
 	return withRecordedMutation("write_file", []string{filePath}, func() error {
@@ -296,9 +453,46 @@ func rawCopyFile(sourcePath, destinationPath string) error {
 	return os.WriteFile(resolvedDestination, data, info.Mode().Perm())
 }
 
-func copyFile(sourcePath, destinationPath string, overwrite bool) error {
+// distinctTransferPaths rejects a source and destination that are the same directory
+// entry spelled differently, such as a.txt and A.txt on a case-insensitive filesystem.
+// Overwriting the destination would otherwise delete the source. Distinct hard links and
+// symlinks are separate entries and are allowed.
+func distinctTransferPaths(sourcePath, destinationPath string) error {
 	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
 		return fmt.Errorf("source and destination must be different")
+	}
+
+	resolvedSource, _, err := resolveToolPath(sourcePath)
+	if err != nil {
+		return err
+	}
+	resolvedDestination, _, err := resolveToolPath(destinationPath)
+	if err != nil {
+		return err
+	}
+	if sameDirectoryEntry(resolvedSource, resolvedDestination) {
+		return fmt.Errorf("source %s and destination %s are the same file", filepath.Clean(sourcePath), filepath.Clean(destinationPath))
+	}
+	return nil
+}
+
+func sameDirectoryEntry(firstResolvedPath, secondResolvedPath string) bool {
+	if !sameExistingFile(firstResolvedPath, secondResolvedPath) {
+		return false
+	}
+	for _, candidate := range []string{firstResolvedPath, secondResolvedPath} {
+		if info, err := os.Lstat(candidate); err != nil || info.Mode()&fs.ModeSymlink != 0 {
+			return false
+		}
+	}
+	normalize := func(name string) string { return strings.TrimRight(name, ". ") }
+	return sameExistingFile(filepath.Dir(firstResolvedPath), filepath.Dir(secondResolvedPath)) &&
+		strings.EqualFold(normalize(filepath.Base(firstResolvedPath)), normalize(filepath.Base(secondResolvedPath)))
+}
+
+func copyFile(sourcePath, destinationPath string, overwrite bool) error {
+	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
+		return err
 	}
 
 	if _, err := ensureRegularFile(sourcePath); err != nil {
@@ -314,8 +508,8 @@ func copyFile(sourcePath, destinationPath string, overwrite bool) error {
 }
 
 func previewCopyFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
-	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
-		return "", fmt.Errorf("source and destination must be different")
+	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
+		return "", err
 	}
 
 	if _, err := ensureRegularFile(sourcePath); err != nil {
@@ -345,8 +539,8 @@ func previewCopyFile(sourcePath, destinationPath string, overwrite bool) (string
 }
 
 func moveFile(sourcePath, destinationPath string, overwrite bool) error {
-	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
-		return fmt.Errorf("source and destination must be different")
+	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
+		return err
 	}
 
 	if _, err := ensureRegularFile(sourcePath); err != nil {
@@ -387,8 +581,8 @@ func moveFile(sourcePath, destinationPath string, overwrite bool) error {
 }
 
 func previewMoveFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
-	if filepath.Clean(sourcePath) == filepath.Clean(destinationPath) {
-		return "", fmt.Errorf("source and destination must be different")
+	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
+		return "", err
 	}
 
 	if _, err := ensureRegularFile(sourcePath); err != nil {
@@ -445,6 +639,18 @@ func previewDeleteFile(filePath string) (string, error) {
 	cleanPath := filepath.ToSlash(filepath.Clean(filePath))
 	preview := previewDataChange(cleanPath, "/dev/null", data, nil)
 	return fmt.Sprintf("Preview for delete_file on %s:\n%s", cleanPath, preview), nil
+}
+
+// skipUnreadable lets a recursive search continue past entries it cannot read, such as
+// directories without permission. Only a failure on the search root is an error.
+func skipUnreadable(path, root string, d fs.DirEntry, walkErr error) error {
+	if path == root {
+		return walkErr
+	}
+	if d != nil && d.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
 }
 
 func readDir(dirPath string) ([]string, error) {
@@ -513,7 +719,7 @@ func findFiles(rootPath, pattern string, limit int) ([]string, bool, error) {
 	var matches []string
 	err = filepath.WalkDir(resolvedRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return skipUnreadable(path, resolvedRoot, d, walkErr)
 		}
 		if d.IsDir() {
 			if shouldSkipDir(d.Name()) {
@@ -572,7 +778,7 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 	var matches []string
 	err = filepath.WalkDir(resolvedRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return skipUnreadable(path, resolvedRoot, d, walkErr)
 		}
 		if d.IsDir() {
 			if shouldSkipDir(d.Name()) {
@@ -581,17 +787,21 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 			return nil
 		}
 
+		// Symlinks may point outside the workspace, so their targets are not searched.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return nil
 		}
-		if info.Size() > maxSearchFileSize {
+		if !info.Mode().IsRegular() || info.Size() > maxSearchFileSize {
 			return nil
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return nil
 		}
 		if bytes.IndexByte(data, 0) >= 0 {
 			return nil
@@ -620,9 +830,6 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 			if len(matches) >= limit {
 				return errSearchLimitReached
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			return err
 		}
 		return nil
 	})
@@ -700,8 +907,12 @@ func treeDir(rootPath string, limit int) ([]string, bool, error) {
 				return errSearchLimitReached
 			}
 			if entry.IsDir() {
-				if err := walk(filepath.Join(dirPath, entry.Name()), nextPrefix); err != nil {
+				line := len(lines) - 1
+				if err := walk(filepath.Join(dirPath, entry.Name()), nextPrefix); errors.Is(err, errSearchLimitReached) {
 					return err
+				} else if err != nil {
+					// Keep listing the rest of the tree past directories that cannot be read.
+					lines[line] += " [unreadable]"
 				}
 			}
 		}
@@ -733,9 +944,42 @@ func splitDiffLines(content string) []string {
 }
 
 func computeDiffOps(oldLines, newLines []string) []diffOp {
-	dp := make([][]int, len(oldLines)+1)
+	prefix := 0
+	for prefix < len(oldLines) && prefix < len(newLines) && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(oldLines)-prefix && suffix < len(newLines)-prefix && oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
+		suffix++
+	}
+
+	ops := make([]diffOp, 0, len(oldLines)+len(newLines))
+	for _, line := range oldLines[:prefix] {
+		ops = append(ops, diffOp{kind: ' ', text: line})
+	}
+	ops = append(ops, computeLCSDiffOps(oldLines[prefix:len(oldLines)-suffix], newLines[prefix:len(newLines)-suffix])...)
+	for _, line := range oldLines[len(oldLines)-suffix:] {
+		ops = append(ops, diffOp{kind: ' ', text: line})
+	}
+	return ops
+}
+
+func computeLCSDiffOps(oldLines, newLines []string) []diffOp {
+	var ops []diffOp
+	if (len(oldLines)+1)*(len(newLines)+1) > maxDiffCells {
+		// Too large for an exact diff: show the whole changed region as replaced.
+		for _, line := range oldLines {
+			ops = append(ops, diffOp{kind: '-', text: line})
+		}
+		for _, line := range newLines {
+			ops = append(ops, diffOp{kind: '+', text: line})
+		}
+		return ops
+	}
+
+	dp := make([][]int32, len(oldLines)+1)
 	for i := range dp {
-		dp[i] = make([]int, len(newLines)+1)
+		dp[i] = make([]int32, len(newLines)+1)
 	}
 
 	for i := len(oldLines) - 1; i >= 0; i-- {
@@ -750,7 +994,6 @@ func computeDiffOps(oldLines, newLines []string) []diffOp {
 		}
 	}
 
-	var ops []diffOp
 	i, j := 0, 0
 	for i < len(oldLines) && j < len(newLines) {
 		switch {
@@ -843,6 +1086,8 @@ func runBashCommand(ctx context.Context, command, workdir string) (string, error
 
 	cmd := exec.CommandContext(runCtx, "bash", "-lc", command)
 	cmd.Dir = resolvedDir
+	configureProcessGroup(cmd)
+	cmd.WaitDelay = bashPipeWaitDelay
 
 	output, err := cmd.CombinedOutput()
 	trimmedOutput := strings.TrimRight(string(output), "\n")
@@ -852,12 +1097,20 @@ func runBashCommand(ctx context.Context, command, workdir string) (string, error
 
 	result := fmt.Sprintf("Bash output for %q in %s:\n%s", command, relDir, trimmedOutput)
 
-	if runCtx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("command timed out after %s\n%s", bashToolTimeout, result)
-	}
-	if err != nil {
+	// Check the exit result first: a command that exited cleanly was not killed, even if
+	// the deadline passed while waiting for a background process to release the output.
+	switch {
+	case err == nil:
+		return result, nil
+	case errors.Is(err, exec.ErrWaitDelay):
+		// The shell finished but something it started in the background still holds the
+		// output open; that process keeps running and its later output is not captured.
+		return result + "\n(a background process is still running; redirect its output to a file to keep it)", nil
+	case ctx.Err() != nil:
+		return "", fmt.Errorf("command interrupted by the user\n%s", result)
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		return "", fmt.Errorf("command timed out after %s and was killed\n%s", bashToolTimeout, result)
+	default:
 		return "", fmt.Errorf("%w\n%s", err, result)
 	}
-
-	return result, nil
 }

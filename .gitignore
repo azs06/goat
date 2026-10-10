@@ -32,3 +32,5 @@ go.work.sum
 # .idea/
 # .vscode/
 .goat/
+# Built binary
+/goat

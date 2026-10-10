@@ -2,6 +2,8 @@
 
 package main
 
+import "os"
+
 type terminalInputGuard struct{}
 
 func beginTerminalInputGuard() (*terminalInputGuard, error) {
@@ -14,4 +16,17 @@ func flushInputBuffer(fd int) error {
 
 func (g *terminalInputGuard) Close() error {
 	return nil
+}
+
+func (g *terminalInputGuard) suspend() error {
+	return nil
+}
+
+func (g *terminalInputGuard) resume() error {
+	return nil
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

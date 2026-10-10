@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+
+	"github.com/azs06/goat/internal/provider"
 )
 
 func chdirForTest(t *testing.T, dir string) {
@@ -28,7 +30,10 @@ func chdirForTest(t *testing.T, dir string) {
 		t.Fatalf("change working dir: %v", err)
 	}
 
+	previousConversationID := activeConversationID
+	activeConversationID = ""
 	t.Cleanup(func() {
+		activeConversationID = previousConversationID
 		if err := os.Chdir(previousDir); err != nil {
 			t.Fatalf("restore working dir: %v", err)
 		}
@@ -173,11 +178,6 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	previousStreamer := streamedResponseCreator
-	defer func() {
-		streamedResponseCreator = previousStreamer
-	}()
-
 	responsesToReturn := []*responses.Response{
 		{
 			ID: "resp-1",
@@ -200,7 +200,7 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 	}
 
 	var receivedParams []responses.ResponseNewParams
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		receivedParams = append(receivedParams, params)
 		index := len(receivedParams) - 1
 		if index >= len(responsesToReturn) {
@@ -209,13 +209,13 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "list files twice", "", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files twice", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
 
-	if responseID != "resp-3" {
-		t.Fatalf("expected final response ID resp-3, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-3" {
+		t.Fatalf("expected final response ID resp-3, got %q", conv.conversation.ResponseID)
 	}
 
 	if len(receivedParams) != 3 {
@@ -265,12 +265,7 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	previousStreamer := streamedResponseCreator
-	defer func() {
-		streamedResponseCreator = previousStreamer
-	}()
-
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		return &responses.Response{
 			ID: "resp-history",
 			Output: []responses.ResponseOutputItemUnion{
@@ -279,12 +274,12 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 		}, false, nil
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "hello history", "", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello history", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
-	if responseID != "resp-history" {
-		t.Fatalf("expected resp-history, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-history" {
+		t.Fatalf("expected resp-history, got %q", conv.conversation.ResponseID)
 	}
 
 	historyData, err := os.ReadFile(filepath.Join(workspace, ".goat", "history.jsonl"))
@@ -305,15 +300,13 @@ func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	previousStreamer := streamedResponseCreator
 	previousSleeper := streamRetrySleeper
 	defer func() {
-		streamedResponseCreator = previousStreamer
 		streamRetrySleeper = previousSleeper
 	}()
 
 	var callCount int
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		callCount++
 		if callCount == 1 {
 			return nil, false, &ssestream.StreamError{
@@ -338,13 +331,13 @@ func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
 		return nil
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "retry please", "", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "retry please", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
 
-	if responseID != "resp-after-retry" {
-		t.Fatalf("expected resp-after-retry, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-after-retry" {
+		t.Fatalf("expected resp-after-retry, got %q", conv.conversation.ResponseID)
 	}
 	if callCount != 2 {
 		t.Fatalf("expected 2 streamed calls, got %d", callCount)
@@ -361,13 +354,8 @@ func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	previousStreamer := streamedResponseCreator
-	defer func() {
-		streamedResponseCreator = previousStreamer
-	}()
-
 	var callCount int
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		callCount++
 		return nil, true, &ssestream.StreamError{
 			Message: "received error while streaming: rate limit",
@@ -377,15 +365,15 @@ func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T
 		}
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "partial retry", "resp-prev", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "partial retry", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err == nil {
 		t.Fatal("expected interrupted partial output to return an error")
 	}
 	if !strings.Contains(err.Error(), "interrupted after partial text") {
 		t.Fatalf("expected partial-output error, got %v", err)
 	}
-	if responseID != "resp-prev" {
-		t.Fatalf("expected response ID to remain unchanged, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-prev" {
+		t.Fatalf("expected response ID to remain unchanged, got %q", conv.conversation.ResponseID)
 	}
 	if callCount != 1 {
 		t.Fatalf("expected no retry after partial output, got %d call(s)", callCount)
@@ -396,15 +384,13 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	previousStreamer := streamedResponseCreator
 	previousSleeper := streamRetrySleeper
 	defer func() {
-		streamedResponseCreator = previousStreamer
 		streamRetrySleeper = previousSleeper
 	}()
 
 	var callCount int
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		callCount++
 		return nil, false, &ssestream.StreamError{
 			Message: "received error while streaming: rate limit",
@@ -420,7 +406,7 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 		return nil
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "still limited", "resp-prev", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "still limited", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err == nil {
 		t.Fatal("expected rate-limit exhaustion to return an error")
 	}
@@ -430,8 +416,8 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 	if !strings.Contains(err.Error(), "rate limit") {
 		t.Fatalf("expected original rate-limit detail to be preserved, got %v", err)
 	}
-	if responseID != "resp-prev" {
-		t.Fatalf("expected response ID to remain unchanged, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-prev" {
+		t.Fatalf("expected response ID to remain unchanged, got %q", conv.conversation.ResponseID)
 	}
 	if callCount != maxStreamRateLimitRetries+1 {
 		t.Fatalf("expected %d streamed calls, got %d", maxStreamRateLimitRetries+1, callCount)
@@ -441,31 +427,9 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 	}
 }
 
-func TestSendPromptReturnsErrorInsteadOfPanicking(t *testing.T) {
-	previousCreator := responseCreator
-	defer func() {
-		responseCreator = previousCreator
-	}()
-
-	responseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, error) {
-		return nil, fmt.Errorf("rate_limit_exceeded: request too large")
-	}
-
-	if err := sendPrompt(context.Background(), nil, defaultModel, defaultReasoningEffort, "hello"); err == nil {
-		t.Fatal("expected sendPrompt to return an error")
-	} else if !strings.Contains(err.Error(), "rate_limit_exceeded") {
-		t.Fatalf("expected rate-limit error to be preserved, got %v", err)
-	}
-}
-
 func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
-
-	previousStreamer := streamedResponseCreator
-	defer func() {
-		streamedResponseCreator = previousStreamer
-	}()
 
 	command := "i=1; while [ $i -le 260 ]; do printf 'line-%03d\\n' \"$i\"; i=$((i+1)); done"
 	argumentsJSON, err := json.Marshal(map[string]string{
@@ -492,7 +456,7 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 	}
 
 	var receivedParams []responses.ResponseNewParams
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		receivedParams = append(receivedParams, params)
 		index := len(receivedParams) - 1
 		if index >= len(responsesToReturn) {
@@ -501,12 +465,12 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "run a large bash command", "", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "run a large bash command", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err != nil {
 		t.Fatalf("sendPromptStream returned error: %v", err)
 	}
-	if responseID != "resp-2" {
-		t.Fatalf("expected resp-2, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-2" {
+		t.Fatalf("expected resp-2, got %q", conv.conversation.ResponseID)
 	}
 	if len(receivedParams) != 2 {
 		t.Fatalf("expected 2 streamed response requests, got %d", len(receivedParams))
@@ -535,50 +499,128 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 	}
 }
 
-func TestSendPromptStreamReturnsLatestSuccessfulResponseIDWhenFollowupFails(t *testing.T) {
+func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.T) {
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
-
-	previousStreamer := streamedResponseCreator
-	defer func() {
-		streamedResponseCreator = previousStreamer
-	}()
 
 	argumentsJSON, err := json.Marshal(map[string]string{"path": "."})
 	if err != nil {
 		t.Fatalf("marshal read_dir arguments: %v", err)
 	}
 
-	callCount := 0
-	streamedResponseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, bool, error) {
-		callCount++
-		if callCount == 1 {
+	var receivedParams []responses.ResponseNewParams
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
+		receivedParams = append(receivedParams, params)
+		switch len(receivedParams) {
+		case 1:
 			return &responses.Response{
 				ID: "resp-tool-round",
 				Output: []responses.ResponseOutputItemUnion{
 					mustResponseOutputItemUnion(t, fmt.Sprintf(`{"type":"function_call","name":"read_dir","call_id":"call-1","arguments":%q}`, string(argumentsJSON))),
 				},
 			}, false, nil
+		case 2:
+			return nil, false, fmt.Errorf("upstream failure")
+		default:
+			return &responses.Response{
+				ID: "resp-recovered",
+				Output: []responses.ResponseOutputItemUnion{
+					mustResponseOutputItemUnion(t, `{"type":"message","id":"msg-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Recovered."}]}`),
+				},
+			}, false, nil
 		}
-		return nil, false, fmt.Errorf("upstream failure")
 	}
 
-	responseID, err := sendPromptStream(context.Background(), nil, "list files", "resp-prev", defaultModel, defaultReasoningEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
 	if err == nil {
 		t.Fatal("expected follow-up failure to be returned")
 	}
-	if responseID != "resp-tool-round" {
-		t.Fatalf("expected latest successful response ID, got %q", responseID)
+	if conv.conversation.ResponseID != "resp-tool-round" {
+		t.Fatalf("expected latest successful response ID, got %q", conv.conversation.ResponseID)
+	}
+	if len(conv.pendingToolResults) != 1 {
+		t.Fatalf("expected the undelivered tool output to be kept, got %d", len(conv.pendingToolResults))
+	}
+
+	conv, err = sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "try again", conv, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	if err != nil {
+		t.Fatalf("expected the next prompt to succeed, got %v", err)
+	}
+	if conv.conversation.ResponseID != "resp-recovered" || len(conv.pendingToolResults) != 0 {
+		t.Fatalf("expected a clean state after recovery, got %+v", conv)
+	}
+
+	retry := receivedParams[2]
+	if retry.PreviousResponseID.Value != "resp-tool-round" {
+		t.Fatalf("expected retry to continue from resp-tool-round, got %q", retry.PreviousResponseID.Value)
+	}
+	items := retry.Input.OfInputItemList
+	if len(items) != 2 {
+		t.Fatalf("expected pending tool output plus the new prompt, got %d item(s)", len(items))
+	}
+	itemsJSON, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal retry input: %v", err)
+	}
+	if !strings.Contains(string(itemsJSON), `"call_id":"call-1"`) || !strings.Contains(string(itemsJSON), "try again") {
+		t.Fatalf("expected tool output for call-1 and the new prompt, got %s", itemsJSON)
 	}
 }
 
-func TestParseReasoningEffortDefaultsToMedium(t *testing.T) {
-	effort, err := parseReasoningEffort("")
-	if err != nil {
-		t.Fatalf("parse reasoning effort: %v", err)
+func TestSendPromptStreamAnswersRemainingCallsWhenInterrupted(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	callCount := 0
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
+		callCount++
+		cancel()
+		return &responses.Response{
+			ID: "resp-calls",
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"read_dir","call_id":"call-1","arguments":"{\"path\":\".\"}"}`),
+				mustResponseOutputItemUnion(t, `{"type":"function_call","name":"read_dir","call_id":"call-2","arguments":"{\"path\":\".\"}"}`),
+			},
+		}, false, nil
 	}
-	if effort != shared.ReasoningEffortMedium {
-		t.Fatalf("expected medium reasoning effort, got %q", effort)
+
+	conv, err := sendPromptStream(ctx, provider.NewOpenAIWith(nil, stream), "list", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected no follow-up request after interruption, got %d request(s)", callCount)
+	}
+	if conv.conversation.ResponseID != "resp-calls" || len(conv.pendingToolResults) != 2 {
+		t.Fatalf("expected both calls to be answered and kept pending, got %+v", conv)
+	}
+}
+
+func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+
+	callCount := 0
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
+		callCount++
+		return &responses.Response{
+			ID: fmt.Sprintf("resp-%d", callCount),
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, fmt.Sprintf(`{"type":"function_call","name":"read_dir","call_id":"call-%d","arguments":"{\"path\":\".\"}"}`, callCount)),
+			},
+		}, false, nil
+	}
+
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "loop forever", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	if err == nil || !strings.Contains(err.Error(), "tool rounds") {
+		t.Fatalf("expected tool round limit error, got %v", err)
+	}
+	if callCount != maxToolRoundsPerTurn {
+		t.Fatalf("expected %d requests, got %d", maxToolRoundsPerTurn, callCount)
+	}
+	if len(conv.pendingToolResults) != 1 {
+		t.Fatalf("expected the last round's output to stay pending, got %d", len(conv.pendingToolResults))
 	}
 }
 
@@ -591,13 +633,8 @@ func TestCommandCompactCreatesFreshResponseChain(t *testing.T) {
 	recordHistory(historyEntry{Type: "tool_call", ToolName: "read_file", Arguments: "{\"path\":\"main.go\"}", ResponseID: "resp-old"})
 	recordHistory(historyEntry{Type: "tool_output", ToolName: "read_file", Content: "package main", ResponseID: "resp-old", Status: "ok"})
 
-	previousCreator := responseCreator
-	defer func() {
-		responseCreator = previousCreator
-	}()
-
 	var receivedParams []responses.ResponseNewParams
-	responseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, error) {
+	create := func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
 		receivedParams = append(receivedParams, params)
 		switch len(receivedParams) {
 		case 1:
@@ -615,26 +652,26 @@ func TestCommandCompactCreatesFreshResponseChain(t *testing.T) {
 				},
 			}, nil
 		default:
-			t.Fatalf("unexpected responseCreator call %d", len(receivedParams))
+			t.Fatalf("unexpected create call %d", len(receivedParams))
 			return nil, nil
 		}
 	}
 
 	cfg := &config{
-		model:           defaultModel,
-		reasoningEffort: defaultReasoningEffort,
-		responseID:      "resp-old",
-		client:          &openai.Client{},
+		model:           provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel},
+		reasoningEffort: provider.DefaultEffort,
+		conversation:    conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-old"}},
+		providers:       map[string]provider.Provider{provider.OpenAI: provider.NewOpenAIWith(create, nil)},
 	}
 
-	if err := commandCompact(cfg); err != nil {
+	if err := commandCompact(context.Background(), cfg, nil); err != nil {
 		t.Fatalf("commandCompact: %v", err)
 	}
-	if cfg.responseID != "resp-seeded" {
-		t.Fatalf("expected compacted response ID resp-seeded, got %q", cfg.responseID)
+	if cfg.conversation.conversation.ResponseID != "resp-seeded" {
+		t.Fatalf("expected compacted response ID resp-seeded, got %q", cfg.conversation.conversation.ResponseID)
 	}
 	if len(receivedParams) != 2 {
-		t.Fatalf("expected 2 responseCreator calls, got %d", len(receivedParams))
+		t.Fatalf("expected 2 create calls, got %d", len(receivedParams))
 	}
 	if receivedParams[0].PreviousResponseID.Value != "" {
 		t.Fatalf("expected local-history compaction summary to avoid previous response chaining, got %q", receivedParams[0].PreviousResponseID.Value)
@@ -658,18 +695,94 @@ func TestCommandCompactCreatesFreshResponseChain(t *testing.T) {
 	}
 }
 
-func TestShouldAutoCompactConversationByEntryCount(t *testing.T) {
-	entries := make([]historyEntry, 0, autoCompactHistoryItems)
-	for i := 0; i < autoCompactHistoryItems; i++ {
-		entries = append(entries, historyEntry{Type: "user", Content: fmt.Sprintf("message %d", i)})
+func TestShouldAutoCompactConversationUsesLatestTokenUsage(t *testing.T) {
+	entries := []historyEntry{
+		{Type: "user", Content: "first"},
+		{Type: "assistant", Content: "big", ResponseID: "resp-1", ContextTokens: 90000},
+		{Type: "user", Content: "second"},
+		{Type: "assistant", Content: "small", ResponseID: "resp-2", ContextTokens: 1000},
 	}
 
-	shouldCompact, reason := shouldAutoCompactConversation(entries)
-	if !shouldCompact {
-		t.Fatal("expected auto compaction to trigger by entry count")
+	if shouldCompact, _ := shouldAutoCompactConversation(entries, 50000); shouldCompact {
+		t.Fatal("expected only the latest turn's usage to count")
 	}
-	if !strings.Contains(reason, "entries") {
-		t.Fatalf("expected entry-count reason, got %q", reason)
+
+	entries = append(entries, historyEntry{Type: "assistant", Content: "bigger", ResponseID: "resp-3", ContextTokens: 60000})
+	shouldCompact, reason := shouldAutoCompactConversation(entries, 50000)
+	if !shouldCompact {
+		t.Fatal("expected auto compaction once usage passes the threshold")
+	}
+	if !strings.Contains(reason, "tokens") {
+		t.Fatalf("expected token reason, got %q", reason)
+	}
+}
+
+func TestShouldAutoCompactConversationIgnoresManySmallEntries(t *testing.T) {
+	var entries []historyEntry
+	for i := 0; i < 100; i++ {
+		entries = append(entries, historyEntry{Type: "tool_output", ToolName: "read_dir", Content: "a.txt"})
+	}
+
+	if shouldCompact, reason := shouldAutoCompactConversation(entries, 50000); shouldCompact {
+		t.Fatalf("expected small history not to compact, got %q", reason)
+	}
+}
+
+func TestShouldAutoCompactConversationFallsBackToCharacters(t *testing.T) {
+	entries := []historyEntry{{Type: "user", Content: strings.Repeat("x", 4000)}}
+
+	shouldCompact, reason := shouldAutoCompactConversation(entries, 500)
+	if !shouldCompact {
+		t.Fatal("expected history without usage to compact by size")
+	}
+	if !strings.Contains(reason, "tokens") {
+		t.Fatalf("expected token estimate reason, got %q", reason)
+	}
+}
+
+func TestShouldAutoCompactConversationCountsOutputAfterLatestUsage(t *testing.T) {
+	entries := []historyEntry{
+		{Type: "user", Content: "first"},
+		{Type: "assistant", Content: "ok", ResponseID: "resp-1", ContextTokens: 50000},
+		{Type: "user", Content: "read everything"},
+	}
+	for i := 0; i < 40; i++ {
+		responseID := fmt.Sprintf("resp-round-%d", i)
+		entries = append(entries,
+			historyEntry{Type: "tool_call", ToolName: "read_file", Arguments: `{"path":"big.txt"}`, ResponseID: responseID, ContextTokens: int64(50000 + i*100)},
+			historyEntry{Type: "tool_output", ToolName: "read_file", Content: strings.Repeat("x", 16000), ResponseID: responseID, Status: "ok"},
+		)
+	}
+	entries = append(entries, historyEntry{Type: "error", Content: "stopped after 40 tool rounds", Status: "error"})
+
+	shouldCompact, reason := shouldAutoCompactConversation(entries, 80000)
+	if shouldCompact {
+		t.Fatalf("expected the latest per-round usage plus one tool output to stay under the threshold, got %q", reason)
+	}
+
+	// Without per-round usage, the tool output after the last reported usage must count.
+	for i := range entries {
+		if entries[i].Type == "tool_call" {
+			entries[i].ContextTokens = 0
+		}
+	}
+	if shouldCompact, _ := shouldAutoCompactConversation(entries, 80000); !shouldCompact {
+		t.Fatal("expected tool output recorded after the last usage to trigger compaction")
+	}
+}
+
+func TestShouldAutoCompactConversationCountsEveryToolOutputOfLatestResponse(t *testing.T) {
+	entries := []historyEntry{
+		{Type: "tool_call", ToolName: "read_file", ResponseID: "resp-1", ContextTokens: 70000},
+		{Type: "tool_output", ToolName: "read_file", Content: strings.Repeat("x", 16000), ResponseID: "resp-1"},
+		{Type: "tool_call", ToolName: "read_file", ResponseID: "resp-1", ContextTokens: 70000},
+		{Type: "tool_output", ToolName: "read_file", Content: strings.Repeat("y", 16000), ResponseID: "resp-1"},
+		{Type: "tool_call", ToolName: "read_file", ResponseID: "resp-1", ContextTokens: 70000},
+		{Type: "tool_output", ToolName: "read_file", Content: strings.Repeat("z", 16000), ResponseID: "resp-1"},
+	}
+
+	if shouldCompact, _ := shouldAutoCompactConversation(entries, 80000); !shouldCompact {
+		t.Fatal("expected all of the latest response's pending tool outputs to count")
 	}
 }
 
@@ -677,18 +790,11 @@ func TestMaybeAutoCompactConversationCompactsAndUpdatesResponseID(t *testing.T) 
 	workspace := t.TempDir()
 	chdirForTest(t, workspace)
 
-	for i := 0; i < autoCompactHistoryItems; i++ {
-		recordHistory(historyEntry{Type: "user", Content: fmt.Sprintf("request %d", i)})
-	}
-	recordHistory(historyEntry{Type: "assistant", Content: "Previous context", ResponseID: "resp-old"})
-
-	previousCreator := responseCreator
-	defer func() {
-		responseCreator = previousCreator
-	}()
+	recordHistory(historyEntry{Type: "user", Content: "request"})
+	recordHistory(historyEntry{Type: "assistant", Content: "Previous context", ResponseID: "resp-old", ContextTokens: defaultAutoCompactTokens + 1})
 
 	var receivedParams []responses.ResponseNewParams
-	responseCreator = func(ctx context.Context, c *openai.Client, params responses.ResponseNewParams) (*responses.Response, error) {
+	create := func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
 		receivedParams = append(receivedParams, params)
 		switch len(receivedParams) {
 		case 1:
@@ -706,16 +812,16 @@ func TestMaybeAutoCompactConversationCompactsAndUpdatesResponseID(t *testing.T) 
 				},
 			}, nil
 		default:
-			t.Fatalf("unexpected responseCreator call %d", len(receivedParams))
+			t.Fatalf("unexpected create call %d", len(receivedParams))
 			return nil, nil
 		}
 	}
 
 	cfg := &config{
-		model:           defaultModel,
-		reasoningEffort: defaultReasoningEffort,
-		responseID:      "resp-old",
-		client:          &openai.Client{},
+		model:           provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel},
+		reasoningEffort: provider.DefaultEffort,
+		conversation:    conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-old"}},
+		providers:       map[string]provider.Provider{provider.OpenAI: provider.NewOpenAIWith(create, nil)},
 	}
 
 	compacted, err := maybeAutoCompactConversation(context.Background(), cfg)
@@ -725,11 +831,11 @@ func TestMaybeAutoCompactConversationCompactsAndUpdatesResponseID(t *testing.T) 
 	if !compacted {
 		t.Fatal("expected conversation to be auto-compacted")
 	}
-	if cfg.responseID != "resp-auto-seeded" {
-		t.Fatalf("expected auto compacted response ID resp-auto-seeded, got %q", cfg.responseID)
+	if cfg.conversation.conversation.ResponseID != "resp-auto-seeded" {
+		t.Fatalf("expected auto compacted response ID resp-auto-seeded, got %q", cfg.conversation.conversation.ResponseID)
 	}
 	if len(receivedParams) != 2 {
-		t.Fatalf("expected 2 responseCreator calls, got %d", len(receivedParams))
+		t.Fatalf("expected 2 create calls, got %d", len(receivedParams))
 	}
 
 	entries, err := loadConversationHistoryEntries()

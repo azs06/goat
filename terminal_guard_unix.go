@@ -22,17 +22,47 @@ func beginTerminalInputGuard() (*terminalInputGuard, error) {
 		return &terminalInputGuard{}, nil
 	}
 
-	updated := *original
+	guard := &terminalInputGuard{fd: fd, termios: original}
+	if err := guard.disableEcho(); err != nil {
+		return nil, err
+	}
+	guard.disabled = true
+	return guard, nil
+}
+
+func stdinIsTerminal() bool {
+	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), ioctlReadTermios)
+	return err == nil
+}
+
+func (g *terminalInputGuard) disableEcho() error {
+	updated := *g.termios
 	updated.Lflag &^= unix.ECHO
-	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &updated); err != nil {
-		return nil, fmt.Errorf("disable terminal echo: %w", err)
+	if err := unix.IoctlSetTermios(g.fd, ioctlWriteTermios, &updated); err != nil {
+		return fmt.Errorf("disable terminal echo: %w", err)
+	}
+	return nil
+}
+
+// suspend discards input typed while echo was off and restores the original terminal
+// state so the user can answer a prompt; resume turns echo off again.
+func (g *terminalInputGuard) suspend() error {
+	if g == nil || !g.disabled {
+		return nil
 	}
 
-	return &terminalInputGuard{
-		fd:       fd,
-		termios:  original,
-		disabled: true,
-	}, nil
+	_ = flushInputBuffer(g.fd)
+	if err := unix.IoctlSetTermios(g.fd, ioctlWriteTermios, g.termios); err != nil {
+		return fmt.Errorf("restore terminal state: %w", err)
+	}
+	return nil
+}
+
+func (g *terminalInputGuard) resume() error {
+	if g == nil || !g.disabled {
+		return nil
+	}
+	return g.disableEcho()
 }
 
 func (g *terminalInputGuard) Close() error {

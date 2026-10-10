@@ -6,5 +6,5 @@ Deferred enhancements to implement later:
 - Add smarter summary generation for compaction that prioritizes changed files and pending work
 
 Notes:
-- Session compaction runs automatically before oversized follow-up turns and is also available manually via `compact`.
+- Session compaction runs automatically once a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS` and is also available manually via `compact`.
 - Keep preview-first workflows for mutating tools.
