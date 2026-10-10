@@ -125,24 +125,48 @@ func TestRunCodeAsksBeforeEachCommand(t *testing.T) {
 	approve := func(ctx context.Context, command, workdir string) error {
 		asked = append(asked, command+" in "+workdir)
 		if strings.Contains(command, "rm") {
-			return errors.New("the user declined to run this command")
+			return errors.New("the user declined to run this command; their feedback: use git clean")
 		}
 		return nil
 	}
-	output, err := Execute(context.Background(), runCodeCall(`async () => {
-		const first = await goat.run_bash({ command: "echo hi" });
-		let declined = "";
-		try { await goat.run_bash({ command: "rm -rf x", workdir: "." }) } catch (e) { declined = e.message }
-		return first.split("\n")[1] + " | " + declined;
+	output, err := Execute(context.Background(), runCodeCall(`async () => (await goat.run_bash({ command: "echo hi" })).split("\n")[1]`), Options{CodeMode: true, ApproveBash: approve})
+	if err != nil || !strings.HasSuffix(output, "Result:\nhi") {
+		t.Fatalf("got %q %v", output, err)
+	}
+
+	// A decline stops the script, even one that catches the error, so the user is not
+	// asked again and the model hears their answer.
+	asked = nil
+	_, err = Execute(context.Background(), runCodeCall(`async () => {
+		for (const command of ["rm -rf x", "rm -rf y"]) {
+			try { await goat.run_bash({ command, workdir: "." }) } catch (e) {}
+		}
+		await goat.write_file({ path: "after.txt", content: "x" });
+		return "kept going";
 	}`), Options{CodeMode: true, ApproveBash: approve})
+	if err == nil || !strings.Contains(err.Error(), "the script was stopped: goat.run_bash: the user declined to run this command; their feedback: use git clean") {
+		t.Fatalf("got %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Error("a decline is not an interrupt")
+	}
+	if !slices.Equal(asked, []string{"rm -rf x in ."}) {
+		t.Errorf("asked %q", asked)
+	}
+	if _, statErr := os.Stat("after.txt"); statErr == nil {
+		t.Error("the script went on after the decline")
+	}
+}
+
+func TestRunCodeShowsRefusedCalls(t *testing.T) {
+	t.Chdir(t.TempDir())
+	observer := &recordingObserver{}
+	_, err := Execute(context.Background(), runCodeCall(`async () => { try { await goat.read_file({ pth: "x" }) } catch (e) {} return 1 }`), Options{CodeMode: true, Nested: observer})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "hi | goat.run_bash: the user declined to run this command") {
-		t.Errorf("output %q", output)
-	}
-	if !slices.Equal(asked, []string{"echo hi in ", "rm -rf x in ."}) {
-		t.Errorf("asked %q", asked)
+	if len(observer.outputs) != 1 || !strings.Contains(observer.outputs[0], `unknown argument "pth"`) {
+		t.Errorf("observed %q", observer.outputs)
 	}
 }
 

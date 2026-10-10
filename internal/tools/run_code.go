@@ -47,7 +47,7 @@ var codeDocs = map[string]codemode.Doc{
 	"tree_dir":         {Returns: `"Directory tree for <path>:\n<tree lines>", then "\n(truncated after N line(s))" when the limit is hit.`},
 	"read_file":        {Returns: `"File contents for <path>:\n<content>", or with offset or limit "File contents for <path> (lines A-B of N):\n<lines>". Lines carry no line numbers.`},
 	"write_file":       {Returns: `"File <path> written successfully."; with preview "Preview for write_file on <path>:\n<diff>".`},
-	"edit_file":        {Returns: `"File <path> edited successfully. Replaced N occurrence(s)."; with preview "Preview for edit_file on <path>:\nReplacements: N\n<diff>".`, Throws: "When old_text is not found."},
+	"edit_file":        {Returns: `"File <path> edited successfully. Replaced N occurrence(s)."; with preview "Preview for edit_file on <path>:\nReplacements: N\n<diff>".`, Throws: "When old_text is empty, is not found, or matches more than once without replace_all: true."},
 	"edit_json_file":   {Returns: `"JSON file <path> updated successfully."; with preview "Preview for edit_json_file on <path>:\n<diff>". value_json is JSON text, e.g. JSON.stringify(value).`},
 	"copy_file":        {Returns: `"File <source> copied to <destination> successfully."; with preview "Preview for copy_file from <source> to <destination>:\n<diff>".`},
 	"move_file":        {Returns: `"File <source> moved to <destination> successfully."; with preview "Preview for move_file from <source> to <destination>:\n<diff>...".`},
@@ -56,7 +56,7 @@ var codeDocs = map[string]codemode.Doc{
 	"move_dir":         {Returns: `"Directory <source> moved to <destination> successfully."; with preview "Preview for move_dir from <source> to <destination>:\n<changes>".`},
 	"delete_dir":       {Returns: `"Directory <path> deleted successfully."; with preview "Preview for delete_dir on <path>:\n<changes>".`},
 	"undo_last_change": {Returns: `"Undid <kind> for <paths>." or "No recorded operations available to undo."; with preview "Preview for undo_last_change on <kind> (<paths>):\n<changes>".`},
-	"run_bash":         {Returns: `"Bash output for \"<command>\" in <dir>:\n<stdout and stderr>" ("(no output)" when empty).`, Throws: "On a non-zero exit (the message starts with \"exit status N\" and holds the output), a timeout, or a command the user declined."},
+	"run_bash":         {Returns: `"Bash output for \"<command>\" in <dir>:\n<stdout and stderr>" ("(no output)" when empty).`, Throws: "On a non-zero exit (the message is \"goat.run_bash: exit status N\" followed by the output), a timeout, or a signal. A command the user declines stops the whole script."},
 	"find_files":       {Returns: `"Found N file(s) under <path>:\n<one path per line>", then "\n(truncated after N result(s))" when limited; "No files found ..." when there are none.`},
 	"grep_files":       {Returns: `"Found N match(es) for \"<query>\" under <path>:\n<path>:<line>:<text> per line", then "\n(truncated after N match(es))" when limited; "No matches found ..." when there are none.`},
 }
@@ -86,12 +86,13 @@ The script sees this API:
 Each goat function takes the same arguments as the tool of the same name, as one object, and resolves to the same text that tool returns. The rules:
 - Write one async arrow function in plain JavaScript: async () => { ...; return value; }. No TypeScript annotations, import, require, fetch, process, timers or file access other than through goat.
 - Await each call. Calls run one at a time, in order; Promise.all works but does not run them in parallel. Parse the returned text yourself; @returns shows its format. An unknown argument name is an error.
-- A failed call rejects with an Error whose message names the tool and holds its error text: a missing file, a non-zero bash exit with its output, a plan-mode refusal, a declined command. Use try/catch where failure is expected, such as a test run. An uncaught error ends the script; changes already made stay made, and the error comes back with the console output.
-- Each call follows the same rules as a direct call: plan mode applies, and a run_bash command may wait for the user's approval. Every change is its own undo step.
+- A failed call rejects with an Error whose message is "goat.<tool>: <error text>": a missing file, a non-zero bash exit with its output, a plan-mode refusal. Use try/catch where failure is expected, such as a test run. An uncaught error, or a failed call nothing awaited, ends the script; changes already made stay made, and the error comes back with the line it came from and the console output.
+- Each call follows the same rules as a direct call: plan mode applies, and a run_bash command may wait for the user's approval. If the user declines a command, the script stops there and you get their answer. Every change is its own undo step.
+- Listing tools stop at their limit and then end with a "(truncated after N ...)" line; pass a larger limit when you need everything, and leave that line out when you parse the results.
 - Limits: %d goat calls and %s of run time per script (time waiting for the user's approval does not count); each run_bash command still times out on its own. The result and console output together are cut to about %d characters and %d lines, so return a small, focused value: a string, or an object that converts to JSON.
 - For a single step, call the tool directly. Use run_code for several dependent calls, loops over many files, or filtering large outputs.
 
-Example: async () => { const out = await goat.grep_files({ path: ".", query: "TODO", glob: "*.go" }); return out.split("\n").length - 1; }`,
+Example: async () => { const out = await goat.grep_files({ path: ".", query: "TODO", glob: "*.go", limit: 1000 }); if (out.startsWith("No matches")) return []; return [...new Set(out.split("\n").slice(1).filter(line => !line.startsWith("(truncated")).map(line => line.split(":")[0]))]; }`,
 		codemode.Declarations(codeModeTools(), codeDocs), limits.MaxCalls, limits.Timeout, maxChars, maxLines)
 }
 
@@ -112,14 +113,23 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 		names[i] = spec.Name
 	}
 
+	// A declined command stops the script, so the decline and any feedback reach the
+	// model rather than a catch block, and the user is not asked again and again.
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+
 	nested := opts
 	nested.Nested = nil
 	if approve := opts.ApproveBash; approve != nil {
-		// Waiting for the user does not count against the script's run time.
-		nested.ApproveBash = func(ctx context.Context, command, workdir string) error {
-			resume := codemode.PauseClock(ctx)
-			defer resume()
-			return approve(ctx, command, workdir)
+		nested.ApproveBash = func(callCtx context.Context, command, workdir string) error {
+			// Waiting for the user does not count against the script's run time.
+			resume := codemode.PauseClock(callCtx)
+			err := approve(callCtx, command, workdir)
+			resume()
+			if err != nil && callCtx.Err() == nil {
+				stop(fmt.Errorf("goat.run_bash: %w", err))
+			}
+			return err
 		}
 	}
 
@@ -128,17 +138,18 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 		Names: names,
 		Call: func(ctx context.Context, name, argsJSON string) (string, error) {
 			count++
-			spec, _ := findSpec(name)
-			if err := checkArgumentNames(spec, argsJSON); err != nil {
-				return "", fmt.Errorf("goat.%s: %w", name, err)
-			}
 			call := provider.ToolCall{ID: fmt.Sprintf("%s.%d", opts.CallID, count), Name: name, Arguments: argsJSON}
 			var done func(string, error)
 			if opts.Nested != nil {
 				done = opts.Nested.Start(call)
 			}
-			nested.CallID = call.ID
-			output, err := Execute(ctx, call, nested)
+			spec, _ := findSpec(name)
+			err := checkArgumentNames(spec, argsJSON)
+			var output string
+			if err == nil {
+				nested.CallID = call.ID
+				output, err = Execute(ctx, call, nested)
+			}
 			if done != nil {
 				done(output, err)
 			}

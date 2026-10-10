@@ -308,3 +308,179 @@ func TestSummary(t *testing.T) {
 		}
 	}
 }
+
+// Values read after the script finished must not panic out of Run, whatever the script
+// made them do.
+func TestHostileResultsDoNotPanic(t *testing.T) {
+	for _, code := range []string{
+		"async () => { JSON = null; return { a: 1 } }",
+		"async () => ({ get x() { throw new Error('boom') } })",
+		"async () => ({ toJSON() { throw 1 }, toString() { throw 2 } })",
+		"async () => { const f = () => 1; f.toString = () => { throw 3 }; return f }",
+		"async () => { throw Object.create(null) }",
+		"async () => { throw { toString() { throw 3 } } }",
+		"async () => { const e = new Error('x'); Object.defineProperty(e, 'stack', { get() { throw 4 } }); throw e }",
+	} {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("%s panicked: %v", code, p)
+				}
+			}()
+			runCode(t, code)
+		}()
+	}
+
+	result, err := runCode(t, "async () => { JSON = null; return { a: 1 } }")
+	if err != nil || result.Value != "{\n  \"a\": 1\n}" {
+		t.Errorf("replacing JSON should not change how the result is formatted: %q %v", result.Value, err)
+	}
+}
+
+func TestGetterThatLoopsTimesOut(t *testing.T) {
+	limits := DefaultLimits
+	limits.Timeout = 200 * time.Millisecond
+	_, err := Run(context.Background(), "async () => ({ get x() { for (;;) {} } })", echoHost(nil), limits)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A regular expression that backtracks for ever never reaches an instruction where the
+// interrupt takes effect; Run still returns soon after the timeout.
+func TestRunReturnsDespiteNativeWork(t *testing.T) {
+	limits := DefaultLimits
+	limits.Timeout = 300 * time.Millisecond
+	start := time.Now()
+	_, err := Run(context.Background(), `async () => /^(a+)+b\1$/.test("a".repeat(40) + "c")`, echoHost(nil), limits)
+	if elapsed := time.Since(start); elapsed > regexpTimeout+3*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+	if err != nil && !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("got %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start = time.Now()
+	_, err = Run(ctx, `async () => /^(\w+\s?)+(?=:)/.test("word ".repeat(40) + "!")`, echoHost(nil), DefaultLimits)
+	if !errors.Is(err, context.Canceled) && err != nil {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > regexpTimeout+3*time.Second {
+		t.Fatalf("Ctrl-C took %v to stop the script", elapsed)
+	}
+}
+
+func TestDeepJSONIsRefused(t *testing.T) {
+	result, err := runCode(t, `async () => { try { JSON.parse("[".repeat(3e6) + "]".repeat(3e6)) } catch (e) { return e.message } }`)
+	if err != nil || !strings.Contains(result.Value, "nested 3000000 levels deep") {
+		t.Fatalf("got %q %v", result.Value, err)
+	}
+	result, err = runCode(t, `async () => JSON.parse('{"a": ["[[[", {"b": 1}]}').a[1].b`)
+	if err != nil || result.Value != "1" {
+		t.Fatalf("ordinary JSON: %q %v", result.Value, err)
+	}
+}
+
+func TestTheLastExpressionIsTheResult(t *testing.T) {
+	for _, tc := range []struct{ name, code, want string }{
+		{"helper before the arrow", "function helper() { return 'helped' }\nasync () => helper()", "helped"},
+		{"semicolon and comment after", "async () => 'done'; // finished", "done"},
+		{"use strict first", "'use strict';\nasync () => 4", "4"},
+		{"function declared last", "const x = 2;\nasync function main() { return x * 3 }", "6"},
+		{"body ending in an expression", "const a = await goat.read_file({ path: 'q' });\na.length", "24"},
+		{"parenthesized object", "({ a: 1 })", "{\n  \"a\": 1\n}"},
+		{"multi-line expression", "[1, 2, 3]\n  .map(x => x * 2)\n  .join(',')", "2,4,6"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := runCode(t, tc.code)
+			if err != nil || result.Value != tc.want {
+				t.Errorf("got %q %v, want %q", result.Value, err, tc.want)
+			}
+		})
+	}
+
+	_, err := runCode(t, "async function main() { await goat.fail({}) }\nmain()")
+	if err == nil || !strings.Contains(err.Error(), "goat.fail: it failed") {
+		t.Errorf("a call that is not awaited must not hide its rejection: %v", err)
+	}
+}
+
+func TestUnawaitedFailedCallIsReported(t *testing.T) {
+	_, err := runCode(t, "async () => { goat.fail({}); return 'done' }")
+	if err == nil || !strings.Contains(err.Error(), "nothing awaited it: goat.fail: it failed") {
+		t.Fatalf("got %v", err)
+	}
+	result, err := runCode(t, "async () => { goat.fail({}).catch(() => {}); return 'done' }")
+	if err != nil || result.Value != "done" {
+		t.Fatalf("a handled failure is fine: %q %v", result.Value, err)
+	}
+}
+
+func TestErrorLinesCountFromTheCodeAsSent(t *testing.T) {
+	_, err := runCode(t, "```js\nasync () => {\n  const x = 1\n  null.y\n}\n```")
+	if err == nil || !strings.Contains(err.Error(), "line 4, column") {
+		t.Errorf("fenced: %v", err)
+	}
+	_, err = runCode(t, "\n\n\nconst x = 1;\nnull.y")
+	if err == nil || !strings.Contains(err.Error(), "line 5, column") {
+		t.Errorf("leading blank lines: %v", err)
+	}
+	_, err = runCode(t, "async () => null.y")
+	if err == nil || !strings.Contains(err.Error(), "line 1, column 18") {
+		t.Errorf("an error on the wrapped line keeps its column: %v", err)
+	}
+}
+
+func TestCountsOnlyCallsThatRan(t *testing.T) {
+	limits := DefaultLimits
+	limits.MaxCalls = 2
+	_, err := Run(context.Background(), `async () => {
+		for (let i = 0; i < 5; i++) { try { await goat.read_file({ path: String(i) }) } catch (e) {} }
+		try { await goat.read_file("not an object") } catch (e) {}
+		throw new Error("end")
+	}`, echoHost(nil), limits)
+	var runErr *Error
+	if !errors.As(err, &runErr) || runErr.Calls != 2 || runErr.Failed != 0 {
+		t.Fatalf("got %+v", err)
+	}
+}
+
+// A run stopped while a call is in flight ends as stopped, even when the script
+// catches that call's error, and no further call runs.
+func TestStoppedRunCannotCallOrSucceed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls []string
+	host := Host{Names: []string{"cancel", "write"}, Call: func(_ context.Context, name, args string) (string, error) {
+		calls = append(calls, name)
+		if name == "cancel" {
+			cancel()
+			return "", errors.New("goat.cancel: interrupted")
+		}
+		return "written", nil
+	}}
+	_, err := Run(ctx, `async () => {
+		try { await goat.cancel({}) } catch (e) { await goat.write({}) }
+		return "kept going"
+	}`, host, DefaultLimits)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Join(calls, ",") != "cancel" {
+		t.Errorf("calls after the stop ran: %v", calls)
+	}
+}
+
+func TestLongResultsAreCompactWhenLogsCrowdThem(t *testing.T) {
+	result, err := runCode(t, `async () => {
+		for (let i = 0; i < 120; i++) console.log("progress " + i);
+		return Array.from({ length: 300 }, (_, i) => "file" + i + ".go");
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Value, "\n") {
+		t.Error("the result should be compact so it fits with the logs")
+	}
+}

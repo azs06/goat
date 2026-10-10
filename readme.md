@@ -175,7 +175,7 @@ taking the tool's arguments as one object and resolving to the text that tool re
 async () => {
   const found = await goat.find_files({ path: "internal", pattern: "*_test.go" });
   const counts = [];
-  for (const path of found.split("\n").slice(1)) {
+  for (const path of found.split("\n").slice(1).filter(line => !line.startsWith("(truncated"))) {
     const text = await goat.read_file({ path });
     counts.push({ path, tests: text.split("\n").filter(l => l.startsWith("func Test")).length });
   }
@@ -197,14 +197,17 @@ script makes are shown indented under it as they run.
   error.
 - A script may make 50 calls and run for 2 minutes; time spent waiting for you to approve
   a command does not count, and each command keeps its own 30-second limit. Ctrl-C stops
-  the script. Its result is cut to the same size as any other tool output.
-- A failed call rejects with an error the script can catch. An uncaught error ends the
-  script, and the model gets the error, the line it came from and the console output;
-  changes made before it are kept.
+  the script. Its result is cut to the same size as any other tool output. `JSON.parse`
+  refuses input nested more than 5000 levels deep, and one regular expression match may
+  take at most 2 seconds (one that runs out of time counts as no match).
+- A failed call rejects with an error the script can catch. An uncaught error, or a failed
+  call nothing awaited, ends the script, and the model gets the error, the line it came
+  from and the console output; changes made before it are kept. Declining a command stops
+  the script, so your answer goes straight to the model.
 
 `run_code` is always in the tool list, and the system prompt always describes its API, so
-turning code mode on or off never invalidates the prompt cache. While it is off, the
-model is told so and `run_code` refuses to run. Code mode is off by default and, like plan
+turning code mode on or off never invalidates the prompt cache. Each prompt sent in code
+mode says it is on; while it is off, `run_code` refuses to run. Code mode is off by default and, like plan
 mode, is not saved with the session.
 
 ## Cost
