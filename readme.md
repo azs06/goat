@@ -349,6 +349,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
+| `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
 | `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
@@ -364,9 +365,9 @@ go test -run '^$' -fuzz FuzzResolveToolPath -fuzztime 30s ./internal/workspace/
 ```
 
 The tests run against fake provider servers, so they need no API keys. Fuzz targets cover
-path resolution (`FuzzResolveToolPath`, in `internal/workspace`), markdown rendering (`FuzzRenderMarkdownLine`),
-the prompt editor (`FuzzPromptEditorKeys`) and theme parsing (`FuzzParseTheme`, in
-`internal/style`). CI (`.github/workflows/ci.yml`) runs all of the above on Linux and
+path resolution (`FuzzResolveToolPath`, in `internal/workspace`), markdown rendering
+(`FuzzRenderMarkdownLine`, in `internal/markdown`), the prompt editor
+(`FuzzPromptEditorKeys`) and theme parsing (`FuzzParseTheme`, in `internal/style`). CI (`.github/workflows/ci.yml`) runs all of the above on Linux and
 macOS, with a 70% coverage floor and a cross-build for every platform.
 
 When you change anything that prints, also check that piped output stays free of escape

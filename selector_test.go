@@ -39,7 +39,7 @@ func TestSelectorKeys(t *testing.T) {
 }
 
 func TestSelectorRender(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	var options []selectOption
 	for _, group := range []string{"openai", "anthropic"} {
 		for i := 0; i < 8; i++ {

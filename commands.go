@@ -120,7 +120,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		if !style.Enabled() {
 			return text
 		}
-		return wrapStyled(style.Muted.Render(text), width-1, "", "")
+		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
 	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Ctrl-C interrupts a turn."))
 	fmt.Println()

@@ -1,4 +1,4 @@
-package main
+package markdown
 
 import (
 	"strings"
@@ -7,6 +7,7 @@ import (
 	"github.com/azs06/goat/internal/style"
 )
 
+// withColor turns styling on or off for the rest of the test.
 func withColor(t *testing.T, on bool) {
 	t.Helper()
 	t.Cleanup(style.SetEnabled(on))
@@ -148,7 +149,7 @@ func TestRenderMarkdownWrapping(t *testing.T) {
 
 func TestMarkdownStreamLayout(t *testing.T) {
 	withColor(t, true)
-	md := newMarkdownStream(40)
+	md := NewStream(40)
 	var out strings.Builder
 	for _, chunk := range []string{"\n\nHel", "lo **wor", "ld**\n\n\n", "- a\n", "tail"} {
 		out.WriteString(md.Write(chunk))
@@ -164,7 +165,7 @@ func TestMarkdownStreamLayout(t *testing.T) {
 	}
 
 	// Whitespace-only output renders nothing at all.
-	md = newMarkdownStream(40)
+	md = NewStream(40)
 	if got := md.Write("\n\n  \n") + md.Flush(); got != "" {
 		t.Fatalf("whitespace-only stream = %q", got)
 	}

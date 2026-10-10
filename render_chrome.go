@@ -319,7 +319,7 @@ func renderHelpTable(cmds map[string]*cliCommand) string {
 		if !style.Enabled() {
 			return lead + description
 		}
-		return wrapStyled(style.Muted.Render(description), terminalWidth()-1, lead, indent)
+		return style.Wrap(style.Muted.Render(description), terminalWidth()-1, lead, indent)
 	}
 
 	var lines []string
@@ -372,7 +372,7 @@ func renderKeyValues(rows [][2]string) string {
 			continue
 		}
 		// Long values wrap under themselves rather than under the keys.
-		lines[i] = wrapStyled(row[1], terminalWidth()-1, key, strings.Repeat(" ", width+1))
+		lines[i] = style.Wrap(row[1], terminalWidth()-1, key, strings.Repeat(" ", width+1))
 	}
 	return strings.Join(lines, "\n")
 }

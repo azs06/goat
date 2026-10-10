@@ -1,4 +1,6 @@
-package main
+// Package markdown renders the model's streamed markdown replies as styled terminal
+// text, highlighting fenced code with chroma.
+package markdown
 
 import (
 	"regexp"
@@ -7,12 +9,11 @@ import (
 	"github.com/azs06/goat/internal/style"
 )
 
-// markdownStream renders streamed assistant text as styled markdown for a color
-// terminal. It holds back only the current incomplete line, so output stays
-// line-incremental: each completed line is rendered as soon as its newline arrives.
-// Every line of the message is indented two columns and the first one carries a "●"
+// Stream renders streamed assistant text as styled markdown for a color terminal.
+// It holds back only the current incomplete line, so output stays line-incremental:
+// each completed line is rendered as soon as its newline arrives. Every line of the message is indented two columns and the first one carries a "●"
 // bullet, like a Claude Code transcript block.
-type markdownStream struct {
+type Stream struct {
 	width         int // terminal width; prose wraps at width-2
 	partial       string
 	state         mdState
@@ -20,13 +21,14 @@ type markdownStream struct {
 	pendingBlanks int  // blank lines held back until more content follows
 }
 
-func newMarkdownStream(width int) *markdownStream {
-	return &markdownStream{width: width}
+// NewStream returns a Stream that wraps prose for a terminal width columns wide.
+func NewStream(width int) *Stream {
+	return &Stream{width: width}
 }
 
 // Write takes the next chunk of streamed text and returns what should be printed for
 // the lines it completes.
-func (m *markdownStream) Write(chunk string) string {
+func (m *Stream) Write(chunk string) string {
 	m.partial += chunk
 	var out strings.Builder
 	for {
@@ -41,7 +43,7 @@ func (m *markdownStream) Write(chunk string) string {
 }
 
 // Flush renders a final unterminated line, if any, and drops held-back blank lines.
-func (m *markdownStream) Flush() string {
+func (m *Stream) Flush() string {
 	line := m.partial
 	m.partial = ""
 	if line == "" {
@@ -50,7 +52,7 @@ func (m *markdownStream) Flush() string {
 	return m.renderLine(line)
 }
 
-func (m *markdownStream) renderLine(line string) string {
+func (m *Stream) renderLine(line string) string {
 	line = strings.TrimSuffix(line, "\r")
 	if !m.state.inFence && strings.TrimSpace(line) == "" {
 		if m.started {
@@ -142,7 +144,7 @@ func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 		if len(m[1]) <= 2 {
 			role = style.Heading
 		}
-		return wrapStyled(styleSpan(m[2], role.Style()), width, "", ""), st
+		return style.Wrap(styleSpan(m[2], role.Style()), width, "", ""), st
 	}
 
 	if mdRulePattern.MatchString(line) {
@@ -152,22 +154,22 @@ func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 	if m := mdBulletPattern.FindStringSubmatch(line); m != nil {
 		marker := m[1] + style.Muted.Render("•") + " "
 		hang := m[1] + "  "
-		return wrapStyled(renderInline(m[2], style.Style{}), width, marker, hang), st
+		return style.Wrap(renderInline(m[2], style.Style{}), width, marker, hang), st
 	}
 
 	if m := mdNumberedPattern.FindStringSubmatch(line); m != nil {
 		marker := m[1] + style.Muted.Render(m[2]) + " "
 		hang := m[1] + strings.Repeat(" ", len(m[2])+1)
-		return wrapStyled(renderInline(m[3], style.Style{}), width, marker, hang), st
+		return style.Wrap(renderInline(m[3], style.Style{}), width, marker, hang), st
 	}
 
 	if m := mdQuotePattern.FindStringSubmatch(line); m != nil {
 		bar := style.Subtle.Render(g.VLine) + " "
-		return wrapStyled(styleSpan(m[1], style.Quote.Style()), width, bar, bar), st
+		return style.Wrap(styleSpan(m[1], style.Quote.Style()), width, bar, bar), st
 	}
 
 	indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
-	return wrapStyled(renderInline(strings.TrimLeft(line, " "), style.Style{}), width, indent, indent), st
+	return style.Wrap(renderInline(strings.TrimLeft(line, " "), style.Style{}), width, indent, indent), st
 }
 
 // renderCodeLine tints a line inside a fenced code block: whole-line comments are
@@ -356,39 +358,4 @@ func isWordByte(b byte) bool {
 
 func isSpaceByte(b byte) bool {
 	return b == ' ' || b == '\t'
-}
-
-// wrapStyled word-wraps styled text to width visible cells. The first row starts with
-// first and the rest with rest. A style open at a row break is closed at the end of
-// the row and re-opened after the next row's prefix, so it never colors the indent.
-// Words longer than a row are left to overflow.
-func wrapStyled(text string, width int, first, rest string) string {
-	words := strings.Split(text, " ")
-	var rows []string
-	row := first
-	rowWidth := style.VisibleWidth(first)
-	empty := true
-	active := ""
-	for _, word := range words {
-		wordWidth := style.VisibleWidth(word)
-		switch {
-		case empty:
-			row += word
-			rowWidth += wordWidth
-			empty = false
-		case rowWidth+1+wordWidth > width && wordWidth > 0:
-			if active != "" {
-				row += style.Reset
-			}
-			rows = append(rows, row)
-			row = rest + active + word
-			rowWidth = style.VisibleWidth(rest) + wordWidth
-		default:
-			row += " " + word
-			rowWidth += 1 + wordWidth
-		}
-		active = style.ActiveAfter(active, word)
-	}
-	rows = append(rows, row)
-	return strings.Join(rows, "\n")
 }

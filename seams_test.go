@@ -93,7 +93,7 @@ func TestFooterParts(t *testing.T) {
 	if !strings.HasPrefix(parts, "anthropic:claude-opus-5-5 | effort medium") || !strings.Contains(parts, "auto-approve on") || !strings.HasSuffix(parts, "? for shortcuts") {
 		t.Fatalf("footer %q", parts)
 	}
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if footer := style.StripANSI(renderFooter(footerParts(cfg), 40)); strings.Contains(footer, "…") || style.VisibleWidth(footer) >= 40 {
 		t.Fatalf("expected parts dropped to fit, got %q", footer)
 	}
@@ -101,7 +101,7 @@ func TestFooterParts(t *testing.T) {
 
 func TestSpinnerDrawsTheQueuedInput(t *testing.T) {
 	resetTurnQueue(t)
-	chromeWithColor(t, true)
+	withColor(t, true)
 	turnQueue.capturing = true
 	turnQueue.items = []string{"queued thing"}
 	turnQueue.editor.setText("typing")

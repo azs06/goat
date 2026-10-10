@@ -107,7 +107,7 @@ func TestKeyCaptureCarriesTheUnsentLine(t *testing.T) {
 
 func TestQueuedInputLines(t *testing.T) {
 	resetTurnQueue(t)
-	chromeWithColor(t, true)
+	withColor(t, true)
 
 	if lines, _ := queuedInputLines(80); lines != nil {
 		t.Fatalf("expected nothing while keys are not captured, got %q", lines)

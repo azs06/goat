@@ -1,4 +1,4 @@
-package main
+package markdown
 
 import (
 	"strings"
@@ -8,7 +8,7 @@ import (
 )
 
 func TestHighlightCodeLine(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 
 	line, ok := highlightCodeLine("go", []string{"package main", `func main() { return "hi" }`})
 	if !ok {
@@ -33,7 +33,7 @@ func TestHighlightCodeLine(t *testing.T) {
 }
 
 func TestMarkdownCodeBlocksAreHighlighted(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	st := mdState{}
 	var out []string
 	for _, line := range []string{"```python", "def f():", "    return 42", "```"} {
@@ -45,7 +45,7 @@ func TestMarkdownCodeBlocksAreHighlighted(t *testing.T) {
 		t.Fatalf("unexpected block: %q", out)
 	}
 
-	chromeWithColor(t, false)
+	withColor(t, false)
 	plain, _ := renderMarkdownLine("x = 1", mdState{inFence: true, fenceSeq: "```", lang: "python"}, 80)
 	if strings.Contains(plain, "\x1b") {
 		t.Fatalf("plain output has escapes: %q", plain)
@@ -53,7 +53,7 @@ func TestMarkdownCodeBlocksAreHighlighted(t *testing.T) {
 }
 
 func TestMarkdownLinksAndImages(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	out := renderInline("see [the docs](https://example.com/docs) and ![a cat](cat.png).", style.Style{})
 	if !strings.Contains(out, "\x1b]8;;https://example.com/docs\x1b\\") {
 		t.Fatalf("expected an OSC 8 link: %q", out)

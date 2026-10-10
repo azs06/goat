@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/azs06/goat/internal/markdown"
 	"github.com/azs06/goat/internal/provider"
 
 	"github.com/azs06/goat/internal/style"
@@ -66,7 +67,7 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 // printed as it arrives. Either way control characters are made visible first (carriage
 // returns are dropped), so model text cannot move the cursor, clear the screen or set
 // the window title. The spinner is cleared just before anything is drawn.
-func printModelText(md *markdownStream, text string) {
+func printModelText(md *markdown.Stream, text string) {
 	text = escapeControlChars(strings.ReplaceAll(text, "\r", ""))
 	if !style.Enabled() || md == nil {
 		fmt.Print(text)
@@ -81,7 +82,7 @@ func printModelText(md *markdownStream, text string) {
 // streamAttempt makes one provider call with a fresh renderer and a "Thinking" spinner.
 // Whatever ends the call, the spinner is cleared and a partial last line is printed.
 func streamAttempt(ctx context.Context, p provider.Provider, req provider.Request) (*provider.Response, bool, error) {
-	md := newMarkdownStream(terminalWidth())
+	md := markdown.NewStream(terminalWidth())
 	startSpinner("Thinking")
 	defer func() {
 		stopSpinner()
