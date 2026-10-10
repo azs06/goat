@@ -121,8 +121,8 @@ workspace.
 | Tool | |
 | --- | --- |
 | `read_dir`, `tree_dir` | List a directory, or draw a recursive tree |
-| `read_file` | Read a file (files over 1 MiB are refused) |
-| `find_files`, `grep_files` | Find files by glob or substring; search file contents |
+| `read_file` | Read a file, or a range of its lines with `offset` and `limit` (whole files over 1 MiB are refused) |
+| `find_files`, `grep_files` | Find files by glob or substring; search file contents as text or a regular expression (`regex`), optionally only in files matching `glob` |
 | `write_file`, `edit_file` | Write a file, or replace exact text in one |
 | `edit_json_file` | Set or delete a value at a JSON path |
 | `copy_file`, `move_file`, `delete_file` | File operations |
@@ -130,9 +130,20 @@ workspace.
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
 
-Every tool that changes files accepts `preview=true`, which returns a diff without changing
-anything. A turn can make up to 40 rounds of tool calls; past that goat stops and asks you
+`find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
+repository git decides; elsewhere the root `.gitignore` is read); `include_ignored=true`
+searches everything. Every tool that changes files accepts `preview=true`, which returns a
+diff without changing anything. A turn can make up to 40 rounds of tool calls; past that goat stops and asks you
 to send another message to continue.
+
+## Project instructions
+
+Put notes for the agent in `AGENTS.md` at the workspace root (`GOAT.md` or `CLAUDE.md`
+are used when there is no `AGENTS.md`), and personal ones in `~/.config/goat/AGENTS.md`.
+They are sent at the start of every new conversation, including one that starts from a
+`/compact` summary. They go with the first message rather than into the system prompt,
+so the cached prompt prefix stays the same and editing them costs no cache. `/status`
+shows which files are in use.
 
 ## Models and providers
 
@@ -281,7 +292,8 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `tool_definitions.go`, `tools.go`, `json_tools.go` | Tool schemas and implementations |
 | `mutations.go` | Snapshots, the operation log and undo |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
-| `system_prompt.go` | The system prompt, built from the tool list |
+| `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
+| `search.go`, `secrets.go` | `.gitignore` filtering, grep matching, ranged reads; keeping credentials out of tools |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
 | `output.go` | `/output`, `/copy`, `/export` and the pager |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |

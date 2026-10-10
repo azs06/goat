@@ -386,6 +386,9 @@ func printWelcome(cfg *config) {
 	if !cfg.conversation.conversation.IsEmpty() {
 		fmt.Println(formatNotice("Resumed saved conversation context."))
 	}
+	if sources := projectInstructionSources(); len(sources) > 0 {
+		fmt.Println(formatNotice("Project instructions: " + strings.Join(sources, ", ") + " (sent with each new conversation)."))
+	}
 	if cfg.approver.autoApprove {
 		message := "run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH)."
 		if style.Enabled() {
@@ -506,6 +509,7 @@ func main() {
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve
 	argumentCompletions = commandArgumentCompletions(cfg)
+	projectInstructions = projectInstructionsText
 
 	if opts.print {
 		// A one-shot run never asks anything: stdin may hold the prompt itself.

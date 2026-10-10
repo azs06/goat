@@ -37,6 +37,10 @@ type conversationState struct {
 
 var streamRetrySleeper = sleepWithContext
 
+// projectInstructions, when set, returns the project instructions sent at the start of
+// a new conversation.
+var projectInstructions func() string
+
 // takeSteering, when set, returns what the user typed while the turn was working, to
 // be sent to the model with the next tool results.
 var takeSteering func() string
@@ -305,6 +309,11 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
+	}
+	if conv.conversation.IsEmpty() && len(conv.pendingToolResults) == 0 && projectInstructions != nil {
+		if instructions := projectInstructions(); instructions != "" {
+			req.UserText = instructions + "\n" + prompt
+		}
 	}
 
 	for round := 1; ; round++ {

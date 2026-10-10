@@ -360,6 +360,9 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 			rows = append(rows, [2]string{"Cache:", cache})
 		}
 	}
+	if sources := projectInstructionSources(); len(sources) > 0 {
+		rows = append(rows, [2]string{"Instructions:", strings.Join(sources, ", ")})
+	}
 	if c.approver != nil {
 		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
 	}

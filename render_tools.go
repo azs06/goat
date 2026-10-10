@@ -80,7 +80,19 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 
 	var summary string
 	switch name {
-	case "read_file", "read_dir", "delete_file", "delete_dir":
+	case "read_file":
+		summary = str("path")
+		offset, _ := args["offset"].(float64)
+		count, _ := args["limit"].(float64)
+		switch {
+		case offset > 0 && count > 0:
+			flags = append(flags, fmt.Sprintf("lines %.0f-%.0f", offset, offset+count-1))
+		case offset > 0:
+			flags = append(flags, fmt.Sprintf("from line %.0f", offset))
+		case count > 0:
+			flags = append(flags, fmt.Sprintf("first %.0f lines", count))
+		}
+	case "read_dir", "delete_file", "delete_dir":
 		summary = str("path")
 	case "tree_dir":
 		summary = str("path")
@@ -109,10 +121,16 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		if pattern := str("pattern"); pattern != "" {
 			summary = pattern + " in " + summary
 		}
+		flag("include_ignored")
 		limit()
 	case "grep_files":
 		summary = strconv.Quote(str("query")) + " in " + str("path")
+		if glob := str("glob"); glob != "" {
+			summary += "/" + glob
+		}
+		flag("regex")
 		flag("case_sensitive")
+		flag("include_ignored")
 		limit()
 	default:
 		return oneLine(rawArgs), nil

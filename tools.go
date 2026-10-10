@@ -736,6 +736,12 @@ func matchesPattern(pattern, fileName, relPath string) bool {
 }
 
 func findFiles(rootPath, pattern string, limit int) ([]string, bool, error) {
+	return findFilesWith(rootPath, pattern, limit, false)
+}
+
+// findFilesWith finds files by name; unless includeIgnored is set, files .gitignore
+// excludes are skipped.
+func findFilesWith(rootPath, pattern string, limit int, includeIgnored bool) ([]string, bool, error) {
 	if limit <= 0 {
 		limit = defaultFindLimit
 	}
@@ -745,21 +751,27 @@ func findFiles(rootPath, pattern string, limit int) ([]string, bool, error) {
 		return nil, false, err
 	}
 
+	var ignore *ignoreFilter
+	if !includeIgnored {
+		ignore = loadIgnoreFilter()
+	}
 	var matches []string
 	err = filepath.WalkDir(resolvedRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return skipUnreadable(path, resolvedRoot, d, walkErr)
 		}
+		relPath, err := workspaceRelativePath(path)
+		if err != nil {
+			return err
+		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name()) {
+			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
-		relPath, err := workspaceRelativePath(path)
-		if err != nil {
-			return err
+		if ignore.ignored(relPath, false) {
+			return nil
 		}
 		if !matchesPattern(pattern, d.Name(), relPath) {
 			return nil
@@ -786,10 +798,26 @@ func findFiles(rootPath, pattern string, limit int) ([]string, bool, error) {
 }
 
 func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string, bool, error) {
-	query = strings.TrimSpace(query)
+	return grepFilesWith(rootPath, grepOptions{query: query, caseSensitive: caseSensitive, limit: limit})
+}
+
+type grepOptions struct {
+	query          string
+	caseSensitive  bool
+	regex          bool
+	glob           string
+	includeIgnored bool
+	limit          int
+}
+
+// grepFilesWith searches file contents line by line. Unless includeIgnored is set,
+// files .gitignore excludes are skipped.
+func grepFilesWith(rootPath string, opts grepOptions) ([]string, bool, error) {
+	query := strings.TrimSpace(opts.query)
 	if query == "" {
 		return nil, false, fmt.Errorf("missing query")
 	}
+	limit := opts.limit
 	if limit <= 0 {
 		limit = defaultGrepLimit
 	}
@@ -798,10 +826,13 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 	if err != nil {
 		return nil, false, err
 	}
-
-	normalizedQuery := query
-	if !caseSensitive {
-		normalizedQuery = strings.ToLower(query)
+	matchLine, err := lineMatcher(query, opts.regex, opts.caseSensitive)
+	if err != nil {
+		return nil, false, err
+	}
+	var ignore *ignoreFilter
+	if !opts.includeIgnored {
+		ignore = loadIgnoreFilter()
 	}
 
 	var matches []string
@@ -809,10 +840,17 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 		if walkErr != nil {
 			return skipUnreadable(path, resolvedRoot, d, walkErr)
 		}
+		relPath, err := workspaceRelativePath(path)
+		if err != nil {
+			return err
+		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name()) {
+			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if ignore.ignored(relPath, false) || !matchesGlob(opts.glob, relPath) {
 			return nil
 		}
 
@@ -837,22 +875,13 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 			return nil
 		}
 
-		relPath, err := workspaceRelativePath(path)
-		if err != nil {
-			return err
-		}
-
 		scanner := bufio.NewScanner(bytes.NewReader(data))
 		scanner.Buffer(make([]byte, 1024), maxSearchFileSize)
 		lineNumber := 0
 		for scanner.Scan() {
 			lineNumber++
 			line := scanner.Text()
-			candidate := line
-			if !caseSensitive {
-				candidate = strings.ToLower(line)
-			}
-			if !strings.Contains(candidate, normalizedQuery) {
+			if !matchLine(line) {
 				continue
 			}
 
@@ -901,6 +930,7 @@ func treeDir(rootPath string, limit int) ([]string, bool, error) {
 	lines := []string{rootLabel + "/"}
 	truncated := false
 
+	ignore := loadIgnoreFilter()
 	var walk func(string, string) error
 	walk = func(dirPath, prefix string) error {
 		entries, err := os.ReadDir(dirPath)
@@ -911,6 +941,9 @@ func treeDir(rootPath string, limit int) ([]string, bool, error) {
 		filtered := make([]os.DirEntry, 0, len(entries))
 		for _, entry := range entries {
 			if entry.IsDir() && shouldSkipDir(entry.Name()) {
+				continue
+			}
+			if rel, err := workspaceRelativePath(filepath.Join(dirPath, entry.Name())); err == nil && ignore.ignored(rel, entry.IsDir()) {
 				continue
 			}
 			filtered = append(filtered, entry)

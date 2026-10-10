@@ -39,10 +39,10 @@ func getTools() []provider.ToolSpec {
 	return []provider.ToolSpec{
 		functionTool("read_dir", "List files and directories for a relative path in the workspace.",
 			map[string]any{"path": stringParam}, "path"),
-		functionTool("tree_dir", "Render a recursive directory tree for a relative workspace path.",
+		functionTool("tree_dir", "Render a recursive directory tree for a relative workspace path. Paths .gitignore excludes are left out.",
 			map[string]any{"path": stringParam, "limit": limitParam}, "path"),
-		functionTool("read_file", "Read a file from a relative path in the workspace. Files over 1 MiB are refused; use grep_files or run_bash to read part of them.",
-			map[string]any{"path": stringParam}, "path"),
+		functionTool("read_file", "Read a file from a relative path in the workspace. For long files pass offset (first line, starting at 1) and limit (number of lines) to read part of it; whole files over 1 MiB are refused.",
+			map[string]any{"path": stringParam, "offset": limitParam, "limit": limitParam}, "path"),
 		functionTool("write_file", "Write or overwrite a file at a relative path in the workspace with provided content. Set preview=true to get a diff without changing the file.",
 			map[string]any{"path": stringParam, "content": stringParam, "preview": booleanParam}, "path", "content"),
 		functionTool("edit_file", "Edit an existing workspace file by replacing exact text. Set preview=true to get a diff without changing the file.",
@@ -65,10 +65,10 @@ func getTools() []provider.ToolSpec {
 			map[string]any{"preview": booleanParam}),
 		functionTool("run_bash", "Run a bash command inside the workspace and return combined stdout and stderr. The user may be asked to approve each command. Commands time out after 30 seconds; start long-running processes in the background with their output redirected to a file. Prefer concise commands because large outputs may be truncated for token safety.",
 			map[string]any{"command": stringParam, "workdir": stringParam}, "command"),
-		functionTool("find_files", "Recursively find files within the workspace. Pattern can be a glob like *.go or a plain substring.",
-			map[string]any{"path": stringParam, "pattern": stringParam, "limit": limitParam}, "path"),
-		functionTool("grep_files", "Recursively search for text inside files in the workspace and return matching lines.",
-			map[string]any{"path": stringParam, "query": stringParam, "case_sensitive": booleanParam, "limit": limitParam}, "path", "query"),
+		functionTool("find_files", "Recursively find files within the workspace. Pattern can be a glob like *.go or a plain substring. Files .gitignore excludes are skipped unless include_ignored=true.",
+			map[string]any{"path": stringParam, "pattern": stringParam, "limit": limitParam, "include_ignored": booleanParam}, "path"),
+		functionTool("grep_files", "Recursively search inside files in the workspace and return matching lines as path:line:text. The query is plain text, or a Go regular expression with regex=true. glob limits the files searched (e.g. *.go, or cmd/*.go). Files .gitignore excludes are skipped unless include_ignored=true.",
+			map[string]any{"path": stringParam, "query": stringParam, "regex": booleanParam, "glob": stringParam, "case_sensitive": booleanParam, "limit": limitParam, "include_ignored": booleanParam}, "path", "query"),
 	}
 }
 
@@ -180,10 +180,22 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		return message, nil
 	case "read_file":
 		var args struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
 		}
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
+		}
+		if args.Offset > 0 || args.Limit > 0 {
+			text, first, last, total, err := readFileLines(args.Path, args.Offset, args.Limit)
+			if err != nil {
+				return "", err
+			}
+			if total == 0 {
+				return fmt.Sprintf("File contents for %s:\n", filepath.Clean(args.Path)), nil
+			}
+			return fmt.Sprintf("File contents for %s (lines %d-%d of %d):\n%s", filepath.Clean(args.Path), first, last, total, text), nil
 		}
 		content, err := readFileForModel(args.Path)
 		if err != nil {
@@ -354,14 +366,15 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		return runBashCommand(ctx, args.Command, args.Workdir)
 	case "find_files":
 		var args struct {
-			Path    string `json:"path"`
-			Pattern string `json:"pattern"`
-			Limit   int    `json:"limit"`
+			Path           string `json:"path"`
+			Pattern        string `json:"pattern"`
+			Limit          int    `json:"limit"`
+			IncludeIgnored bool   `json:"include_ignored"`
 		}
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		matches, truncated, err := findFiles(args.Path, args.Pattern, args.Limit)
+		matches, truncated, err := findFilesWith(args.Path, args.Pattern, args.Limit, args.IncludeIgnored)
 		if err != nil {
 			return "", err
 		}
@@ -379,15 +392,18 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		return message, nil
 	case "grep_files":
 		var args struct {
-			Path          string `json:"path"`
-			Query         string `json:"query"`
-			CaseSensitive bool   `json:"case_sensitive"`
-			Limit         int    `json:"limit"`
+			Path           string `json:"path"`
+			Query          string `json:"query"`
+			Regex          bool   `json:"regex"`
+			Glob           string `json:"glob"`
+			CaseSensitive  bool   `json:"case_sensitive"`
+			Limit          int    `json:"limit"`
+			IncludeIgnored bool   `json:"include_ignored"`
 		}
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		matches, truncated, err := grepFiles(args.Path, args.Query, args.CaseSensitive, args.Limit)
+		matches, truncated, err := grepFilesWith(args.Path, grepOptions{query: args.Query, regex: args.Regex, glob: args.Glob, caseSensitive: args.CaseSensitive, limit: args.Limit, includeIgnored: args.IncludeIgnored})
 		if err != nil {
 			return "", err
 		}

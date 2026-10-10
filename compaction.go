@@ -253,7 +253,15 @@ func compactConversation(ctx context.Context, p provider.Provider, model, focus 
 		return provider.Conversation{}, "", fmt.Errorf("compaction summary was empty")
 	}
 
-	next, err := p.Seed(ctx, model, summary)
+	// The new conversation starts from the summary, so it carries the project
+	// instructions a new conversation would get.
+	seed := summary
+	if projectInstructions != nil {
+		if instructions := projectInstructions(); instructions != "" {
+			seed = instructions + "\n" + summary
+		}
+	}
+	next, err := p.Seed(ctx, model, seed)
 	if err != nil {
 		return provider.Conversation{}, "", err
 	}
