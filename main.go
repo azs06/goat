@@ -510,11 +510,8 @@ func main() {
 		return
 	}
 
-	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := loadDotenv(); err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
-	}
-	if values, err := godotenv.Read(); err == nil {
-		workspace.HideFromCommands(slices.Collect(maps.Keys(values))...)
 	}
 	if len(provider.AvailableNames()) == 0 {
 		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")
@@ -544,13 +541,16 @@ func main() {
 	}
 	if opts.prompt != "" {
 		// A prompt on the command line runs first, as if it had been queued.
-		turnQueue.mu.Lock()
-		turnQueue.items = append(turnQueue.items, opts.prompt)
-		turnQueue.mu.Unlock()
+		enqueue(opts.prompt)
 	}
 
 	printWelcome(cfg)
+	runInteractive(cfg)
+}
 
+// runInteractive is the prompt loop: it reads a prompt or command, runs it, and
+// repeats until the user exits.
+func runInteractive(cfg *config) {
 	gap := true
 	var lastInterrupt time.Time
 	for {
@@ -606,4 +606,16 @@ func main() {
 			fmt.Println(formatError(err.Error()))
 		}
 	}
+}
+
+// loadDotenv loads .env from the workspace, if there is one, into the environment, and
+// keeps the variables it defines out of run_bash commands.
+func loadDotenv() error {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if values, err := godotenv.Read(); err == nil {
+		workspace.HideFromCommands(slices.Collect(maps.Keys(values))...)
+	}
+	return nil
 }

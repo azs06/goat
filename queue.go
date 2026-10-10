@@ -31,6 +31,14 @@ func (q *queueState) editorText() string {
 	return string(q.editor.buf)
 }
 
+// enqueue adds text to the end of the queue, to run as if the user had typed it
+// during a turn.
+func enqueue(text string) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.items = append(turnQueue.items, text)
+}
+
 // queueKey applies one key typed during a turn.
 func queueKey(key string) {
 	turnQueue.mu.Lock()
