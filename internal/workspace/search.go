@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"bufio"
@@ -35,7 +35,7 @@ func loadIgnoreFilter() *ignoreFilter {
 	}
 	filter := &ignoreFilter{}
 	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Env = commandEnvironment(os.Environ())
+	cmd.Env = CommandEnvironment(os.Environ())
 	if out, err := cmd.Output(); err == nil {
 		filter.files, filter.dirs = map[string]bool{}, map[string]bool{".": true}
 		for _, path := range bytes.Split(out, []byte{0}) {
@@ -138,10 +138,10 @@ func matchesGlob(glob, rel string) bool {
 	return ok
 }
 
-// readFileLines returns lines offset through offset+limit-1 (1-based) of a file of any
+// ReadFileLines returns lines offset through offset+limit-1 (1-based) of a file of any
 // size, and how many lines the file has. limit 0 reads to the end.
-func readFileLines(filePath string, offset, limit int) (text string, first, last, total int, err error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+func ReadFileLines(filePath string, offset, limit int) (text string, first, last, total int, err error) {
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return "", 0, 0, 0, err
 	}

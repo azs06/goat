@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"os"
@@ -21,14 +21,14 @@ func TestApplyJSONEditDeleteRemovesPathAndFormatsOutput(t *testing.T) {
 
 func TestPreviewEditJSONFileDoesNotModifyFile(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	original := "{\n  \"name\": \"goat\"\n}\n"
 	if err := os.WriteFile(filepath.Join(workspace, "sample.json"), []byte(original), 0644); err != nil {
 		t.Fatalf("seed JSON file: %v", err)
 	}
 
-	preview, err := previewEditJSONFile("sample.json", "enabled", "set", "true")
+	preview, err := PreviewEditJSONFile("sample.json", "enabled", "set", "true")
 	if err != nil {
 		t.Fatalf("preview JSON edit: %v", err)
 	}

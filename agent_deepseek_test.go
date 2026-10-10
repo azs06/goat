@@ -37,8 +37,8 @@ func newDeepSeekTestProvider(fake *fakeAnthropic) provider.Provider {
 }
 
 func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	// Credentials meant for Anthropic must never reach DeepSeek.
 	// With only the auth token set, the SDK's defaults would send it as a bearer token.
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -120,8 +120,8 @@ func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
 }
 
 func TestDeepSeekEffortMapping(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	cases := map[provider.Effort]string{provider.EffortMinimal: "low", provider.EffortLow: "low", provider.EffortHigh: "high", provider.EffortXhigh: "high", provider.EffortMax: "max"}
 	for effort, want := range cases {
@@ -148,8 +148,8 @@ func TestDeepSeekEffortMapping(t *testing.T) {
 }
 
 func TestDeepSeekBusyServerIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }
@@ -169,8 +169,8 @@ func TestDeepSeekBusyServerIsRetried(t *testing.T) {
 }
 
 func TestDeepSeekModelsAndCredentials(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, false)
 	t.Setenv("DEEPSEEK_API_KEY", "ds-key")
 
@@ -203,8 +203,8 @@ func TestDeepSeekModelsAndCredentials(t *testing.T) {
 }
 
 func TestDeepSeekReasoningRejectionTriggersRecovery(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t)
 	fake.reject = func(body map[string]any) (int, string, bool) {
@@ -217,8 +217,8 @@ func TestDeepSeekReasoningRejectionTriggersRecovery(t *testing.T) {
 }
 
 func TestDeepSeekUnknownModelIsRefused(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, false)
 	t.Setenv("DEEPSEEK_API_KEY", "ds-key")
 
@@ -236,8 +236,8 @@ func TestDeepSeekUnknownModelIsRefused(t *testing.T) {
 }
 
 func TestStreamDroppedAfterKeepAliveOrPingIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }

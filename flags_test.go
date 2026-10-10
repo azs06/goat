@@ -51,8 +51,8 @@ func TestCLIModelAndEffortWin(t *testing.T) {
 }
 
 func TestOneShotLeavesTheSavedSessionAlone(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hello there").stop("end_turn", ""))
 	saved := 0

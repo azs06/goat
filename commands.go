@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -188,13 +189,13 @@ func commandTools(ctx context.Context, c *config, args []string) error {
 }
 
 func commandUndo(ctx context.Context, c *config, args []string) error {
-	undo := undoLastChange
+	undo := workspace.UndoLastChange
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "skip":
-			undo = skipLastChange
+			undo = workspace.SkipLastChange
 		case "preview":
-			undo = previewUndoLastChange
+			undo = workspace.PreviewUndoLastChange
 		default:
 			return fmt.Errorf("unknown undo option %q; use /undo, /undo preview or /undo skip", args[0])
 		}
@@ -225,7 +226,7 @@ func commandCompact(ctx context.Context, c *config, args []string) error {
 }
 
 func commandHistory(ctx context.Context, c *config, args []string) error {
-	resolvedPath, relPath, err := resolveStatePath(conversationHistoryPath())
+	resolvedPath, relPath, err := workspace.ResolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return err
 	}

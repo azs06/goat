@@ -2,12 +2,14 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	recordHistory(historyEntry{Type: "user", Content: "one"})
 	first, err := loadConversationHistoryEntries()
@@ -41,4 +43,40 @@ func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
 func loadLatestConversationResponseID() (string, error) {
 	responseID, _, err := latestResumableConversation()
 	return responseID, err
+}
+
+func TestHistorySurvivesHugeAndCorruptEntries(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	recordHistory(historyEntry{Type: "tool_output", ToolName: "run_bash", Content: strings.Repeat("x", 2<<20)})
+	recordHistory(historyEntry{Type: "assistant", Content: "done", ResponseID: "resp-1"})
+
+	historyPath := filepath.Join(workDir, ".goat", "history.jsonl")
+	file, err := os.OpenFile(historyPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open history: %v", err)
+	}
+	file.WriteString(`{"type":"assistant","content":"cut sho` + "\n")
+	file.Close()
+
+	info, err := os.Stat(historyPath)
+	if err != nil {
+		t.Fatalf("stat history: %v", err)
+	}
+	if info.Size() > 1<<20 {
+		t.Fatalf("expected huge content to be truncated before saving, history is %d bytes", info.Size())
+	}
+
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		t.Fatalf("expected history to load, got %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 readable entries, got %d", len(entries))
+	}
+	responseID, err := loadLatestConversationResponseID()
+	if err != nil || responseID != "resp-1" {
+		t.Fatalf("expected resp-1, got %q (%v)", responseID, err)
+	}
 }

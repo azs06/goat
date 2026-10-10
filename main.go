@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -505,7 +506,7 @@ func main() {
 	}
 	if values, err := godotenv.Read(); err == nil {
 		for name := range values {
-			dotenvKeys[name] = true
+			workspace.HideFromCommands(name)
 		}
 	}
 	if len(provider.AvailableNames()) == 0 {
@@ -513,6 +514,7 @@ func main() {
 	}
 
 	provider.Warnf = warnf
+	workspace.Warnf = warnf
 	applyTheme()
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)

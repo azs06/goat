@@ -136,8 +136,8 @@ func TestQueuedInputLines(t *testing.T) {
 }
 
 func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),

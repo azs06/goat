@@ -11,8 +11,8 @@ import (
 )
 
 func TestPlanModeRefusesChanges(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	os.WriteFile("a.txt", []byte("hello\n"), 0o644)
 	planMode = true
 	t.Cleanup(func() { planMode = false })
@@ -42,8 +42,8 @@ func TestPlanModeRefusesChanges(t *testing.T) {
 }
 
 func TestPlanModeTellsTheModel(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	planMode = true
 	t.Cleanup(func() { planMode = false })
 
@@ -58,8 +58,8 @@ func TestPlanModeTellsTheModel(t *testing.T) {
 }
 
 func TestPlanModeNoteSurvivesProjectInstructions(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	os.WriteFile("AGENTS.md", []byte("Use tabs."), 0o644)
 	planMode = true

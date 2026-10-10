@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // toolRun is a tool call of the active conversation with its recorded output.
@@ -249,7 +250,7 @@ func commandExport(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		name = strings.Join(args, " ")
 	}
-	resolved, relPath, err := resolveToolPath(name)
+	resolved, relPath, err := workspace.ResolvePath(name)
 	if err != nil {
 		return err
 	}

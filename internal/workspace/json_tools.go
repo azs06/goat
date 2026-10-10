@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"bytes"
@@ -68,7 +68,9 @@ func applyJSONEdit(content, jsonPath, operation, valueJSON string) (string, erro
 	}
 }
 
-func editJSONFile(filePath, jsonPath, operation, valueJSON string) error {
+// EditJSONFile applies one operation at jsonPath in a JSON file and records the change
+// for undo.
+func EditJSONFile(filePath, jsonPath, operation, valueJSON string) error {
 	content, err := readFile(filePath)
 	if err != nil {
 		return err
@@ -84,7 +86,9 @@ func editJSONFile(filePath, jsonPath, operation, valueJSON string) error {
 	})
 }
 
-func previewEditJSONFile(filePath, jsonPath, operation, valueJSON string) (string, error) {
+// PreviewEditJSONFile shows the diff EditJSONFile would make without changing
+// anything.
+func PreviewEditJSONFile(filePath, jsonPath, operation, valueJSON string) (string, error) {
 	content, err := readFile(filePath)
 	if err != nil {
 		return "", err

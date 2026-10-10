@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"bytes"
@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	defaultOperationsPath = stateDirName + "/operations.json"
-	defaultSnapshotsRoot  = stateDirName + "/snapshots"
+	defaultOperationsPath = StateDirName + "/operations.json"
+	defaultSnapshotsRoot  = StateDirName + "/snapshots"
 	maxStateDiffEntries   = 40
 	// maxRecordedOperations is how many operations stay undoable; older snapshots are deleted.
 	maxRecordedOperations = 100
@@ -49,7 +49,7 @@ type capturedPathState struct {
 }
 
 func rawWriteFile(filePath, content string) error {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func rawWriteFile(filePath, content string) error {
 }
 
 func removeWorkspacePathIfExists(filePath string) error {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func normalizeOperationPaths(paths []string) ([]string, error) {
 			return nil, fmt.Errorf("path is required")
 		}
 
-		_, relPath, err := resolveToolPath(candidate)
+		_, relPath, err := ResolvePath(candidate)
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func newOperationRecord(kind string, paths []string) (operationRecord, error) {
 
 // regularFileIdentity returns the identity of the regular file at relPath, or "".
 func regularFileIdentity(relPath string) string {
-	resolvedPath, _, err := resolveToolPath(relPath)
+	resolvedPath, _, err := ResolvePath(relPath)
 	if err != nil {
 		return ""
 	}
@@ -227,7 +227,7 @@ func regularFileIdentity(relPath string) string {
 func topmostMissingParent(relPath string) (string, error) {
 	top := ""
 	for dir := path.Dir(relPath); dir != "."; dir = path.Dir(dir) {
-		resolvedDir, _, err := resolveToolPath(dir)
+		resolvedDir, _, err := ResolvePath(dir)
 		if err != nil {
 			return "", err
 		}
@@ -258,7 +258,7 @@ func removeCreatedParents(record operationRecord) {
 			if component != "" {
 				dir = path.Join(dir, component)
 			}
-			resolvedDir, _, err := resolveToolPath(dir)
+			resolvedDir, _, err := ResolvePath(dir)
 			if err != nil {
 				break
 			}
@@ -282,7 +282,7 @@ func createOperationSnapshot(record operationRecord) error {
 	if err != nil {
 		return err
 	}
-	resolvedSnapshotRoot, _, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, _, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func cleanupOperationSnapshot(record operationRecord) {
 	if err != nil {
 		return
 	}
-	resolvedSnapshotRoot, _, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, _, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return
 	}
@@ -312,7 +312,7 @@ func cleanupOperationSnapshot(record operationRecord) {
 }
 
 func snapshotWorkspacePath(filePath, resolvedSnapshotRoot string) error {
-	resolvedPath, relPath, err := resolveToolPath(filePath)
+	resolvedPath, relPath, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -443,7 +443,7 @@ func withRecordedMutation(kind string, paths []string, mutate func() error) erro
 	if err := appendOperationRecord(record); err != nil {
 		// The change was made; it just cannot be undone.
 		cleanupOperationSnapshot(record)
-		warnf("%s succeeded but could not be recorded for undo: %v", kind, err)
+		Warnf("%s succeeded but could not be recorded for undo: %v", kind, err)
 	}
 
 	return nil
@@ -489,7 +489,7 @@ func stateKeyWithinPaths(key string, paths []string) bool {
 // setAsideCorrupt is set, it is renamed out of the way and an empty log is returned so
 // recording and undo keep working; read-only callers get the error instead.
 func loadOperationRecords(setAsideCorrupt bool) ([]operationRecord, error) {
-	resolvedPath, _, err := resolveStatePath(defaultOperationsPath)
+	resolvedPath, _, err := ResolveStatePath(defaultOperationsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +514,7 @@ func loadOperationRecords(setAsideCorrupt bool) ([]operationRecord, error) {
 		if renameErr := os.Rename(resolvedPath, corruptPath); renameErr != nil {
 			return nil, fmt.Errorf("decode operations: %w", err)
 		}
-		warnf("%s was unreadable (%v); moved it to %s and started a new operation log", defaultOperationsPath, err, filepath.Base(corruptPath))
+		Warnf("%s was unreadable (%v); moved it to %s and started a new operation log", defaultOperationsPath, err, filepath.Base(corruptPath))
 		return nil, nil
 	}
 
@@ -522,7 +522,7 @@ func loadOperationRecords(setAsideCorrupt bool) ([]operationRecord, error) {
 }
 
 func saveOperationRecords(records []operationRecord) error {
-	resolvedPath, _, err := resolveStatePath(defaultOperationsPath)
+	resolvedPath, _, err := ResolveStatePath(defaultOperationsPath)
 	if err != nil {
 		return err
 	}
@@ -590,7 +590,7 @@ func keepOperationSnapshot(record operationRecord) string {
 	if err != nil {
 		return "(unknown)"
 	}
-	resolvedSnapshotRoot, relPath, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, relPath, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return "(unknown)"
 	}
@@ -603,7 +603,7 @@ func keepOperationSnapshot(record operationRecord) string {
 // directories are kept, since another goat process may still be in the middle of the
 // mutation that created them.
 func removeUnreferencedSnapshots(records []operationRecord) {
-	resolvedRoot, _, err := resolveStatePath(defaultSnapshotsRoot)
+	resolvedRoot, _, err := ResolveStatePath(defaultSnapshotsRoot)
 	if err != nil {
 		return
 	}
@@ -647,7 +647,9 @@ func latestUndoableOperationRecord(setAsideCorrupt bool) (operationRecord, int, 
 	return operationRecord{}, -1, records, nil
 }
 
-func previewUndoLastChange() (string, error) {
+// PreviewUndoLastChange describes what UndoLastChange would restore without changing
+// anything.
+func PreviewUndoLastChange() (string, error) {
 	record, index, _, err := latestUndoableOperationRecord(false)
 	if err != nil {
 		return "", err
@@ -679,7 +681,9 @@ func previewUndoLastChange() (string, error) {
 	return fmt.Sprintf("Preview for undo_last_change on %s (%s):\n%s", record.Kind, strings.Join(record.Paths, ", "), renderStateDiff(currentState, previousState)), nil
 }
 
-func undoLastChange() (string, error) {
+// UndoLastChange restores the workspace to how it was before the most recent recorded
+// change and returns a description of what it restored.
+func UndoLastChange() (string, error) {
 	record, index, records, err := latestUndoableOperationRecord(true)
 	if err != nil {
 		return "", err
@@ -713,9 +717,9 @@ func markOperationSkipped(records []operationRecord, index int) (operationRecord
 	return records[index], saveOperationRecords(records)
 }
 
-// skipLastChange gives up on the latest undoable operation without restoring anything,
+// SkipLastChange gives up on the latest undoable operation without restoring anything,
 // so undo can reach earlier operations.
-func skipLastChange() (string, error) {
+func SkipLastChange() (string, error) {
 	_, index, records, err := latestUndoableOperationRecord(true)
 	if err != nil {
 		return "", err
@@ -736,7 +740,7 @@ func operationSnapshotExists(record operationRecord) bool {
 	if err != nil {
 		return false
 	}
-	resolvedSnapshotRoot, _, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, _, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return false
 	}
@@ -757,7 +761,7 @@ func restoreOperationSnapshot(record operationRecord) error {
 	if err != nil {
 		return err
 	}
-	resolvedSnapshotRoot, _, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, _, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return err
 	}
@@ -792,7 +796,7 @@ func restoreOperationSnapshot(record operationRecord) error {
 			return err
 		}
 
-		destinationPath, _, err := resolveToolPath(paths[i])
+		destinationPath, _, err := ResolvePath(paths[i])
 		if err != nil {
 			return fmt.Errorf("restore %s: %w", paths[i], err)
 		}
@@ -832,7 +836,7 @@ func captureWorkspaceState(paths []string) (map[string]capturedPathState, error)
 
 	state := map[string]capturedPathState{}
 	for _, filePath := range normalizedPaths {
-		resolvedPath, relPath, err := resolveToolPath(filePath)
+		resolvedPath, relPath, err := ResolvePath(filePath)
 		if err != nil {
 			return nil, err
 		}
@@ -849,7 +853,7 @@ func captureSnapshotState(record operationRecord) (map[string]capturedPathState,
 	if err != nil {
 		return nil, err
 	}
-	resolvedSnapshotRoot, _, err := resolveStatePath(snapshotPath)
+	resolvedSnapshotRoot, _, err := ResolveStatePath(snapshotPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1041,7 +1045,7 @@ func formatStateLabel(key string, isDir bool) string {
 }
 
 func ensureDirectoryPath(dirPath string) (os.FileInfo, error) {
-	resolvedPath, _, err := resolveToolPath(dirPath)
+	resolvedPath, _, err := ResolvePath(dirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1058,7 +1062,7 @@ func ensureDirectoryPath(dirPath string) (os.FileInfo, error) {
 }
 
 func destinationPathAvailableForPath(filePath string, overwrite bool) error {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -1109,11 +1113,11 @@ func validateDirectoryTransfer(sourcePath, destinationPath string, overwrite boo
 		return "", "", err
 	}
 
-	resolvedSourcePath, _, err := resolveToolPath(sourcePath)
+	resolvedSourcePath, _, err := ResolvePath(sourcePath)
 	if err != nil {
 		return "", "", err
 	}
-	resolvedDestinationPath, _, err := resolveToolPath(destinationPath)
+	resolvedDestinationPath, _, err := ResolvePath(destinationPath)
 	if err != nil {
 		return "", "", err
 	}
@@ -1124,7 +1128,9 @@ func validateDirectoryTransfer(sourcePath, destinationPath string, overwrite boo
 	return resolvedSourcePath, resolvedDestinationPath, nil
 }
 
-func copyDir(sourcePath, destinationPath string, overwrite bool) error {
+// CopyDir copies a directory tree within the workspace and records the change for
+// undo.
+func CopyDir(sourcePath, destinationPath string, overwrite bool) error {
 	resolvedSourcePath, resolvedDestinationPath, err := validateDirectoryTransfer(sourcePath, destinationPath, overwrite)
 	if err != nil {
 		return err
@@ -1140,7 +1146,8 @@ func copyDir(sourcePath, destinationPath string, overwrite bool) error {
 	})
 }
 
-func previewCopyDir(sourcePath, destinationPath string, overwrite bool) (string, error) {
+// PreviewCopyDir describes what CopyDir would do without changing anything.
+func PreviewCopyDir(sourcePath, destinationPath string, overwrite bool) (string, error) {
 	if _, _, err := validateDirectoryTransfer(sourcePath, destinationPath, overwrite); err != nil {
 		return "", err
 	}
@@ -1158,7 +1165,9 @@ func previewCopyDir(sourcePath, destinationPath string, overwrite bool) (string,
 	return fmt.Sprintf("Preview for copy_dir from %s to %s:\n%s", filepath.ToSlash(filepath.Clean(sourcePath)), filepath.ToSlash(filepath.Clean(destinationPath)), renderStateDiff(destinationState, desiredState)), nil
 }
 
-func moveDir(sourcePath, destinationPath string, overwrite bool) error {
+// MoveDir moves or renames a directory within the workspace and records the change
+// for undo.
+func MoveDir(sourcePath, destinationPath string, overwrite bool) error {
 	resolvedSourcePath, resolvedDestinationPath, err := validateDirectoryTransfer(sourcePath, destinationPath, overwrite)
 	if err != nil {
 		return err
@@ -1183,7 +1192,8 @@ func moveDir(sourcePath, destinationPath string, overwrite bool) error {
 	})
 }
 
-func previewMoveDir(sourcePath, destinationPath string, overwrite bool) (string, error) {
+// PreviewMoveDir describes what MoveDir would do without changing anything.
+func PreviewMoveDir(sourcePath, destinationPath string, overwrite bool) (string, error) {
 	if _, _, err := validateDirectoryTransfer(sourcePath, destinationPath, overwrite); err != nil {
 		return "", err
 	}
@@ -1201,7 +1211,8 @@ func previewMoveDir(sourcePath, destinationPath string, overwrite bool) (string,
 	return fmt.Sprintf("Preview for move_dir from %s to %s:\n%s", filepath.ToSlash(filepath.Clean(sourcePath)), filepath.ToSlash(filepath.Clean(destinationPath)), renderStateDiff(currentState, desiredState)), nil
 }
 
-func deleteDir(dirPath string) error {
+// DeleteDir removes a directory tree and records the change for undo.
+func DeleteDir(dirPath string) error {
 	if _, err := ensureDirectoryPath(dirPath); err != nil {
 		return err
 	}
@@ -1211,7 +1222,8 @@ func deleteDir(dirPath string) error {
 	})
 }
 
-func previewDeleteDir(dirPath string) (string, error) {
+// PreviewDeleteDir describes what DeleteDir would remove without changing anything.
+func PreviewDeleteDir(dirPath string) (string, error) {
 	if _, err := ensureDirectoryPath(dirPath); err != nil {
 		return "", err
 	}

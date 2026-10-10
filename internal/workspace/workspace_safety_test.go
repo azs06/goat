@@ -1,6 +1,6 @@
 //go:build unix
 
-package main
+package workspace
 
 import (
 	"context"
@@ -18,17 +18,17 @@ import (
 
 func TestResolveToolPathRejectsStateDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	for _, path := range []string{".goat", ".goat/history.jsonl", "./.goat/operations.json", "sub/../.goat"} {
-		if _, _, err := resolveToolPath(path); err == nil || !strings.Contains(err.Error(), "reserved") {
+		if _, _, err := ResolvePath(path); err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Errorf("%s: expected reserved-path error, got %v", path, err)
 		}
 	}
-	if err := writeFile(".goat/operations.json", "[]"); err == nil {
+	if err := WriteFile(".goat/operations.json", "[]"); err == nil {
 		t.Fatal("expected write_file into .goat to fail")
 	}
-	if _, _, err := resolveStatePath(".goat/history.jsonl"); err != nil {
+	if _, _, err := ResolveStatePath(".goat/history.jsonl"); err != nil {
 		t.Fatalf("expected internal state path to resolve, got %v", err)
 	}
 }
@@ -36,7 +36,7 @@ func TestResolveToolPathRejectsStateDirectory(t *testing.T) {
 func TestResolveToolPathRejectsSymlinkEscape(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0644); err != nil {
 		t.Fatalf("seed outside file: %v", err)
@@ -51,19 +51,19 @@ func TestResolveToolPathRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("create state symlink: %v", err)
 	}
 
-	if _, err := readFileForModel("escape/secret.txt"); err == nil {
+	if _, err := ReadFileForModel("escape/secret.txt"); err == nil {
 		t.Fatal("expected read through a directory symlink to fail")
 	}
-	if _, err := readFileForModel("secret-link"); err == nil {
+	if _, err := ReadFileForModel("secret-link"); err == nil {
 		t.Fatal("expected read through a file symlink to fail")
 	}
-	if err := writeFile("escape/new.txt", "x"); err == nil {
+	if err := WriteFile("escape/new.txt", "x"); err == nil {
 		t.Fatal("expected write through a directory symlink to fail")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "new.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected no file outside the workspace, got %v", err)
 	}
-	if err := writeFile("state-link/operations.json", "[]"); err == nil {
+	if err := WriteFile("state-link/operations.json", "[]"); err == nil {
 		t.Fatal("expected write through a symlink into .goat to fail")
 	}
 
@@ -73,7 +73,7 @@ func TestResolveToolPathRejectsSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(filepath.Join(workspace, "real"), filepath.Join(workspace, "inside")); err != nil {
 		t.Fatalf("create inside symlink: %v", err)
 	}
-	if err := writeFile("inside/ok.txt", "ok"); err != nil {
+	if err := WriteFile("inside/ok.txt", "ok"); err != nil {
 		t.Fatalf("expected write through an in-workspace symlink to work, got %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestGrepFilesSkipsSymlinksAndUnreadableDirectories(t *testing.T) {
 	}
 	workspace := t.TempDir()
 	outside := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("needle outside"), 0644)
 	os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(workspace, "link.txt"))
@@ -106,14 +106,14 @@ func TestGrepFilesSkipsSymlinksAndUnreadableDirectories(t *testing.T) {
 
 func TestDeleteDirRefusesWorkspaceRoot(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("hi"), 0644)
 
 	for _, path := range []string{".", "./", "sub/.."} {
-		if err := deleteDir(path); err == nil || !strings.Contains(err.Error(), "workspace root") {
+		if err := DeleteDir(path); err == nil || !strings.Contains(err.Error(), "workspace root") {
 			t.Fatalf("%s: expected workspace root refusal, got %v", path, err)
 		}
-		if _, err := previewDeleteDir(path); err == nil {
+		if _, err := PreviewDeleteDir(path); err == nil {
 			t.Fatalf("%s: expected preview to refuse the workspace root", path)
 		}
 	}
@@ -128,7 +128,7 @@ func TestDeleteDirRefusesWorkspaceRoot(t *testing.T) {
 
 func TestFailedSnapshotIsCleanedUp(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "dir"), 0755)
 	os.WriteFile(filepath.Join(workspace, "dir", "a.txt"), []byte("a"), 0644)
@@ -137,7 +137,7 @@ func TestFailedSnapshotIsCleanedUp(t *testing.T) {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
 
-	if err := deleteDir("dir"); err == nil {
+	if err := DeleteDir("dir"); err == nil {
 		t.Fatal("expected snapshot failure to abort the delete")
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "dir", "a.txt")); err != nil {
@@ -151,7 +151,7 @@ func TestFailedSnapshotIsCleanedUp(t *testing.T) {
 
 func TestUndoRestoresEachMutationKind(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	read := func(path string) string {
 		data, err := os.ReadFile(filepath.Join(workspace, path))
@@ -170,22 +170,22 @@ func TestUndoRestoresEachMutationKind(t *testing.T) {
 		mutate func() error
 		check  func() bool
 	}{
-		{"write new file", func() error { return writeFile("new.txt", "fresh") }, func() bool { return read("new.txt") == "<missing>" }},
-		{"edit file", func() error { _, err := editFile("src/a.txt", "original", "edited", false); return err }, func() bool { return read("src/a.txt") == "original" }},
-		{"move file", func() error { return moveFile("src/a.txt", "moved.txt", false) }, func() bool { return read("src/a.txt") == "original" && read("moved.txt") == "<missing>" }},
-		{"delete file", func() error { return deleteFile("src/a.txt") }, func() bool { return read("src/a.txt") == "original" }},
-		{"copy dir", func() error { return copyDir("src", "copy", false) }, func() bool { return read("copy/nested/b.txt") == "<missing>" }},
-		{"move dir", func() error { return moveDir("src", "elsewhere/src", false) }, func() bool {
+		{"write new file", func() error { return WriteFile("new.txt", "fresh") }, func() bool { return read("new.txt") == "<missing>" }},
+		{"edit file", func() error { _, err := EditFile("src/a.txt", "original", "edited", false); return err }, func() bool { return read("src/a.txt") == "original" }},
+		{"move file", func() error { return MoveFile("src/a.txt", "moved.txt", false) }, func() bool { return read("src/a.txt") == "original" && read("moved.txt") == "<missing>" }},
+		{"delete file", func() error { return DeleteFile("src/a.txt") }, func() bool { return read("src/a.txt") == "original" }},
+		{"copy dir", func() error { return CopyDir("src", "copy", false) }, func() bool { return read("copy/nested/b.txt") == "<missing>" }},
+		{"move dir", func() error { return MoveDir("src", "elsewhere/src", false) }, func() bool {
 			return read("src/nested/b.txt") == "nested" && read("elsewhere/src/nested/b.txt") == "<missing>"
 		}},
-		{"delete dir", func() error { return deleteDir("src") }, func() bool { return read("src/a.txt") == "original" && read("src/nested/b.txt") == "nested" }},
+		{"delete dir", func() error { return DeleteDir("src") }, func() bool { return read("src/a.txt") == "original" && read("src/nested/b.txt") == "nested" }},
 	}
 
 	for _, step := range steps {
 		if err := step.mutate(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
-		if _, err := undoLastChange(); err != nil {
+		if _, err := UndoLastChange(); err != nil {
 			t.Fatalf("%s: undo failed: %v", step.name, err)
 		}
 		if !step.check() {
@@ -193,7 +193,7 @@ func TestUndoRestoresEachMutationKind(t *testing.T) {
 		}
 	}
 
-	message, err := undoLastChange()
+	message, err := UndoLastChange()
 	if err != nil {
 		t.Fatalf("undo with nothing left: %v", err)
 	}
@@ -204,10 +204,10 @@ func TestUndoRestoresEachMutationKind(t *testing.T) {
 
 func TestOldSnapshotsArePruned(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	for i := 0; i < maxRecordedOperations+5; i++ {
-		if err := writeFile("counter.txt", strconv.Itoa(i)); err != nil {
+		if err := WriteFile("counter.txt", strconv.Itoa(i)); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
 	}
@@ -230,50 +230,14 @@ func TestOldSnapshotsArePruned(t *testing.T) {
 
 func TestReadFileForModelRefusesLargeFiles(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "big.txt"), make([]byte, maxReadFileSize+1), 0644)
-	if _, err := readFileForModel("big.txt"); err == nil || !strings.Contains(err.Error(), "read_file limit") {
+	if _, err := ReadFileForModel("big.txt"); err == nil || !strings.Contains(err.Error(), "read_file limit") {
 		t.Fatalf("expected size limit error, got %v", err)
 	}
-	if _, err := readFileForModel("."); err == nil {
+	if _, err := ReadFileForModel("."); err == nil {
 		t.Fatal("expected reading a directory to fail")
-	}
-}
-
-func TestHistorySurvivesHugeAndCorruptEntries(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	recordHistory(historyEntry{Type: "tool_output", ToolName: "run_bash", Content: strings.Repeat("x", 2<<20)})
-	recordHistory(historyEntry{Type: "assistant", Content: "done", ResponseID: "resp-1"})
-
-	historyPath := filepath.Join(workspace, ".goat", "history.jsonl")
-	file, err := os.OpenFile(historyPath, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		t.Fatalf("open history: %v", err)
-	}
-	file.WriteString(`{"type":"assistant","content":"cut sho` + "\n")
-	file.Close()
-
-	info, err := os.Stat(historyPath)
-	if err != nil {
-		t.Fatalf("stat history: %v", err)
-	}
-	if info.Size() > 1<<20 {
-		t.Fatalf("expected huge content to be truncated before saving, history is %d bytes", info.Size())
-	}
-
-	entries, err := loadConversationHistoryEntries()
-	if err != nil {
-		t.Fatalf("expected history to load, got %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 readable entries, got %d", len(entries))
-	}
-	responseID, err := loadLatestConversationResponseID()
-	if err != nil || responseID != "resp-1" {
-		t.Fatalf("expected resp-1, got %q (%v)", responseID, err)
 	}
 }
 
@@ -317,10 +281,10 @@ func reverseLines(lines []string) []string {
 
 func TestRunBashReturnsWhileBackgroundProcessRuns(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	start := time.Now()
-	output, err := runBashCommand(context.Background(), "sleep 20 & echo $! > bg.pid; echo started", ".")
+	output, err := RunBash(context.Background(), "sleep 20 & echo $! > bg.pid; echo started", ".")
 	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -335,14 +299,14 @@ func TestRunBashReturnsWhileBackgroundProcessRuns(t *testing.T) {
 
 func TestRunBashTimeoutKillsProcessGroup(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	previousTimeout := bashToolTimeout
 	bashToolTimeout = time.Second
 	t.Cleanup(func() { bashToolTimeout = previousTimeout })
 
 	start := time.Now()
-	_, err := runBashCommand(context.Background(), "sleep 30 & echo $! > bg.pid; sleep 30", ".")
+	_, err := RunBash(context.Background(), "sleep 30 & echo $! > bg.pid; sleep 30", ".")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
@@ -363,11 +327,11 @@ func TestRunBashTimeoutKillsProcessGroup(t *testing.T) {
 
 func TestRunBashReportsInterruption(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := runBashCommand(ctx, "sleep 30", ".")
+	_, err := RunBash(ctx, "sleep 30", ".")
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("expected interruption error, got %v", err)
 	}
@@ -409,14 +373,14 @@ func caseInsensitiveFilesystem(t *testing.T, dir string) bool {
 
 func TestStateDirectoryCaseVariantsAreReserved(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("a.txt", "a"); err != nil {
+	if err := WriteFile("a.txt", "a"); err != nil {
 		t.Fatalf("seed operation log: %v", err)
 	}
 
 	for _, path := range []string{".GOAT/operations.json", ".Goat", ".goat./x", ".goat /x"} {
-		if _, _, err := resolveToolPath(path); err == nil {
+		if _, _, err := ResolvePath(path); err == nil {
 			t.Errorf("%s: expected reserved-path error", path)
 		}
 	}
@@ -426,14 +390,14 @@ func TestStateDirectoryCaseVariantsAreReserved(t *testing.T) {
 	if err := os.Symlink(filepath.Join(workspace, ".goat"), filepath.Join(workspace, "alias")); err != nil {
 		t.Fatalf("create alias: %v", err)
 	}
-	if _, err := readFileForModel("alias/operations.json"); err == nil {
+	if _, err := ReadFileForModel("alias/operations.json"); err == nil {
 		t.Error("expected a symlink alias of .goat to be reserved")
 	}
 }
 
 func TestForgedSnapshotPathCannotDeleteWorkspace(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "keep.txt"), []byte("keep"), 0644)
 	os.MkdirAll(filepath.Join(workspace, "src"), 0755)
@@ -449,10 +413,10 @@ func TestForgedSnapshotPathCannotDeleteWorkspace(t *testing.T) {
 		t.Fatalf("save forged records: %v", err)
 	}
 
-	if err := writeFile("b.txt", "b"); err != nil {
+	if err := WriteFile("b.txt", "b"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := writeFile("c.txt", "c"); err != nil {
+	if err := WriteFile("c.txt", "c"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	for _, path := range []string{"keep.txt", "src/k.go", "b.txt"} {
@@ -465,7 +429,7 @@ func TestForgedSnapshotPathCannotDeleteWorkspace(t *testing.T) {
 	if err := saveOperationRecords(forgedUndo); err != nil {
 		t.Fatalf("save forged undo record: %v", err)
 	}
-	if _, err := undoLastChange(); err == nil {
+	if _, err := UndoLastChange(); err == nil {
 		t.Fatal("expected undo of a record naming the workspace root to fail")
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "keep.txt")); err != nil {
@@ -475,20 +439,20 @@ func TestForgedSnapshotPathCannotDeleteWorkspace(t *testing.T) {
 
 func TestTransfersRefuseTheSameFileUnderAnotherName(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "Src"), 0755)
 	os.WriteFile(filepath.Join(workspace, "Src", "f.txt"), []byte("data"), 0644)
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("data"), 0644)
 
 	if caseInsensitiveFilesystem(t, workspace) {
-		if err := moveDir("Src", "src", true); err == nil {
+		if err := MoveDir("Src", "src", true); err == nil {
 			t.Error("expected a case-only move_dir with overwrite to fail")
 		}
-		if err := copyDir("Src", "src", true); err == nil {
+		if err := CopyDir("Src", "src", true); err == nil {
 			t.Error("expected a case-only copy_dir with overwrite to fail")
 		}
-		if err := moveFile("a.txt", "A.txt", true); err == nil {
+		if err := MoveFile("a.txt", "A.txt", true); err == nil {
 			t.Error("expected a case-only move_file with overwrite to fail")
 		}
 	}
@@ -502,7 +466,7 @@ func TestTransfersRefuseTheSameFileUnderAnotherName(t *testing.T) {
 
 func TestCopyDirRefusesDestinationInsideSourceViaAlias(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "src", "nested"), 0755)
 	os.Symlink(filepath.Join(workspace, "src"), filepath.Join(workspace, "alias"))
@@ -512,7 +476,7 @@ func TestCopyDirRefusesDestinationInsideSourceViaAlias(t *testing.T) {
 		destinations = append(destinations, "SRC/nested/inner")
 	}
 	for _, destination := range destinations {
-		if err := copyDir("src", destination, false); err == nil || !strings.Contains(err.Error(), "overlap") {
+		if err := CopyDir("src", destination, false); err == nil || !strings.Contains(err.Error(), "overlap") {
 			t.Errorf("%s: expected overlap error, got %v", destination, err)
 		}
 	}
@@ -523,7 +487,7 @@ func TestCopyDirRefusesDestinationInsideSourceViaAlias(t *testing.T) {
 
 func TestFailedMutationRestoresPreviousState(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("original"), 0644)
 	err := withRecordedMutation("write_file", []string{"a.txt"}, func() error {
@@ -544,12 +508,12 @@ func TestFailedMutationRestoresPreviousState(t *testing.T) {
 
 func TestRunBashCommandFinishingBeforeDeadlineIsNotReportedAsTimeout(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	// Let the deadline pass after the shell exits but while run_bash still waits
 	// bashPipeWaitDelay for the background process to release the output.
 	start := time.Now()
-	if _, err := runBashCommand(context.Background(), "true", "."); err != nil {
+	if _, err := RunBash(context.Background(), "true", "."); err != nil {
 		t.Fatalf("measure shell startup: %v", err)
 	}
 	shellStartup := time.Since(start)
@@ -558,7 +522,7 @@ func TestRunBashCommandFinishingBeforeDeadlineIsNotReportedAsTimeout(t *testing.
 	bashToolTimeout = shellStartup + bashPipeWaitDelay/2
 	t.Cleanup(func() { bashToolTimeout = previousTimeout })
 
-	output, err := runBashCommand(context.Background(), "echo done; sleep 20 & echo $! > bg.pid", ".")
+	output, err := RunBash(context.Background(), "echo done; sleep 20 & echo $! > bg.pid", ".")
 	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
 	if err != nil {
 		t.Fatalf("expected a clean exit to succeed, got %v", err)
@@ -570,10 +534,10 @@ func TestRunBashCommandFinishingBeforeDeadlineIsNotReportedAsTimeout(t *testing.
 
 func TestRunBashCommandHasNoControllingTerminal(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	start := time.Now()
-	_, err := runBashCommand(context.Background(), "read x < /dev/tty", ".")
+	_, err := RunBash(context.Background(), "read x < /dev/tty", ".")
 	if err == nil {
 		t.Fatal("expected reading /dev/tty to fail")
 	}
@@ -584,14 +548,14 @@ func TestRunBashCommandHasNoControllingTerminal(t *testing.T) {
 
 func TestMoveFileAllowsDistinctHardLinks(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("data"), 0644)
 	if err := os.Link(filepath.Join(workspace, "a.txt"), filepath.Join(workspace, "b.txt")); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 
-	if err := moveFile("a.txt", "b.txt", true); err != nil {
+	if err := MoveFile("a.txt", "b.txt", true); err != nil {
 		t.Fatalf("expected moving between distinct hard links to work, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "a.txt")); !os.IsNotExist(err) {
@@ -607,9 +571,9 @@ func TestFailedMutationThatChangedNothingLeavesNoRecordAndKeepsFile(t *testing.T
 		t.Skip("permission test needs a non-root user")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("foo.go", "v2"); err != nil {
+	if err := WriteFile("foo.go", "v2"); err != nil {
 		t.Fatalf("seed recorded change: %v", err)
 	}
 
@@ -621,10 +585,10 @@ func TestFailedMutationThatChangedNothingLeavesNoRecordAndKeepsFile(t *testing.T
 	t.Cleanup(func() { os.Chmod(locked, 0755) })
 	before, _ := os.Stat(filepath.Join(locked, "x.go"))
 
-	if err := writeFile("vendor/x.go", "new"); err == nil {
+	if err := WriteFile("vendor/x.go", "new"); err == nil {
 		t.Fatal("expected the write to fail")
 	}
-	if err := deleteFile("vendor/x.go"); err == nil {
+	if err := DeleteFile("vendor/x.go"); err == nil {
 		t.Fatal("expected the delete to fail")
 	}
 
@@ -636,7 +600,7 @@ func TestFailedMutationThatChangedNothingLeavesNoRecordAndKeepsFile(t *testing.T
 	if len(records) != 1 {
 		t.Fatalf("expected only the successful write to be recorded, got %d record(s)", len(records))
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("expected the earlier change to stay undoable, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "foo.go")); !os.IsNotExist(err) {
@@ -646,13 +610,13 @@ func TestFailedMutationThatChangedNothingLeavesNoRecordAndKeepsFile(t *testing.T
 
 func TestWriteFileRefusesDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "src"), 0755)
 	os.WriteFile(filepath.Join(workspace, "src", "a.go"), []byte("package a"), 0644)
 	before, _ := os.Stat(filepath.Join(workspace, "src", "a.go"))
 
-	if err := writeFile("src", "oops"); err == nil || !strings.Contains(err.Error(), "is a directory") {
+	if err := WriteFile("src", "oops"); err == nil || !strings.Contains(err.Error(), "is a directory") {
 		t.Fatalf("expected a directory error, got %v", err)
 	}
 	after, err := os.Stat(filepath.Join(workspace, "src", "a.go"))
@@ -663,12 +627,12 @@ func TestWriteFileRefusesDirectory(t *testing.T) {
 
 func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, ".goat"), 0755)
 	os.WriteFile(filepath.Join(workspace, ".goat", "operations.json"), []byte(`[{"id":"1","ki`), 0644)
 
-	if err := writeFile("a.txt", "hello"); err != nil {
+	if err := WriteFile("a.txt", "hello"); err != nil {
 		t.Fatalf("expected the write to succeed, got %v", err)
 	}
 	records, err := loadOperationRecords(false)
@@ -679,7 +643,7 @@ func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	if len(matches) != 1 {
 		t.Fatalf("expected the corrupt log to be kept aside, found %d", len(matches))
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("expected undo to work, got %v", err)
 	}
 }
@@ -689,7 +653,7 @@ func TestSnapshotsHandleReadOnlyDirectories(t *testing.T) {
 		t.Skip("permission test needs a non-root user")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	readOnly := filepath.Join(workspace, "src", "ro")
 	os.MkdirAll(readOnly, 0755)
@@ -705,14 +669,14 @@ func TestSnapshotsHandleReadOnlyDirectories(t *testing.T) {
 		})
 	})
 
-	if err := copyDir("src", "copy", false); err != nil {
+	if err := CopyDir("src", "copy", false); err != nil {
 		t.Fatalf("copy_dir of a tree with a read-only directory: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(workspace, "copy", "ro"))
 	if err != nil || info.Mode().Perm() != 0555 {
 		t.Fatalf("expected the copied directory to keep mode 0555, got %v (%v)", info.Mode().Perm(), err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo copy_dir: %v", err)
 	}
 }
@@ -722,7 +686,7 @@ func TestTreeDirMarksUnreadableDirectories(t *testing.T) {
 		t.Skip("permission test needs a non-root user")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "a.txt"), nil, 0644)
 	locked := filepath.Join(workspace, "locked")
@@ -730,7 +694,7 @@ func TestTreeDirMarksUnreadableDirectories(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(locked, 0755) })
 	os.WriteFile(filepath.Join(workspace, "z.txt"), nil, 0644)
 
-	lines, _, err := treeDir(".", 0)
+	lines, _, err := TreeDir(".", 0)
 	if err != nil {
 		t.Fatalf("expected the tree to render, got %v", err)
 	}
@@ -742,7 +706,7 @@ func TestTreeDirMarksUnreadableDirectories(t *testing.T) {
 
 func TestUndoKeepsAncestorDirectoryModes(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	modes := map[string]os.FileMode{"priv": 0700, "shared": 0775 | os.ModeSetgid, "a/b": 0750}
 	for dir, mode := range modes {
@@ -754,10 +718,10 @@ func TestUndoKeepsAncestorDirectoryModes(t *testing.T) {
 	}
 
 	for dir := range modes {
-		if err := writeFile(dir+"/f.txt", "changed"); err != nil {
+		if err := WriteFile(dir+"/f.txt", "changed"); err != nil {
 			t.Fatalf("write %s: %v", dir, err)
 		}
-		if _, err := undoLastChange(); err != nil {
+		if _, err := UndoLastChange(); err != nil {
 			t.Fatalf("undo %s: %v", dir, err)
 		}
 	}
@@ -781,7 +745,7 @@ func TestFailedRemovalRestoresDirectoryModes(t *testing.T) {
 		t.Skip("needs chflags to make a file undeletable")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	noSearch := filepath.Join(workspace, "d", "a")
 	readOnly := filepath.Join(noSearch, "b")
@@ -822,7 +786,7 @@ func TestSnapshotsWithReadOnlyDirectoriesAreCleanedUp(t *testing.T) {
 		t.Skip("permission test needs a non-root user")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	sub := filepath.Join(workspace, "ro", "sub")
 	os.MkdirAll(sub, 0755)
@@ -842,15 +806,15 @@ func TestSnapshotsWithReadOnlyDirectoriesAreCleanedUp(t *testing.T) {
 
 func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("a.txt", "1"); err != nil {
+	if err := WriteFile("a.txt", "1"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	logPath := filepath.Join(workspace, ".goat", "operations.json")
 	os.WriteFile(logPath, []byte("{not json"), 0644)
 
-	if _, err := previewUndoLastChange(); err == nil {
+	if _, err := PreviewUndoLastChange(); err == nil {
 		t.Fatal("expected the preview to report the unreadable log")
 	}
 	if data, _ := os.ReadFile(logPath); string(data) != "{not json" {
@@ -866,7 +830,7 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 	inProgress := strconv.FormatInt(time.Now().UnixNano(), 10) // another process's mutation
 	os.MkdirAll(filepath.Join(snapshots, inProgress, "before"), 0755)
 
-	if err := writeFile("b.txt", "2"); err != nil {
+	if err := WriteFile("b.txt", "2"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	records, err := loadOperationRecords(false)
@@ -885,16 +849,16 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 
 func TestUndoThroughSymlinkedParentDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "lib"), 0755)
 	os.WriteFile(filepath.Join(workspace, "lib", "f.txt"), []byte("original"), 0644)
 	os.Symlink(filepath.Join(workspace, "lib"), filepath.Join(workspace, "src"))
 
-	if err := writeFile("src/f.txt", "changed"); err != nil {
+	if err := WriteFile("src/f.txt", "changed"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo through a symlinked directory: %v", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "lib", "f.txt")); err != nil || string(data) != "original" {
@@ -907,25 +871,25 @@ func TestUndoThroughSymlinkedParentDirectory(t *testing.T) {
 
 func TestUndoSkipsOperationWhoseSnapshotIsMissing(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("a.txt", "1"); err != nil {
+	if err := WriteFile("a.txt", "1"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := writeFile("b.txt", "content"); err != nil {
+	if err := WriteFile("b.txt", "content"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	records, _ := loadOperationRecords(false)
 	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots", records[1].ID))
 
-	if _, err := undoLastChange(); err == nil || !strings.Contains(err.Error(), "missing") {
+	if _, err := UndoLastChange(); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("expected a missing snapshot error, got %v", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "b.txt")); err != nil || string(data) != "content" {
 		t.Fatalf("expected b.txt to be left alone, got %q (%v)", data, err)
 	}
 
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("expected undo to move on to the earlier operation, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "a.txt")); !os.IsNotExist(err) {
@@ -940,9 +904,9 @@ func TestUndoCannotEscapeThroughSymlinkRetargetedByRestore(t *testing.T) {
 	os.WriteFile(filepath.Join(workspace, "q", "f.txt"), []byte("q"), 0644)
 	os.MkdirAll(filepath.Join(workspace, "z", "l", "x"), 0755)
 	os.WriteFile(filepath.Join(workspace, "z", "l", "x", "old.txt"), []byte("old"), 0644)
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := moveDir("q", "z/l/x", true); err != nil {
+	if err := MoveDir("q", "z/l/x", true); err != nil {
 		t.Fatalf("move_dir: %v", err)
 	}
 
@@ -955,7 +919,7 @@ func TestUndoCannotEscapeThroughSymlinkRetargetedByRestore(t *testing.T) {
 	os.RemoveAll(filepath.Join(workspace, "q"))
 	os.Symlink("d1/d2", filepath.Join(workspace, "q"))
 
-	undoLastChange()
+	UndoLastChange()
 
 	if _, err := os.Stat(filepath.Join(root, "OUT", "x")); !os.IsNotExist(err) {
 		t.Fatalf("expected nothing to be written outside the workspace, got %v", err)
@@ -964,7 +928,7 @@ func TestUndoCannotEscapeThroughSymlinkRetargetedByRestore(t *testing.T) {
 
 func TestUndoRemovesParentDirectoriesItCreated(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "real"), 0755)
 	os.Symlink(filepath.Join(workspace, "real"), filepath.Join(workspace, "link"))
@@ -977,15 +941,15 @@ func TestUndoRemovesParentDirectoriesItCreated(t *testing.T) {
 		removed []string
 		kept    []string
 	}{
-		{"write_file", func() error { return writeFile("link/n1/n2/x.txt", "X") }, []string{"real/n1"}, []string{"real"}},
-		{"copy_file", func() error { return copyFile("src/sub/f.txt", "c1/c2/f.txt", false) }, []string{"c1"}, nil},
-		{"move_dir", func() error { return moveDir("src/sub", "m/n/sub", false) }, []string{"m"}, []string{"src/sub/f.txt"}},
+		{"write_file", func() error { return WriteFile("link/n1/n2/x.txt", "X") }, []string{"real/n1"}, []string{"real"}},
+		{"copy_file", func() error { return CopyFile("src/sub/f.txt", "c1/c2/f.txt", false) }, []string{"c1"}, nil},
+		{"move_dir", func() error { return MoveDir("src/sub", "m/n/sub", false) }, []string{"m"}, []string{"src/sub/f.txt"}},
 	}
 	for _, step := range steps {
 		if err := step.mutate(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
-		if _, err := undoLastChange(); err != nil {
+		if _, err := UndoLastChange(); err != nil {
 			t.Fatalf("%s: undo: %v", step.name, err)
 		}
 		for _, path := range step.removed {
@@ -1001,11 +965,11 @@ func TestUndoRemovesParentDirectoriesItCreated(t *testing.T) {
 	}
 
 	// A parent that gained other content since the operation is left in place.
-	if err := writeFile("p/q/a.txt", "a"); err != nil {
+	if err := WriteFile("p/q/a.txt", "a"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	os.WriteFile(filepath.Join(workspace, "p", "other.txt"), []byte("mine"), 0644)
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "p", "other.txt")); err != nil {
@@ -1018,7 +982,7 @@ func TestUndoRemovesParentDirectoriesItCreated(t *testing.T) {
 
 func TestUndoRewritesFilesInPlace(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "docs"), 0755)
 	os.WriteFile(filepath.Join(workspace, "docs", "Readme.md"), []byte("hello"), 0644)
@@ -1028,10 +992,10 @@ func TestUndoRewritesFilesInPlace(t *testing.T) {
 	if caseInsensitiveFilesystem(t, workspace) {
 		path = "DOCS/README.md"
 	}
-	if _, err := editFile(path, "hello", "changed", false); err != nil {
+	if _, err := EditFile(path, "hello", "changed", false); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 
@@ -1044,11 +1008,11 @@ func TestUndoRewritesFilesInPlace(t *testing.T) {
 	}
 
 	// A file that became read-only since the edit is still restored.
-	if _, err := editFile("docs/Readme.md", "hello", "again", false); err != nil {
+	if _, err := EditFile("docs/Readme.md", "hello", "again", false); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	os.Chmod(filepath.Join(workspace, "docs", "Readme.md"), 0444)
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo of a read-only file: %v", err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(workspace, "docs", "Readme.md")); string(data) != "hello" {
@@ -1058,21 +1022,21 @@ func TestUndoRewritesFilesInPlace(t *testing.T) {
 
 func TestUndoTreatsPathUnderAFileAsAbsent(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("e.txt", "E"); err != nil {
+	if err := WriteFile("e.txt", "E"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := writeFile("d/f.txt", "F"); err != nil {
+	if err := WriteFile("d/f.txt", "F"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	os.RemoveAll(filepath.Join(workspace, "d"))
 	os.WriteFile(filepath.Join(workspace, "d"), []byte("now a file"), 0644)
 
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("expected undo of the vanished path to succeed, got %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("expected the earlier operation to be undoable, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "e.txt")); !os.IsNotExist(err) {
@@ -1080,44 +1044,17 @@ func TestUndoTreatsPathUnderAFileAsAbsent(t *testing.T) {
 	}
 }
 
-func TestUndoSkipGivesUpOnAnOperation(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	if err := writeFile("a.txt", "1"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if err := writeFile("b.txt", "2"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if err := commandUndo(context.Background(), &config{}, []string{"skip"}); err != nil {
-		t.Fatalf("undo skip: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(workspace, "b.txt")); err != nil {
-		t.Fatalf("expected skip to leave b.txt alone, got %v", err)
-	}
-	if _, err := undoLastChange(); err != nil {
-		t.Fatalf("undo: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(workspace, "a.txt")); !os.IsNotExist(err) {
-		t.Fatalf("expected a.txt to be undone after the skip, got %v", err)
-	}
-	if err := commandUndo(context.Background(), &config{}, []string{"bogus"}); err == nil {
-		t.Fatal("expected an unknown undo option to fail")
-	}
-}
-
 func TestUndoPreviewIsAccurate(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.MkdirAll(filepath.Join(workspace, "src", "deep"), 0755)
 	os.WriteFile(filepath.Join(workspace, "src", "deep", "a.txt"), []byte("bye\n"), 0644)
-	if _, err := editFile("src/deep/a.txt", "bye", "hi", false); err != nil {
+	if _, err := EditFile("src/deep/a.txt", "bye", "hi", false); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 
-	preview, err := previewUndoLastChange()
+	preview, err := PreviewUndoLastChange()
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
@@ -1127,7 +1064,7 @@ func TestUndoPreviewIsAccurate(t *testing.T) {
 	}
 
 	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots"))
-	preview, err = previewUndoLastChange()
+	preview, err = PreviewUndoLastChange()
 	if err != nil || !strings.Contains(preview, "missing") || strings.Contains(preview, "/dev/null") {
 		t.Fatalf("expected the preview to report the missing snapshot, got %q (%v)", preview, err)
 	}
@@ -1135,7 +1072,7 @@ func TestUndoPreviewIsAccurate(t *testing.T) {
 
 func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	snapshot := filepath.Join(workspace, ".goat", "snapshots", "123")
 	os.MkdirAll(filepath.Join(snapshot, "before", "dst"), 0755)
@@ -1144,7 +1081,7 @@ func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	old := time.Now().Add(-2 * unreferencedSnapshotGracePeriod)
 	os.Chtimes(snapshot, old, old)
 
-	if err := writeFile("a.txt", "1"); err != nil {
+	if err := WriteFile("a.txt", "1"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, "before", "dst", "only-copy.txt")); err != nil {
@@ -1165,12 +1102,12 @@ func TestUndoNeverWritesIntoAnotherHardLinkedFile(t *testing.T) {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 	os.WriteFile(filepath.Join(workspace, "b.js"), []byte("OLD B"), 0644)
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := moveFile("a.js", "b.js", true); err != nil {
+	if err := MoveFile("a.js", "b.js", true); err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 
@@ -1183,18 +1120,18 @@ func TestUndoNeverWritesIntoAnotherHardLinkedFile(t *testing.T) {
 
 func TestUndoLeavesFileAtCreatedParentPath(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("d/f.txt", "F"); err != nil {
+	if err := WriteFile("d/f.txt", "F"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	os.RemoveAll(filepath.Join(workspace, "d"))
 	os.WriteFile(filepath.Join(workspace, "d"), []byte("user file"), 0644)
 
-	if _, err := previewUndoLastChange(); err != nil {
+	if _, err := PreviewUndoLastChange(); err != nil {
 		t.Fatalf("expected the preview to treat the path as absent, got %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "d")); err != nil || string(data) != "user file" {
@@ -1204,13 +1141,13 @@ func TestUndoLeavesFileAtCreatedParentPath(t *testing.T) {
 
 func TestUndoWorksForRecordsFromOlderVersions(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("original"), 0644)
-	if _, err := editFile("a.txt", "original", "edited", false); err != nil {
+	if _, err := EditFile("a.txt", "original", "edited", false); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
-	if err := writeFile("new/dir/b.txt", "b"); err != nil {
+	if err := WriteFile("new/dir/b.txt", "b"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -1229,13 +1166,13 @@ func TestUndoWorksForRecordsFromOlderVersions(t *testing.T) {
 	data, _ = json.Marshal(raw)
 	os.WriteFile(logPath, data, 0644)
 
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo write: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "new", "dir", "b.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected b.txt to be removed, got %v", err)
 	}
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo edit: %v", err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(workspace, "a.txt")); string(data) != "original" {
@@ -1245,16 +1182,16 @@ func TestUndoWorksForRecordsFromOlderVersions(t *testing.T) {
 
 func TestUndoDoesNotRemoveDirectoriesThroughANewSymlink(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if err := writeFile("a/b/c/f.txt", "f"); err != nil {
+	if err := WriteFile("a/b/c/f.txt", "f"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	os.MkdirAll(filepath.Join(workspace, "x", "c"), 0755)
 	os.RemoveAll(filepath.Join(workspace, "a", "b"))
 	os.Symlink("../x", filepath.Join(workspace, "a", "b"))
 
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "x", "c")); err != nil {
@@ -1267,9 +1204,9 @@ func TestUndoReplacesAFileThatGainedHardLinks(t *testing.T) {
 	workspace := filepath.Join(root, "ws")
 	os.MkdirAll(workspace, 0755)
 	os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("orig"), 0644)
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 
-	if _, err := editFile("a.txt", "orig", "edited", false); err != nil {
+	if _, err := EditFile("a.txt", "orig", "edited", false); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	// Same file, but it now has a hard link outside the workspace.
@@ -1277,7 +1214,7 @@ func TestUndoReplacesAFileThatGainedHardLinks(t *testing.T) {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 
-	if _, err := undoLastChange(); err != nil {
+	if _, err := UndoLastChange(); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(workspace, "a.txt")); string(data) != "orig" {
@@ -1285,16 +1222,5 @@ func TestUndoReplacesAFileThatGainedHardLinks(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "outside.txt")); string(data) != "edited" {
 		t.Fatalf("expected the outside link to be left alone, got %q", data)
-	}
-}
-
-func statFile(workspace, path string) (os.FileInfo, error) {
-	return os.Stat(filepath.Join(workspace, path))
-}
-
-func mkdirAll(t *testing.T, workspace, path string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(workspace, path), 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", path, err)
 	}
 }

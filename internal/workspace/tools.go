@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"bufio"
@@ -32,8 +32,8 @@ const (
 	// maxDiffCells bounds the LCS table behind a diff preview (about 16 MB of int32s).
 	maxDiffCells = 4_000_000
 
-	// stateDirName holds goat's history, operation log, and undo snapshots.
-	stateDirName = ".goat"
+	// StateDirName holds goat's history, operation log, and undo snapshots.
+	StateDirName = ".goat"
 )
 
 var errSearchLimitReached = errors.New("search limit reached")
@@ -48,10 +48,10 @@ func escapesRoot(relPath string) bool {
 	return relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator))
 }
 
-// isStateDirName also matches spellings that name the same directory on
+// IsStateDirName also matches spellings that name the same directory on
 // case-insensitive filesystems and on Windows, which ignores trailing dots and spaces.
-func isStateDirName(name string) bool {
-	return strings.EqualFold(strings.TrimRight(name, ". "), stateDirName)
+func IsStateDirName(name string) bool {
+	return strings.EqualFold(strings.TrimRight(name, ". "), StateDirName)
 }
 
 // isSecretFileName reports files that conventionally hold credentials, such as the
@@ -75,7 +75,7 @@ func isSecretFileName(name string) bool {
 
 func isStatePath(relPath string) bool {
 	first, _, _ := strings.Cut(filepath.ToSlash(relPath), "/")
-	return isStateDirName(first)
+	return IsStateDirName(first)
 }
 
 // isInsideExistingDir reports whether path is dir or lies inside it, comparing file
@@ -106,9 +106,9 @@ func sameExistingFile(firstResolvedPath, secondResolvedPath string) bool {
 	return err == nil && os.SameFile(firstInfo, secondInfo)
 }
 
-// resolveStatePath resolves a path inside the workspace, including goat's own state
-// directory. Tools that act for the model must use resolveToolPath instead.
-func resolveStatePath(path string) (string, string, error) {
+// ResolveStatePath resolves a path inside the workspace, including goat's own state
+// directory. Tools that act for the model must use ResolvePath instead.
+func ResolveStatePath(path string) (string, string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", "", fmt.Errorf("path is required")
 	}
@@ -134,16 +134,16 @@ func resolveStatePath(path string) (string, string, error) {
 	return resolvedPath, relPath, nil
 }
 
-// resolveToolPath resolves a path the model asked for. Besides staying inside the
+// ResolvePath resolves a path the model asked for. Besides staying inside the
 // workspace lexically, the path must not reach outside it, or into goat's state
 // directory, through a symlink.
-func resolveToolPath(path string) (string, string, error) {
-	resolvedPath, relPath, err := resolveStatePath(path)
+func ResolvePath(path string) (string, string, error) {
+	resolvedPath, relPath, err := ResolveStatePath(path)
 	if err != nil {
 		return "", "", err
 	}
 	if isStatePath(relPath) {
-		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
+		return "", "", fmt.Errorf("%s is reserved for goat's internal state", StateDirName)
 	}
 	if isSecretFileName(filepath.Base(relPath)) {
 		return "", "", errSecretFile(relPath)
@@ -160,8 +160,8 @@ func resolveToolPath(path string) (string, string, error) {
 	if escapesRoot(realRelPath) {
 		return "", "", fmt.Errorf("path escapes the workspace through a symlink")
 	}
-	if isStatePath(realRelPath) || isInsideExistingDir(resolvedPath, filepath.Join(workspaceRoot, stateDirName)) {
-		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
+	if isStatePath(realRelPath) || isInsideExistingDir(resolvedPath, filepath.Join(workspaceRoot, StateDirName)) {
+		return "", "", fmt.Errorf("%s is reserved for goat's internal state", StateDirName)
 	}
 	if isSecretFileName(filepath.Base(realRelPath)) {
 		return "", "", errSecretFile(relPath)
@@ -221,11 +221,11 @@ func workspaceRelativePath(resolvedPath string) (string, error) {
 }
 
 func shouldSkipDir(name string) bool {
-	return name == ".git" || isStateDirName(name)
+	return name == ".git" || IsStateDirName(name)
 }
 
 func readFile(filePath string) (string, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return "", err
 	}
@@ -237,10 +237,10 @@ func readFile(filePath string) (string, error) {
 	return string(data), nil
 }
 
-// readFileForModel reads a file for read_file, refusing files too large to be useful
+// ReadFileForModel reads a file for read_file, refusing files too large to be useful
 // once the output is truncated for the model.
-func readFileForModel(filePath string) (string, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+func ReadFileForModel(filePath string) (string, error) {
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +264,7 @@ func readFileForModel(filePath string) (string, error) {
 }
 
 func readFileIfExists(filePath string) (string, bool, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return "", false, err
 	}
@@ -281,7 +281,7 @@ func readFileIfExists(filePath string) (string, bool, error) {
 }
 
 func readFileBytes(filePath string) ([]byte, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func readFileBytes(filePath string) ([]byte, error) {
 }
 
 func readFileBytesIfExists(filePath string) ([]byte, bool, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -310,12 +310,14 @@ func readFileBytesIfExists(filePath string) ([]byte, bool, error) {
 	return data, true, nil
 }
 
-func writeFile(filePath, content string) error {
+// WriteFile creates or replaces a workspace file, creating its parent directories,
+// and records the change for undo.
+func WriteFile(filePath, content string) error {
 	if strings.TrimSpace(filePath) == "" {
 		return fmt.Errorf("missing path")
 	}
 
-	if resolvedPath, _, err := resolveToolPath(filePath); err != nil {
+	if resolvedPath, _, err := ResolvePath(filePath); err != nil {
 		return err
 	} else if info, err := os.Stat(resolvedPath); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a directory", filepath.Clean(filePath))
@@ -326,7 +328,9 @@ func writeFile(filePath, content string) error {
 	})
 }
 
-func previewWriteFile(filePath, content string) (string, error) {
+// PreviewWriteFile describes what WriteFile would do, as a diff, without changing
+// anything.
+func PreviewWriteFile(filePath, content string) (string, error) {
 	existingContent, exists, err := readFileIfExists(filePath)
 	if err != nil {
 		return "", err
@@ -366,7 +370,9 @@ func applyEdit(content, oldText, newText string, replaceAll bool) (string, int, 
 	return updatedContent, replaced, nil
 }
 
-func editFile(filePath, oldText, newText string, replaceAll bool) (int, error) {
+// EditFile replaces oldText with newText in a workspace file and returns how many
+// replacements it made. Unless replaceAll is set, oldText must match exactly once.
+func EditFile(filePath, oldText, newText string, replaceAll bool) (int, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return 0, fmt.Errorf("missing path")
 	}
@@ -396,7 +402,8 @@ func editFile(filePath, oldText, newText string, replaceAll bool) (int, error) {
 	return replaced, nil
 }
 
-func previewEditFile(filePath, oldText, newText string, replaceAll bool) (string, error) {
+// PreviewEditFile shows the diff EditFile would make without changing anything.
+func PreviewEditFile(filePath, oldText, newText string, replaceAll bool) (string, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return "", fmt.Errorf("missing path")
 	}
@@ -423,7 +430,7 @@ func previewEditFile(filePath, oldText, newText string, replaceAll bool) (string
 }
 
 func ensureRegularFile(filePath string) (os.FileInfo, error) {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -439,7 +446,7 @@ func ensureRegularFile(filePath string) (os.FileInfo, error) {
 }
 
 func destinationPathAvailable(filePath string, overwrite bool) error {
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -471,7 +478,7 @@ func rawCopyFile(sourcePath, destinationPath string) error {
 		return err
 	}
 
-	resolvedDestination, _, err := resolveToolPath(destinationPath)
+	resolvedDestination, _, err := ResolvePath(destinationPath)
 	if err != nil {
 		return err
 	}
@@ -491,11 +498,11 @@ func distinctTransferPaths(sourcePath, destinationPath string) error {
 		return fmt.Errorf("source and destination must be different")
 	}
 
-	resolvedSource, _, err := resolveToolPath(sourcePath)
+	resolvedSource, _, err := ResolvePath(sourcePath)
 	if err != nil {
 		return err
 	}
-	resolvedDestination, _, err := resolveToolPath(destinationPath)
+	resolvedDestination, _, err := ResolvePath(destinationPath)
 	if err != nil {
 		return err
 	}
@@ -519,7 +526,9 @@ func sameDirectoryEntry(firstResolvedPath, secondResolvedPath string) bool {
 		strings.EqualFold(normalize(filepath.Base(firstResolvedPath)), normalize(filepath.Base(secondResolvedPath)))
 }
 
-func copyFile(sourcePath, destinationPath string, overwrite bool) error {
+// CopyFile copies a workspace file, refusing to replace an existing destination unless
+// overwrite is set, and records the change for undo.
+func CopyFile(sourcePath, destinationPath string, overwrite bool) error {
 	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
 		return err
 	}
@@ -536,7 +545,8 @@ func copyFile(sourcePath, destinationPath string, overwrite bool) error {
 	})
 }
 
-func previewCopyFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
+// PreviewCopyFile describes what CopyFile would do without changing anything.
+func PreviewCopyFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
 	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
 		return "", err
 	}
@@ -567,7 +577,9 @@ func previewCopyFile(sourcePath, destinationPath string, overwrite bool) (string
 	return fmt.Sprintf("Preview for copy_file from %s to %s:\n%s", filepath.ToSlash(filepath.Clean(sourcePath)), destinationLabel, preview), nil
 }
 
-func moveFile(sourcePath, destinationPath string, overwrite bool) error {
+// MoveFile moves or renames a workspace file, refusing to replace an existing
+// destination unless overwrite is set, and records the change for undo.
+func MoveFile(sourcePath, destinationPath string, overwrite bool) error {
 	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
 		return err
 	}
@@ -579,11 +591,11 @@ func moveFile(sourcePath, destinationPath string, overwrite bool) error {
 		return err
 	}
 
-	resolvedSource, _, err := resolveToolPath(sourcePath)
+	resolvedSource, _, err := ResolvePath(sourcePath)
 	if err != nil {
 		return err
 	}
-	resolvedDestination, _, err := resolveToolPath(destinationPath)
+	resolvedDestination, _, err := ResolvePath(destinationPath)
 	if err != nil {
 		return err
 	}
@@ -609,7 +621,8 @@ func moveFile(sourcePath, destinationPath string, overwrite bool) error {
 	})
 }
 
-func previewMoveFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
+// PreviewMoveFile describes what MoveFile would do without changing anything.
+func PreviewMoveFile(sourcePath, destinationPath string, overwrite bool) (string, error) {
 	if err := distinctTransferPaths(sourcePath, destinationPath); err != nil {
 		return "", err
 	}
@@ -640,12 +653,13 @@ func previewMoveFile(sourcePath, destinationPath string, overwrite bool) (string
 	return fmt.Sprintf("Preview for move_file from %s to %s:\n%s\nSource file %s would be removed after the move.", filepath.ToSlash(filepath.Clean(sourcePath)), destinationLabel, preview, filepath.ToSlash(filepath.Clean(sourcePath))), nil
 }
 
-func deleteFile(filePath string) error {
+// DeleteFile removes a workspace file and records the change for undo.
+func DeleteFile(filePath string) error {
 	if _, err := ensureRegularFile(filePath); err != nil {
 		return err
 	}
 
-	resolvedPath, _, err := resolveToolPath(filePath)
+	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -655,7 +669,8 @@ func deleteFile(filePath string) error {
 	})
 }
 
-func previewDeleteFile(filePath string) (string, error) {
+// PreviewDeleteFile describes what DeleteFile would remove without changing anything.
+func PreviewDeleteFile(filePath string) (string, error) {
 	if _, err := ensureRegularFile(filePath); err != nil {
 		return "", err
 	}
@@ -682,8 +697,10 @@ func skipUnreadable(path, root string, d fs.DirEntry, walkErr error) error {
 	return nil
 }
 
-func readDir(dirPath string) ([]string, error) {
-	resolvedPath, _, err := resolveToolPath(dirPath)
+// ReadDir lists a workspace directory's entries, directories marked with a trailing
+// slash.
+func ReadDir(dirPath string) ([]string, error) {
+	resolvedPath, _, err := ResolvePath(dirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -735,18 +752,14 @@ func matchesPattern(pattern, fileName, relPath string) bool {
 	return false
 }
 
-func findFiles(rootPath, pattern string, limit int) ([]string, bool, error) {
-	return findFilesWith(rootPath, pattern, limit, false)
-}
-
-// findFilesWith finds files by name; unless includeIgnored is set, files .gitignore
+// FindFiles finds files by name; unless includeIgnored is set, files .gitignore
 // excludes are skipped.
-func findFilesWith(rootPath, pattern string, limit int, includeIgnored bool) ([]string, bool, error) {
+func FindFiles(rootPath, pattern string, limit int, includeIgnored bool) ([]string, bool, error) {
 	if limit <= 0 {
 		limit = defaultFindLimit
 	}
 
-	resolvedRoot, _, err := resolveToolPath(rootPath)
+	resolvedRoot, _, err := ResolvePath(rootPath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -797,41 +810,38 @@ func findFilesWith(rootPath, pattern string, limit int, includeIgnored bool) ([]
 	return matches, truncated, nil
 }
 
-func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string, bool, error) {
-	return grepFilesWith(rootPath, grepOptions{query: query, caseSensitive: caseSensitive, limit: limit})
+// GrepOptions configures GrepFiles.
+type GrepOptions struct {
+	Query          string
+	CaseSensitive  bool
+	Regex          bool   // Query is a Go regular expression rather than plain text.
+	Glob           string // Limits the files searched, such as *.go or cmd/*.go.
+	IncludeIgnored bool   // Also search files .gitignore excludes.
+	Limit          int    // Maximum matches; zero means the default.
 }
 
-type grepOptions struct {
-	query          string
-	caseSensitive  bool
-	regex          bool
-	glob           string
-	includeIgnored bool
-	limit          int
-}
-
-// grepFilesWith searches file contents line by line. Unless includeIgnored is set,
+// GrepFiles searches file contents line by line. Unless IncludeIgnored is set,
 // files .gitignore excludes are skipped.
-func grepFilesWith(rootPath string, opts grepOptions) ([]string, bool, error) {
-	query := strings.TrimSpace(opts.query)
+func GrepFiles(rootPath string, opts GrepOptions) ([]string, bool, error) {
+	query := strings.TrimSpace(opts.Query)
 	if query == "" {
 		return nil, false, fmt.Errorf("missing query")
 	}
-	limit := opts.limit
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = defaultGrepLimit
 	}
 
-	resolvedRoot, _, err := resolveToolPath(rootPath)
+	resolvedRoot, _, err := ResolvePath(rootPath)
 	if err != nil {
 		return nil, false, err
 	}
-	matchLine, err := lineMatcher(query, opts.regex, opts.caseSensitive)
+	matchLine, err := lineMatcher(query, opts.Regex, opts.CaseSensitive)
 	if err != nil {
 		return nil, false, err
 	}
 	var ignore *ignoreFilter
-	if !opts.includeIgnored {
+	if !opts.IncludeIgnored {
 		ignore = loadIgnoreFilter()
 	}
 
@@ -850,7 +860,7 @@ func grepFilesWith(rootPath string, opts grepOptions) ([]string, bool, error) {
 			}
 			return nil
 		}
-		if ignore.ignored(relPath, false) || !matchesGlob(opts.glob, relPath) {
+		if ignore.ignored(relPath, false) || !matchesGlob(opts.Glob, relPath) {
 			return nil
 		}
 
@@ -905,12 +915,14 @@ func grepFilesWith(rootPath string, opts grepOptions) ([]string, bool, error) {
 	return matches, truncated, nil
 }
 
-func treeDir(rootPath string, limit int) ([]string, bool, error) {
+// TreeDir lists a directory tree up to limit entries and reports whether it stopped
+// at the limit.
+func TreeDir(rootPath string, limit int) ([]string, bool, error) {
 	if limit <= 0 {
 		limit = defaultTreeLimit
 	}
 
-	resolvedRoot, relRoot, err := resolveToolPath(rootPath)
+	resolvedRoot, relRoot, err := ResolvePath(rootPath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -992,6 +1004,17 @@ func treeDir(rootPath string, limit int) ([]string, bool, error) {
 	}
 
 	return lines, truncated, nil
+}
+
+// DiffLines returns a line diff of two texts. Each line starts with ' ' (unchanged),
+// '-' (removed) or '+' (added) and has no trailing newline.
+func DiffLines(oldText, newText string) []string {
+	ops := computeDiffOps(splitDiffLines(oldText), splitDiffLines(newText))
+	lines := make([]string, 0, len(ops))
+	for _, op := range ops {
+		lines = append(lines, string(op.kind)+strings.TrimSuffix(op.text, "\n"))
+	}
+	return lines
 }
 
 type diffOp struct {
@@ -1129,7 +1152,9 @@ func previewDataChange(oldLabel, newLabel string, oldData, newData []byte) strin
 	return fmt.Sprintf("Binary-safe preview only: %s (%d bytes) -> %s (%d bytes)", oldLabel, len(oldData), newLabel, len(newData))
 }
 
-func runBashCommand(ctx context.Context, command, workdir string) (string, error) {
+// RunBash runs a shell command in workdir, which must be inside the workspace, with
+// credentials removed from its environment, and returns its combined output.
+func RunBash(ctx context.Context, command, workdir string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", fmt.Errorf("missing command")
@@ -1139,7 +1164,7 @@ func runBashCommand(ctx context.Context, command, workdir string) (string, error
 		workdir = "."
 	}
 
-	resolvedDir, relDir, err := resolveToolPath(workdir)
+	resolvedDir, relDir, err := ResolvePath(workdir)
 	if err != nil {
 		return "", err
 	}
@@ -1149,7 +1174,7 @@ func runBashCommand(ctx context.Context, command, workdir string) (string, error
 
 	cmd := exec.CommandContext(runCtx, "bash", "-lc", command)
 	cmd.Dir = resolvedDir
-	cmd.Env = commandEnvironment(os.Environ())
+	cmd.Env = CommandEnvironment(os.Environ())
 	configureProcessGroup(cmd)
 	cmd.WaitDelay = bashPipeWaitDelay
 

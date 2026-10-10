@@ -12,8 +12,8 @@ import (
 
 func seamConfig(t *testing.T, p provider.Provider) *config {
 	t.Helper()
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, true)
 	return &config{
 		model:           provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"},

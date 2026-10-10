@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"os"
@@ -37,7 +37,7 @@ func dirOf(name string) string {
 
 func checkIgnoredSearch(t *testing.T) {
 	t.Helper()
-	matches, _, err := grepFilesWith(".", grepOptions{query: "handler"})
+	matches, _, err := GrepFiles(".", GrepOptions{Query: "handler"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,16 +51,16 @@ func checkIgnoredSearch(t *testing.T) {
 		t.Errorf("expected the tracked files:\n%s", got)
 	}
 
-	all, _, _ := grepFilesWith(".", grepOptions{query: "handler", includeIgnored: true})
+	all, _, _ := GrepFiles(".", GrepOptions{Query: "handler", IncludeIgnored: true})
 	if !strings.Contains(strings.Join(all, "\n"), "build/out.go") {
 		t.Error("expected include_ignored to search ignored files")
 	}
 
-	files, _, _ := findFilesWith(".", "*.go", 0, false)
+	files, _, _ := FindFiles(".", "*.go", 0, false)
 	if strings.Contains(strings.Join(files, " "), "build") || len(files) != 2 {
 		t.Errorf("find_files: %v", files)
 	}
-	tree, _, _ := treeDir(".", 0)
+	tree, _, _ := TreeDir(".", 0)
 	if strings.Contains(strings.Join(tree, "\n"), "build/") {
 		t.Errorf("tree_dir lists ignored dirs:\n%s", strings.Join(tree, "\n"))
 	}
@@ -68,7 +68,7 @@ func checkIgnoredSearch(t *testing.T) {
 
 func TestSearchSkipsIgnoredFilesWithoutGit(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 	t.Setenv("GIT_DIR", workspace+"/no-such-git-dir")
 	writeSearchFixture(t)
 	checkIgnoredSearch(t)
@@ -79,7 +79,7 @@ func TestSearchSkipsIgnoredFilesInGit(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 	if out, err := exec.Command("git", "init", "-q").CombinedOutput(); err != nil {
 		t.Skipf("git init failed: %s", out)
 	}
@@ -89,40 +89,40 @@ func TestSearchSkipsIgnoredFilesInGit(t *testing.T) {
 
 func TestGrepRegexAndGlob(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 	writeSearchFixture(t)
 
-	matches, _, err := grepFilesWith(".", grepOptions{query: `func [A-Z]\w+\(`, regex: true, caseSensitive: true})
+	matches, _, err := GrepFiles(".", GrepOptions{Query: `func [A-Z]\w+\(`, Regex: true, CaseSensitive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(matches) != 1 || !strings.HasPrefix(matches[0], "main.go:2:") {
 		t.Fatalf("regex matches: %v", matches)
 	}
-	if matches, _, _ := grepFilesWith(".", grepOptions{query: "handler", glob: "*.md"}); len(matches) != 1 || !strings.HasPrefix(matches[0], "docs/notes.md") {
+	if matches, _, _ := GrepFiles(".", GrepOptions{Query: "handler", Glob: "*.md"}); len(matches) != 1 || !strings.HasPrefix(matches[0], "docs/notes.md") {
 		t.Fatalf("glob matches: %v", matches)
 	}
-	if _, _, err := grepFilesWith(".", grepOptions{query: "(", regex: true}); err == nil {
+	if _, _, err := GrepFiles(".", GrepOptions{Query: "(", Regex: true}); err == nil {
 		t.Fatal("expected an invalid regex to fail")
 	}
 }
 
 func TestReadFileLines(t *testing.T) {
 	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	t.Chdir(workspace)
 	os.WriteFile("f.txt", []byte("1\n2\n3\n4\n5\n"), 0o644)
 
-	text, first, last, total, err := readFileLines("f.txt", 2, 3)
+	text, first, last, total, err := ReadFileLines("f.txt", 2, 3)
 	if err != nil || text != "2\n3\n4" || first != 2 || last != 4 || total != 5 {
 		t.Fatalf("got %q %d-%d of %d (%v)", text, first, last, total, err)
 	}
-	if text, _, _, _, _ := readFileLines("f.txt", 4, 0); text != "4\n5" {
+	if text, _, _, _, _ := ReadFileLines("f.txt", 4, 0); text != "4\n5" {
 		t.Fatalf("to the end: %q", text)
 	}
-	if _, _, _, _, err := readFileLines("f.txt", 9, 1); err == nil {
+	if _, _, _, _, err := ReadFileLines("f.txt", 9, 1); err == nil {
 		t.Fatal("expected an offset past the end to fail")
 	}
-	if _, _, _, _, err := readFileLines(".env", 1, 1); err == nil {
+	if _, _, _, _, err := ReadFileLines(".env", 1, 1); err == nil {
 		t.Fatal("expected secret files to stay closed")
 	}
 }

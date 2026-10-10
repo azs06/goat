@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 var (
@@ -156,7 +157,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		entries, err := readDir(args.Path)
+		entries, err := workspace.ReadDir(args.Path)
 		if err != nil {
 			return "", err
 		}
@@ -172,7 +173,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		lines, truncated, err := treeDir(args.Path, args.Limit)
+		lines, truncated, err := workspace.TreeDir(args.Path, args.Limit)
 		if err != nil {
 			return "", err
 		}
@@ -191,7 +192,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Offset > 0 || args.Limit > 0 {
-			text, first, last, total, err := readFileLines(args.Path, args.Offset, args.Limit)
+			text, first, last, total, err := workspace.ReadFileLines(args.Path, args.Offset, args.Limit)
 			if err != nil {
 				return "", err
 			}
@@ -200,7 +201,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			}
 			return fmt.Sprintf("File contents for %s (lines %d-%d of %d):\n%s", filepath.Clean(args.Path), first, last, total, text), nil
 		}
-		content, err := readFileForModel(args.Path)
+		content, err := workspace.ReadFileForModel(args.Path)
 		if err != nil {
 			return "", err
 		}
@@ -218,9 +219,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", fmt.Errorf("missing path")
 		}
 		if args.Preview {
-			return previewWriteFile(args.Path, args.Content)
+			return workspace.PreviewWriteFile(args.Path, args.Content)
 		}
-		if err := writeFile(args.Path, args.Content); err != nil {
+		if err := workspace.WriteFile(args.Path, args.Content); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("File %s written successfully.", filepath.Clean(args.Path)), nil
@@ -236,9 +237,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewEditFile(args.Path, args.OldText, args.NewText, args.ReplaceAll)
+			return workspace.PreviewEditFile(args.Path, args.OldText, args.NewText, args.ReplaceAll)
 		}
-		replaced, err := editFile(args.Path, args.OldText, args.NewText, args.ReplaceAll)
+		replaced, err := workspace.EditFile(args.Path, args.OldText, args.NewText, args.ReplaceAll)
 		if err != nil {
 			return "", err
 		}
@@ -255,9 +256,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewEditJSONFile(args.Path, args.JSONPath, args.Operation, args.ValueJSON)
+			return workspace.PreviewEditJSONFile(args.Path, args.JSONPath, args.Operation, args.ValueJSON)
 		}
-		if err := editJSONFile(args.Path, args.JSONPath, args.Operation, args.ValueJSON); err != nil {
+		if err := workspace.EditJSONFile(args.Path, args.JSONPath, args.Operation, args.ValueJSON); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("JSON file %s updated successfully.", filepath.Clean(args.Path)), nil
@@ -267,9 +268,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewCopyFile(args.SourcePath, args.DestinationPath, args.Overwrite)
+			return workspace.PreviewCopyFile(args.SourcePath, args.DestinationPath, args.Overwrite)
 		}
-		if err := copyFile(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
+		if err := workspace.CopyFile(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("File %s copied to %s successfully.", filepath.Clean(args.SourcePath), filepath.Clean(args.DestinationPath)), nil
@@ -279,9 +280,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewMoveFile(args.SourcePath, args.DestinationPath, args.Overwrite)
+			return workspace.PreviewMoveFile(args.SourcePath, args.DestinationPath, args.Overwrite)
 		}
-		if err := moveFile(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
+		if err := workspace.MoveFile(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("File %s moved to %s successfully.", filepath.Clean(args.SourcePath), filepath.Clean(args.DestinationPath)), nil
@@ -294,9 +295,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewDeleteFile(args.Path)
+			return workspace.PreviewDeleteFile(args.Path)
 		}
-		if err := deleteFile(args.Path); err != nil {
+		if err := workspace.DeleteFile(args.Path); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("File %s deleted successfully.", filepath.Clean(args.Path)), nil
@@ -306,9 +307,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewCopyDir(args.SourcePath, args.DestinationPath, args.Overwrite)
+			return workspace.PreviewCopyDir(args.SourcePath, args.DestinationPath, args.Overwrite)
 		}
-		if err := copyDir(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
+		if err := workspace.CopyDir(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Directory %s copied to %s successfully.", filepath.Clean(args.SourcePath), filepath.Clean(args.DestinationPath)), nil
@@ -318,9 +319,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewMoveDir(args.SourcePath, args.DestinationPath, args.Overwrite)
+			return workspace.PreviewMoveDir(args.SourcePath, args.DestinationPath, args.Overwrite)
 		}
-		if err := moveDir(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
+		if err := workspace.MoveDir(args.SourcePath, args.DestinationPath, args.Overwrite); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Directory %s moved to %s successfully.", filepath.Clean(args.SourcePath), filepath.Clean(args.DestinationPath)), nil
@@ -333,9 +334,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewDeleteDir(args.Path)
+			return workspace.PreviewDeleteDir(args.Path)
 		}
-		if err := deleteDir(args.Path); err != nil {
+		if err := workspace.DeleteDir(args.Path); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Directory %s deleted successfully.", filepath.Clean(args.Path)), nil
@@ -347,9 +348,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 			return "", err
 		}
 		if args.Preview {
-			return previewUndoLastChange()
+			return workspace.PreviewUndoLastChange()
 		}
-		return undoLastChange()
+		return workspace.UndoLastChange()
 	case "run_bash":
 		var args struct {
 			Command string `json:"command"`
@@ -366,7 +367,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 				return "", err
 			}
 		}
-		return runBashCommand(ctx, args.Command, args.Workdir)
+		return workspace.RunBash(ctx, args.Command, args.Workdir)
 	case "find_files":
 		var args struct {
 			Path           string `json:"path"`
@@ -377,7 +378,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		matches, truncated, err := findFilesWith(args.Path, args.Pattern, args.Limit, args.IncludeIgnored)
+		matches, truncated, err := workspace.FindFiles(args.Path, args.Pattern, args.Limit, args.IncludeIgnored)
 		if err != nil {
 			return "", err
 		}
@@ -406,7 +407,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 		if err := decodeToolArguments(toolCall.Arguments, &args); err != nil {
 			return "", err
 		}
-		matches, truncated, err := grepFilesWith(args.Path, grepOptions{query: args.Query, regex: args.Regex, glob: args.Glob, caseSensitive: args.CaseSensitive, limit: args.Limit, includeIgnored: args.IncludeIgnored})
+		matches, truncated, err := workspace.GrepFiles(args.Path, workspace.GrepOptions{Query: args.Query, Regex: args.Regex, Glob: args.Glob, CaseSensitive: args.CaseSensitive, Limit: args.Limit, IncludeIgnored: args.IncludeIgnored})
 		if err != nil {
 			return "", err
 		}

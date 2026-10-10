@@ -11,8 +11,8 @@ import (
 )
 
 func TestProjectInstructionsGoWithTheFirstMessageOnly(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	os.MkdirAll(filepath.Join(config, "goat"), 0o755)

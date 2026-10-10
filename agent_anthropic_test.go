@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -220,8 +222,8 @@ func contentTypes(message any) []string {
 }
 
 func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").thinking("sig-1").text("Let me look.").toolUse("toolu_1", "read_dir", `{"path":`, `"."}`).stop("tool_use", ""),
@@ -312,8 +314,8 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 }
 
 func TestAnthropicCustomBaseURLSkipsOfficialOnlyFeatures(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hi").stop("end_turn", ""))
 	if _, err := sendPromptStream(context.Background(), fake.provider(false), "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
@@ -335,8 +337,8 @@ func lastBlockCacheControl(message any) any {
 }
 
 func TestAnthropicCustomBaseURLMarksOnlyTheNewestMessageForCaching(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
@@ -366,8 +368,8 @@ func TestAnthropicCustomBaseURLMarksOnlyTheNewestMessageForCaching(t *testing.T)
 }
 
 func TestAnthropicOneOffCallsAreNotCached(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("summary").stop("end_turn", ""))
 	if _, err := fake.provider(true).Complete(context.Background(), "claude-opus-5-5", "Summarize.", "history"); err != nil {
@@ -383,8 +385,8 @@ func TestAnthropicOneOffCallsAreNotCached(t *testing.T) {
 }
 
 func TestAnthropicLegacyModelsGetNoThinkingOrEffort(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hi").stop("end_turn", ""))
 	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, "claude-haiku-4-5-20251001", provider.EffortHigh); err != nil {
@@ -403,8 +405,8 @@ func TestAnthropicLegacyModelsGetNoThinkingOrEffort(t *testing.T) {
 }
 
 func TestAnthropicRefusalDiscardsTheResponse(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("I can").stop("refusal", `,"stop_details":{"type":"refusal","category":"cyber","explanation":"policy"}`))
 	start := conversationState{
@@ -422,8 +424,8 @@ func TestAnthropicRefusalDiscardsTheResponse(t *testing.T) {
 }
 
 func TestAnthropicIncompleteStreamIsRetriedAndNeverStored(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }
@@ -448,8 +450,8 @@ func TestAnthropicIncompleteStreamIsRetriedAndNeverStored(t *testing.T) {
 }
 
 func TestAnthropicOverloadedStreamErrorIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }
@@ -466,8 +468,8 @@ func TestAnthropicOverloadedStreamErrorIsRetried(t *testing.T) {
 }
 
 func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").toolUse("toolu_1", "write_file", `{"path":"a.txt","content":"par`).stop("max_tokens", ""),
@@ -479,7 +481,7 @@ func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cut off") {
 		t.Fatalf("expected a cut-off error, got %v", err)
 	}
-	if _, statErr := statFile(workspace, "a.txt"); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(workDir, "a.txt")); statErr == nil {
 		t.Fatal("expected the cut-off write not to run")
 	}
 	if len(conv.pendingToolResults) != 1 || !conv.pendingToolResults[0].IsError {
@@ -496,21 +498,23 @@ func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
 }
 
 func TestAnthropicFallbackTurnOnlyRunsServedToolCalls(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").thinking("sig-declined").text("Partial ").toolUse("toolu_declined", "delete_dir", `{"path":"src"}`).
 			fallback("claude-opus-5-5", "claude-opus-4-8").text("Served.").toolUse("toolu_served", "read_dir", `{"path":"."}`).stop("tool_use", ""),
 		newSSE("msg_2").text("done").stop("end_turn", ""),
 	)
-	mkdirAll(t, workspace, "src")
+	if err := os.Mkdir(filepath.Join(workDir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	conv, err := sendPromptStream(context.Background(), fake.provider(true), "go", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
 	if err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
-	if _, statErr := statFile(workspace, "src"); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(workDir, "src")); statErr != nil {
 		t.Fatal("expected the declined delete_dir not to run")
 	}
 
@@ -528,8 +532,8 @@ func TestAnthropicFallbackTurnOnlyRunsServedToolCalls(t *testing.T) {
 }
 
 func TestAnthropicFallbacksAreDroppedWhenRejected(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""), newSSE("msg_2").text("ok").stop("end_turn", ""))
 	fake.reject = func(body map[string]any) (int, string, bool) {
@@ -555,8 +559,8 @@ func TestAnthropicFallbacksAreDroppedWhenRejected(t *testing.T) {
 }
 
 func TestAnthropicAnswersEveryUnansweredToolUse(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""))
 	start := conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{
@@ -574,8 +578,8 @@ func TestAnthropicAnswersEveryUnansweredToolUse(t *testing.T) {
 }
 
 func TestAnthropicCompactionSeedsATranscript(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	recordHistory(historyEntry{Type: "user", Content: "Please fix the parser."})
 	recordHistory(historyEntry{Type: "assistant", Content: "Working on it.", ResponseID: "msg_old", Provider: provider.Anthropic})
@@ -604,8 +608,8 @@ func TestAnthropicCompactionSeedsATranscript(t *testing.T) {
 }
 
 func TestAnthropicThinkingBindingErrorIsRecognised(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t)
 	fake.reject = func(body map[string]any) (int, string, bool) {
@@ -622,8 +626,8 @@ func TestAnthropicThinkingBindingErrorIsRecognised(t *testing.T) {
 }
 
 func TestAnthropicDroppedConnectionIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }

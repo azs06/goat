@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 const defaultHistoryPath = ".goat/history.jsonl"
@@ -88,7 +89,7 @@ var historyCache struct {
 // by a crash, so one bad line does not make the whole history unreadable. The returned
 // slice must not be modified.
 func loadConversationHistoryEntries() ([]historyEntry, error) {
-	resolvedPath, _, err := resolveStatePath(conversationHistoryPath())
+	resolvedPath, _, err := workspace.ResolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func appendHistoryEntry(entry historyEntry) error {
 		entry.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 
-	resolvedPath, _, err := resolveStatePath(conversationHistoryPath())
+	resolvedPath, _, err := workspace.ResolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return err
 	}

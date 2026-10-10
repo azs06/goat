@@ -10,8 +10,8 @@ import (
 
 func outputTestHistory(t *testing.T) {
 	t.Helper()
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	for _, entry := range []historyEntry{
 		{Type: "user", Content: "look around"},
 		{Type: "tool_call", ToolName: "run_bash", Arguments: `{"command":"seq 3"}`, ResponseID: "r1"},

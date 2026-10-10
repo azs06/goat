@@ -13,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // fakeProvider is a scripted Provider for tests that do not care about the wire format.
@@ -88,8 +89,8 @@ func newModelTestConfig(t *testing.T, current provider.Model, providers ...*fake
 }
 
 func TestSwitchModelRequiresTheProvidersAPIKey(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI})
@@ -103,8 +104,8 @@ func TestSwitchModelRequiresTheProvidersAPIKey(t *testing.T) {
 }
 
 func TestSwitchModelWithinAProviderKeepsTheConversation(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI})
@@ -124,8 +125,8 @@ func TestSwitchModelWithinAProviderKeepsTheConversation(t *testing.T) {
 }
 
 func TestSwitchModelAcrossProvidersCarriesASummary(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 	recordHistory(historyEntry{Type: "user", Content: "Refactor the parser."})
 
@@ -157,8 +158,8 @@ func TestSwitchModelAcrossProvidersCarriesASummary(t *testing.T) {
 }
 
 func TestFailedProviderSwitchChangesNothing(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 	recordHistory(historyEntry{Type: "user", Content: "Refactor the parser."})
 
@@ -175,8 +176,8 @@ func TestFailedProviderSwitchChangesNothing(t *testing.T) {
 }
 
 func TestSwitchModelByNumberFromTheListing(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, true)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: provider.DefaultAnthropicModel}, &fakeProvider{name: provider.Anthropic})
@@ -199,8 +200,8 @@ func TestSwitchModelByNumberFromTheListing(t *testing.T) {
 }
 
 func TestModelListIncludesLiveModels(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, true)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: provider.DefaultAnthropicModel}, &fakeProvider{name: provider.Anthropic, listed: []string{"claude-opus-5-5-20261001", "claude-opus-4-8"}})
@@ -217,8 +218,8 @@ func TestModelListIncludesLiveModels(t *testing.T) {
 }
 
 func TestSessionRoundTripAndCorruptFile(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	cfg := &config{
 		model:           provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"},
@@ -230,7 +231,7 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 	}
 	saveSession(cfg)
 
-	info, err := os.Stat(filepath.Join(workspace, ".goat", "session.json"))
+	info, err := os.Stat(filepath.Join(workDir, ".goat", "session.json"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("expected a private session file, got %v (%v)", info.Mode().Perm(), err)
 	}
@@ -242,18 +243,18 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 		t.Fatalf("unexpected session %+v", saved)
 	}
 
-	os.WriteFile(filepath.Join(workspace, ".goat", "session.json"), []byte("{broken"), 0600)
+	os.WriteFile(filepath.Join(workDir, ".goat", "session.json"), []byte("{broken"), 0600)
 	if saved, err := loadSessionFile(sessionPath); err != nil || saved != nil {
 		t.Fatalf("expected a corrupt session to be set aside, got %+v (%v)", saved, err)
 	}
-	if matches, _ := filepath.Glob(filepath.Join(workspace, ".goat", "session.json.corrupt-*")); len(matches) != 1 {
+	if matches, _ := filepath.Glob(filepath.Join(workDir, ".goat", "session.json.corrupt-*")); len(matches) != 1 {
 		t.Fatalf("expected the corrupt file to be kept aside, found %d", len(matches))
 	}
 }
 
 func TestStartupPrecedence(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 
 	saved := &savedSession{Version: sessionVersion, Model: "anthropic:claude-sonnet-5-5", Effort: "high"}
@@ -288,8 +289,8 @@ func TestStartupPrecedence(t *testing.T) {
 }
 
 func TestLoadConfigRestoresMatchingSessionAndSetsAsideOthers(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 
 	session := savedSession{Version: sessionVersion, Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}, PromptFingerprint: promptFingerprint()}
@@ -318,8 +319,8 @@ func TestLoadConfigRestoresMatchingSessionAndSetsAsideOthers(t *testing.T) {
 }
 
 func TestLoadConfigFallsBackWhenSavedProviderHasNoKey(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, Model: "anthropic:claude-opus-5-5"})
@@ -329,8 +330,8 @@ func TestLoadConfigFallsBackWhenSavedProviderHasNoKey(t *testing.T) {
 }
 
 func TestStaleConversationIsCompactedBeforeUse(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	recordHistory(historyEntry{Type: "user", Content: "earlier work"})
 
 	p := &fakeProvider{name: provider.Anthropic, summary: "Summary."}
@@ -348,8 +349,8 @@ func TestStaleConversationIsCompactedBeforeUse(t *testing.T) {
 }
 
 func TestRunPromptSavesTheSessionAfterEveryToolRound(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	var saves []savedSession
 	previousSaver := sessionSaver
@@ -379,10 +380,10 @@ func TestRunPromptSavesTheSessionAfterEveryToolRound(t *testing.T) {
 }
 
 func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
-	if err := writeFile("a.txt", "keep"); err != nil {
+	if err := workspace.WriteFile("a.txt", "keep"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	for _, call := range []provider.ToolCall{
@@ -395,7 +396,7 @@ func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
 			t.Errorf("%s %s: expected a validation error", call.Name, call.Arguments)
 		}
 	}
-	if data, _ := os.ReadFile(filepath.Join(workspace, "a.txt")); string(data) != "keep" {
+	if data, _ := os.ReadFile(filepath.Join(workDir, "a.txt")); string(data) != "keep" {
 		t.Fatalf("expected the file untouched, got %q", data)
 	}
 	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}); err != nil {
@@ -404,8 +405,8 @@ func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
 }
 
 func TestOpenAIRefusalThroughTheLoopKeepsPendingResults(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		var resp responses.Response
@@ -424,8 +425,8 @@ func TestOpenAIRefusalThroughTheLoopKeepsPendingResults(t *testing.T) {
 }
 
 func TestResumedConversationFindsItsOwnHistory(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI, summary: "s"})
@@ -453,8 +454,8 @@ func TestResumedConversationFindsItsOwnHistory(t *testing.T) {
 }
 
 func TestStartupSwapsInThePreviousConversationForTheProvider(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 
 	anthropicSession := savedSession{Version: sessionVersion, ConversationID: "cA", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"a":1}`)}}}
@@ -474,8 +475,8 @@ func TestStartupSwapsInThePreviousConversationForTheProvider(t *testing.T) {
 }
 
 func TestStartupMismatchStartsASeparateConversation(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, true)
 
 	activeConversationID = "cA"
@@ -508,8 +509,8 @@ func TestOpenAIConversationsAreNeverStale(t *testing.T) {
 }
 
 func TestStartupSkipsModelsWithoutCredentials(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	setCredentials(t, false, true)
 	t.Setenv("GOAT_MODEL", "gpt-6-luna")
@@ -526,8 +527,8 @@ func TestStartupSkipsModelsWithoutCredentials(t *testing.T) {
 }
 
 func TestModelPickerRejectsUnknownWords(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI})
@@ -543,8 +544,8 @@ func TestModelPickerRejectsUnknownWords(t *testing.T) {
 }
 
 func TestConversationWithoutIDKeepsItsHistoryAcrossClearAndResume(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	// A conversation from before entries had IDs.
@@ -572,8 +573,8 @@ func TestConversationWithoutIDKeepsItsHistoryAcrossClearAndResume(t *testing.T) 
 }
 
 func TestFreshStartGetsAConversationID(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, true)
 
 	loadConfig()
@@ -583,8 +584,8 @@ func TestFreshStartGetsAConversationID(t *testing.T) {
 }
 
 func TestSavingKeepsAStaleConversationStale(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, true)
 
 	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "c1", Model: "anthropic:claude-opus-5-5", PromptFingerprint: "older", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
@@ -601,8 +602,8 @@ func TestSavingKeepsAStaleConversationStale(t *testing.T) {
 }
 
 func TestCompactionSummaryIsCountedOnce(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	p := &fakeProvider{name: provider.OpenAI, summary: "UNIQUESUMMARY", completeFailures: 1}
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, p)
@@ -626,8 +627,8 @@ func TestCompactionSummaryIsCountedOnce(t *testing.T) {
 }
 
 func TestAdoptingAnEmptyConversationUsesTheCurrentPrompt(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	cfg := &config{model: provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}}
 	adoptSavedConversation(cfg, &savedSession{ConversationID: "c1", PromptFingerprint: "older-goat"})
@@ -639,8 +640,8 @@ func TestAdoptingAnEmptyConversationUsesTheCurrentPrompt(t *testing.T) {
 }
 
 func TestLegacyResumeUsesTheResponsesOwnHistory(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, true, false)
 
 	recordHistory(historyEntry{Type: "user", Content: "LEGACY"})
