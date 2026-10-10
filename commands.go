@@ -37,6 +37,7 @@ func init() {
 	list := []*cliCommand{
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
+		{name: "diff", usage: "/diff [staged]", description: "Show the uncommitted changes in the workspace's git repository", callback: commandDiff},
 		{name: "copy", usage: "/copy", description: "Copy the last reply to the clipboard", callback: commandCopy},
 		{name: "export", usage: "/export [file]", description: "Write the conversation to a Markdown file", callback: commandExport},
 		{name: "output", usage: "/output [n]", description: "Show a tool call's full output (n=1 is the latest)", callback: commandOutput},
@@ -352,6 +353,13 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	rows = append(rows, [2]string{"Session:", conversation})
 	if entries, err := loadConversationHistoryEntries(); err == nil {
 		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d", estimateConversationTokens(entries), autoCompactThreshold(c))})
+		if cost, responses, known := usageCost(historyEntriesSinceLastReset(entries)); responses > 0 {
+			text := formatCost(cost) + " for this conversation"
+			if !known {
+				text += style.Muted.Render(" (some responses came from models without a price; see prices.json in the readme)")
+			}
+			rows = append(rows, [2]string{"Cost:", text})
+		}
 		if usage := conversationCacheUsage(entries); usage.responses > 0 {
 			cache := fmt.Sprintf("%d%% of %d input tokens read from cache over %d response(s)", usage.read*100/usage.promptTokens, usage.promptTokens, usage.responses)
 			if usage.written > 0 {

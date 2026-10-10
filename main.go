@@ -357,6 +357,7 @@ func handleInput(cfg *config, text string) error {
 	// On an interactive color terminal, what is typed while the work runs is queued.
 	queueing := cfg.interactive && style.Enabled()
 	started := time.Now()
+	before, _ := loadConversationHistoryEntries()
 	err = runWithInputGuard(queueing, func() error {
 		if queueing {
 			fmt.Print(bracketedPasteOn)
@@ -372,7 +373,7 @@ func handleInput(cfg *config, text string) error {
 	if cmd == nil && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
-			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed))
+			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed, turnCostText(before)))
 		}
 	}
 	return err
@@ -401,6 +402,9 @@ func printWelcome(cfg *config) {
 // footerParts is the status shown under the interactive prompt.
 func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
+	if state, ok := readGitState(); ok {
+		parts = append(parts, state.footerText())
+	}
 	if !cfg.conversation.conversation.IsEmpty() {
 		if entries, err := loadConversationHistoryEntries(); err == nil {
 			parts = append(parts, "~"+formatTokenCount(estimateConversationTokens(entries))+" ctx")

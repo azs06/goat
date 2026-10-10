@@ -40,8 +40,8 @@ queued message back to edit. After Ctrl-C or a failed turn nothing queued is sen
 put back in the prompt instead. While the reply is streaming the line is hidden, but what you type is
 kept. Queueing needs an interactive color terminal.
 
-The prompt sits between two rules, with a footer showing the model, the effort and the
-conversation's approximate size. Typing `/` opens a menu of matching commands in place of
+The prompt sits between two rules, with a footer showing the model, the effort, the git
+branch and how many files are changed, and the conversation's approximate size. Typing `/` opens a menu of matching commands in place of
 the footer:
 
 | Key | |
@@ -96,6 +96,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
 | `/retry` | Send the last prompt again. |
 | `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Long output opens in `$PAGER` or `less`. |
+| `/diff [staged]` | Show the uncommitted changes in the workspace's git repository (in the pager when long). |
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
@@ -137,12 +138,28 @@ searches everything. Every tool that changes files accepts `preview=true`, which
 diff without changing anything. A turn can make up to 40 rounds of tool calls; past that goat stops and asks you
 to send another message to continue.
 
+## Cost
+
+After each turn the "Worked for" line shows what the turn cost, and `/status` shows the
+conversation's total, both worked out from the token usage the API reports, cache reads
+and writes included. Prices are built in for the Claude models; for others, or to use
+your own rates, add them in US dollars per million tokens to
+`~/.config/goat/prices.json`:
+
+```json
+{"gpt-6-luna": {"input": 1.25, "output": 10, "cache_read": 0.125},
+ "deepseek-v4-pro": {"input": 0.5, "output": 2, "cache_read": 0.05}}
+```
+
+A cost followed by `+` leaves out responses from models without a price.
+
 ## Project instructions
 
 Put notes for the agent in `AGENTS.md` at the workspace root (`GOAT.md` or `CLAUDE.md`
 are used when there is no `AGENTS.md`), and personal ones in `~/.config/goat/AGENTS.md`.
 They are sent at the start of every new conversation, including one that starts from a
-`/compact` summary. They go with the first message rather than into the system prompt,
+`/compact` summary, together with the git branch and the list of uncommitted changes when
+the workspace is a repository. They go with the first message rather than into the system prompt,
 so the cached prompt prefix stays the same and editing them costs no cache. `/status`
 shows which files are in use.
 
@@ -299,7 +316,7 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
 | `search.go`, `secrets.go` | `.gitignore` filtering, grep matching, ranged reads; keeping credentials out of tools |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
-| `output.go` | `/output`, `/copy`, `/export` and the pager |
+| `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |

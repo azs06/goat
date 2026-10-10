@@ -37,6 +37,8 @@ type historyEntry struct {
 	PromptTokens     int64 `json:"prompt_tokens,omitempty"`
 	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	// Model is the model that produced the response, for pricing.
+	Model string `json:"model,omitempty"`
 	// Provider is the API the entry belongs to; empty for entries from before goat
 	// supported more than one.
 	Provider string `json:"provider,omitempty"`
@@ -46,7 +48,8 @@ type historyEntry struct {
 }
 
 // withUsage records a response's token usage on entry.
-func withUsage(entry historyEntry, usage provider.Usage) historyEntry {
+func withUsage(entry historyEntry, usage provider.Usage, model string) historyEntry {
+	entry.Model = model
 	entry.ContextTokens = usage.ContextTokens()
 	entry.PromptTokens = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
 	entry.CacheReadTokens = usage.CacheReadTokens

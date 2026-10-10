@@ -63,17 +63,19 @@ func findProjectInstructions() []instructionFile {
 	return found
 }
 
-// projectInstructionsText is the block prepended to a conversation's first message,
-// or "" when there are no instruction files.
+// projectInstructionsText is the block prepended to a conversation's first message:
+// the instruction files and the state of the git repository. It is "" when there is
+// neither.
 func projectInstructionsText() string {
-	files := findProjectInstructions()
-	if len(files) == 0 {
-		return ""
-	}
 	var b strings.Builder
-	b.WriteString("Instructions for this project, written by the user. Follow them unless the user says otherwise.\n")
-	for _, file := range files {
-		fmt.Fprintf(&b, "\n<instructions source=%q>\n%s\n</instructions>\n", file.label, file.content)
+	if files := findProjectInstructions(); len(files) > 0 {
+		b.WriteString("Instructions for this project, written by the user. Follow them unless the user says otherwise.\n")
+		for _, file := range files {
+			fmt.Fprintf(&b, "\n<instructions source=%q>\n%s\n</instructions>\n", file.label, file.content)
+		}
+	}
+	if git := gitContextText(); git != "" {
+		fmt.Fprintf(&b, "\n<workspace>\n%s</workspace>\n", git)
 	}
 	return b.String()
 }

@@ -241,7 +241,7 @@ func logToolCallResult(toolCall provider.ToolCall, output string, err error, ela
 // runToolCalls executes every tool call in resp and returns one result per call. Once
 // ctx is cancelled the remaining calls are answered without being run, so the results
 // always cover every call.
-func runToolCalls(ctx context.Context, providerName string, resp *provider.Response) []provider.ToolResult {
+func runToolCalls(ctx context.Context, providerName, model string, resp *provider.Response) []provider.ToolResult {
 	var results []provider.ToolResult
 
 	for _, toolCall := range resp.ToolCalls {
@@ -253,7 +253,7 @@ func runToolCalls(ctx context.Context, providerName string, resp *provider.Respo
 		}
 
 		logToolCallStart(toolCall)
-		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage))
+		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, model))
 
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
@@ -341,7 +341,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		var stopErr error
 		switch resp.Stop {
 		case provider.StopToolUse:
-			results = runToolCalls(ctx, providerName, resp)
+			results = runToolCalls(ctx, providerName, model, resp)
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
 		case provider.StopContextExceeded:
@@ -355,7 +355,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 		next := conversationState{conversation: resp.Conversation, pendingToolResults: results}
 		if len(results) == 0 {
-			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage))
+			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, model))
 			if stopErr != nil {
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			}

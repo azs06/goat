@@ -168,9 +168,16 @@ func renderUserMessage(text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderWorked is the summary under a finished turn.
-func renderWorked(elapsed time.Duration) string {
-	return style.Subtle.Render("✻ Worked for " + formatElapsed(elapsed.Truncate(time.Second)))
+// renderWorked is the summary under a finished turn; details, such as its cost, follow
+// the time.
+func renderWorked(elapsed time.Duration, details ...string) string {
+	line := "✻ Worked for " + formatElapsed(elapsed.Truncate(time.Second))
+	for _, detail := range details {
+		if detail != "" {
+			line += " " + style.Glyphs().Dot + " " + detail
+		}
+	}
+	return style.Subtle.Render(line)
 }
 
 // renderApprovalCard is the framed run_bash approval question, ending with the input
