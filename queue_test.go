@@ -144,8 +144,7 @@ func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
 		newSSE("msg_2").text("Done.").stop("end_turn", ""),
 	)
 	steering := []string{"also check the tests"}
-	previous := takeSteering
-	takeSteering = func() string {
+	takeSteering := func() string {
 		if len(steering) == 0 {
 			return ""
 		}
@@ -153,9 +152,8 @@ func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
 		steering = steering[1:]
 		return text
 	}
-	t.Cleanup(func() { takeSteering = previous })
 
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "list files", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "list files", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium, takeSteering: takeSteering}); err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 

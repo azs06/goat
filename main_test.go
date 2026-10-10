@@ -86,7 +86,7 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files twice", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files twice", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello history", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello history", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
 		return nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "retry please", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "retry please", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
@@ -242,7 +242,7 @@ func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T
 		}
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "partial retry", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "partial retry", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected interrupted partial output to return an error")
 	}
@@ -283,7 +283,7 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 		return nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "still limited", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "still limited", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected rate-limit exhaustion to return an error")
 	}
@@ -342,7 +342,7 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "run a large bash command", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "run a large bash command", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("sendPromptStream returned error: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.
 		}
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected follow-up failure to be returned")
 	}
@@ -419,7 +419,7 @@ func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.
 		t.Fatalf("expected the undelivered tool output to be kept, got %d", len(conv.pendingToolResults))
 	}
 
-	conv, err = sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "try again", conv, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err = sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "try again", conv, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("expected the next prompt to succeed, got %v", err)
 	}
@@ -462,7 +462,7 @@ func TestSendPromptStreamAnswersRemainingCallsWhenInterrupted(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(ctx, provider.NewOpenAIWith(nil, stream), "list", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(ctx, provider.NewOpenAIWith(nil, stream), "list", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -489,7 +489,7 @@ func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "loop forever", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "loop forever", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil || !strings.Contains(err.Error(), "tool rounds") {
 		t.Fatalf("expected tool round limit error, got %v", err)
 	}

@@ -392,7 +392,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		rows = append(rows, [2]string{"Instructions:", strings.Join(sources, ", ")})
 	}
-	if planMode {
+	if c.planMode {
 		rows = append(rows, [2]string{"Plan mode:", "on (changes are refused)"})
 	}
 	if c.approver != nil {

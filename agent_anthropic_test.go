@@ -239,7 +239,7 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 	}
 	p := fake.provider(true)
 
-	conv, err := sendPromptStream(context.Background(), p, "list files", conversationState{}, "claude-opus-5-5", provider.EffortHigh)
+	conv, err := sendPromptStream(context.Background(), p, "list files", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortHigh})
 	if err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestAnthropicCustomBaseURLSkipsOfficialOnlyFeatures(t *testing.T) {
 	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hi").stop("end_turn", ""))
-	if _, err := sendPromptStream(context.Background(), fake.provider(false), "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(false), "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 
@@ -344,7 +344,7 @@ func TestAnthropicCustomBaseURLMarksOnlyTheNewestMessageForCaching(t *testing.T)
 		newSSE("msg_1").toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
 		newSSE("msg_2").text("Done.").stop("end_turn", ""),
 	)
-	conv, err := sendPromptStream(context.Background(), fake.provider(false), "list files", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), fake.provider(false), "list files", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium})
 	if err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestAnthropicLegacyModelsGetNoThinkingOrEffort(t *testing.T) {
 	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hi").stop("end_turn", ""))
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, "claude-haiku-4-5-20251001", provider.EffortHigh); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, turnOptions{model: "claude-haiku-4-5-20251001", effort: provider.EffortHigh}); err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 
@@ -414,7 +414,7 @@ func TestAnthropicRefusalDiscardsTheResponse(t *testing.T) {
 		pendingToolResults: []provider.ToolResult{{CallID: "toolu_9", Name: "read_dir", Output: "a.txt"}},
 	}
 
-	conv, err := sendPromptStream(context.Background(), fake.provider(true), "next", start, "claude-opus-5-5", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), fake.provider(true), "next", start, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium})
 	if err == nil || !strings.Contains(err.Error(), "declined") || !strings.Contains(err.Error(), "cyber") {
 		t.Fatalf("expected a refusal error naming the category, got %v", err)
 	}
@@ -437,7 +437,7 @@ func TestAnthropicIncompleteStreamIsRetriedAndNeverStored(t *testing.T) {
 		newSSE("msg_2").thinking("sig-cut").event("message_stop", `{"type":"message_stop"}`).unfinished(),
 		newSSE("msg_3").text("ok").stop("end_turn", ""),
 	)
-	conv, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium})
 	if err != nil {
 		t.Fatalf("expected the retry to succeed, got %v", err)
 	}
@@ -459,7 +459,7 @@ func TestAnthropicOverloadedStreamErrorIsRetried(t *testing.T) {
 
 	overloaded := newSSE("msg_1").event("error", `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`).unfinished()
 	fake := newFakeAnthropic(t, overloaded, newSSE("msg_2").text("ok").stop("end_turn", ""))
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("expected the overload to be retried, got %v", err)
 	}
 	if fake.requestCount() != 2 {
@@ -477,7 +477,7 @@ func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
 	)
 	p := fake.provider(true)
 
-	conv, err := sendPromptStream(context.Background(), p, "write it", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), p, "write it", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium})
 	if err == nil || !strings.Contains(err.Error(), "cut off") {
 		t.Fatalf("expected a cut-off error, got %v", err)
 	}
@@ -488,7 +488,7 @@ func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
 		t.Fatalf("expected an error result to be pending, got %+v", conv.pendingToolResults)
 	}
 
-	if _, err := sendPromptStream(context.Background(), p, "try again", conv, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), p, "try again", conv, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("next prompt: %v", err)
 	}
 	user := messagesOf(t, fake.request(1))[2].(map[string]any)["content"].([]any)
@@ -510,7 +510,7 @@ func TestAnthropicFallbackTurnOnlyRunsServedToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conv, err := sendPromptStream(context.Background(), fake.provider(true), "go", conversationState{}, "claude-opus-5-5", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), fake.provider(true), "go", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium})
 	if err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
@@ -544,10 +544,10 @@ func TestAnthropicFallbacksAreDroppedWhenRejected(t *testing.T) {
 	}
 	p := fake.provider(true)
 
-	if _, err := sendPromptStream(context.Background(), p, "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), p, "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("expected a retry without fallbacks, got %v", err)
 	}
-	if _, err := sendPromptStream(context.Background(), p, "again", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), p, "again", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("second prompt: %v", err)
 	}
 	if fake.requestCount() != 3 {
@@ -568,7 +568,7 @@ func TestAnthropicAnswersEveryUnansweredToolUse(t *testing.T) {
 		json.RawMessage(`{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a","name":"read_dir","input":{"path":"."}},{"type":"tool_use","id":"toolu_b","name":"read_dir","input":{"path":"."}}]}`),
 	}}, pendingToolResults: []provider.ToolResult{{CallID: "toolu_b", Output: "b"}, {CallID: "toolu_stale", Output: "x"}}}
 
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "next", start, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "next", start, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 	user := messagesOf(t, fake.request(0))[2].(map[string]any)["content"].([]any)
@@ -635,7 +635,7 @@ func TestAnthropicDroppedConnectionIsRetried(t *testing.T) {
 
 	fake := newFakeAnthropic(t, "unused", newSSE("msg_2").text("ok").stop("end_turn", ""))
 	fake.dropAfter = newSSE("msg_1").thinking("sig").unfinished()
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("expected the dropped connection to be retried, got %v", err)
 	}
 	if fake.requestCount() != 2 {

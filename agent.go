@@ -42,13 +42,19 @@ var streamRetrySleeper = sleepWithContext
 // a new conversation.
 var projectInstructions func() string
 
-// takeSteering, when set, returns what the user typed while the turn was working, to
-// be sent to the model with the next tool results.
-var takeSteering func() string
-
-// turnCheckpoint, when set, receives the state after every tool round so it can be
-// saved before the turn finishes.
-var turnCheckpoint func(conversationState)
+// turnOptions configures one turn of sendPromptStream.
+type turnOptions struct {
+	model  string
+	effort provider.Effort
+	// planMode refuses tools that change anything and asks the model for a plan.
+	planMode bool
+	// takeSteering, when set, returns what the user typed while the turn was working,
+	// to be sent to the model with the next tool results.
+	takeSteering func() string
+	// checkpoint, when set, receives the state after every tool round so it can be
+	// saved before the turn finishes.
+	checkpoint func(conversationState)
+}
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
@@ -242,7 +248,7 @@ func logToolCallResult(toolCall provider.ToolCall, output string, err error, ela
 // runToolCalls executes every tool call in resp and returns one result per call. Once
 // ctx is cancelled the remaining calls are answered without being run, so the results
 // always cover every call.
-func runToolCalls(ctx context.Context, providerName, model string, resp *provider.Response) []provider.ToolResult {
+func runToolCalls(ctx context.Context, providerName string, opts turnOptions, resp *provider.Response) []provider.ToolResult {
 	var results []provider.ToolResult
 
 	for _, toolCall := range resp.ToolCalls {
@@ -254,12 +260,12 @@ func runToolCalls(ctx context.Context, providerName, model string, resp *provide
 		}
 
 		logToolCallStart(toolCall)
-		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, model))
+		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOutput, err := executeToolCall(ctx, toolCall)
+		toolOutput, err := executeToolCall(ctx, toolCall, opts.planMode)
 		stopSpinner()
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
@@ -298,20 +304,20 @@ func isContextOverflowError(err error) bool {
 // sendPromptStream runs one user turn: it streams the reply and keeps executing tool
 // calls until the model answers without any. It always returns the state the next turn
 // should continue from, including when it also returns an error.
-func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, conv conversationState, model string, effort provider.Effort) (conversationState, error) {
+func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, conv conversationState, opts turnOptions) (conversationState, error) {
 	providerName := p.Name()
 	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName})
 
 	req := provider.Request{
-		Model:        model,
+		Model:        opts.model,
 		System:       systemPrompt,
-		Effort:       effort,
+		Effort:       opts.effort,
 		Tools:        agentTools,
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
 	}
-	if planMode {
+	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
 	}
 	if conv.conversation.IsEmpty() && len(conv.pendingToolResults) == 0 && projectInstructions != nil {
@@ -345,7 +351,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		var stopErr error
 		switch resp.Stop {
 		case provider.StopToolUse:
-			results = runToolCalls(ctx, providerName, model, resp)
+			results = runToolCalls(ctx, providerName, opts, resp)
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
 		case provider.StopContextExceeded:
@@ -359,14 +365,14 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 		next := conversationState{conversation: resp.Conversation, pendingToolResults: results}
 		if len(results) == 0 {
-			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, model))
+			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 			if stopErr != nil {
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			}
 			return next, stopErr
 		}
-		if turnCheckpoint != nil {
-			turnCheckpoint(next)
+		if opts.checkpoint != nil {
+			opts.checkpoint(next)
 		}
 
 		if stopErr != nil {
@@ -386,8 +392,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
-		if takeSteering != nil {
-			if text := takeSteering(); text != "" {
+		if opts.takeSteering != nil {
+			if text := opts.takeSteering(); text != "" {
 				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
 				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
 				req.UserText = text

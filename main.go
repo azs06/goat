@@ -51,6 +51,11 @@ type config struct {
 	promptHistory []string
 	// lastModelChoices are the models the last /model listing numbered.
 	lastModelChoices []provider.Model
+	// planMode, toggled with /plan or started with --plan, lets the agent read and
+	// investigate but not change anything: tools that would change files, and run_bash,
+	// are refused, and each prompt tells the model so. The tool list itself stays the
+	// same, so switching costs no prompt cache.
+	planMode bool
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -165,7 +170,7 @@ func loadConfig(opts cliOptions) *config {
 		autoCompactTokens = 0
 	}
 
-	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens}
+	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan}
 	restoreSavedConversation(cfg, saved)
 	return cfg
 }
@@ -312,26 +317,24 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		warnf("%v; continuing with the full conversation", err)
 	}
 
+	opts := turnOptions{
+		model:    cfg.model.ID,
+		effort:   cfg.reasoningEffort,
+		planMode: cfg.planMode,
+		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
+		// never loses work the model already did.
+		checkpoint: func(state conversationState) {
+			cfg.conversation = state
+			saveSession(cfg)
+		},
+	}
+	defer saveSession(cfg)
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {
-		previousSteering := takeSteering
-		takeSteering = takeQueuedText
-		defer func() { takeSteering = previousSteering }()
+		opts.takeSteering = takeQueuedText
 	}
 
-	// Save after every tool round and whatever the outcome, so a crash or Ctrl-C never
-	// loses work the model already did.
-	previousCheckpoint := turnCheckpoint
-	turnCheckpoint = func(state conversationState) {
-		cfg.conversation = state
-		saveSession(cfg)
-	}
-	defer func() {
-		turnCheckpoint = previousCheckpoint
-		saveSession(cfg)
-	}()
-
-	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, cfg.model.ID, cfg.reasoningEffort)
+	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || !provider.IsThinkingBindingError(err) {
 		return err
@@ -345,7 +348,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
-	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, cfg.model.ID, cfg.reasoningEffort)
+	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
 	return err
 }
@@ -412,7 +415,7 @@ func printWelcome(cfg *config) {
 // footerParts is the status shown under the interactive prompt.
 func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
-	if planMode {
+	if cfg.planMode {
 		parts = append(parts, "plan mode")
 	}
 	if state, ok := readGitState(); ok {
@@ -503,7 +506,6 @@ func main() {
 		fmt.Println("goat " + goatVersion())
 		return
 	}
-	planMode = opts.plan
 
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Fatalf("Error loading .env file: %v", err)

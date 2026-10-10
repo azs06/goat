@@ -137,7 +137,9 @@ type transferArgs struct {
 	Preview         bool   `json:"preview"`
 }
 
-func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, error) {
+// executeToolCall validates and runs one tool call. In plan mode only the read-only
+// tools and previews run.
+func executeToolCall(ctx context.Context, toolCall provider.ToolCall, planMode bool) (string, error) {
 	spec, ok := findToolSpec(toolCall.Name)
 	if !ok {
 		return "", fmt.Errorf("unsupported tool: %s", toolCall.Name)

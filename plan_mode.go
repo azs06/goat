@@ -10,12 +10,6 @@ import (
 	"github.com/azs06/goat/internal/style"
 )
 
-// planMode, toggled with /plan or started with --plan, lets the agent read and
-// investigate but not change anything: tools that would change files, and run_bash,
-// are refused, and each prompt tells the model so. The tool list itself stays the same,
-// so switching costs no prompt cache.
-var planMode bool
-
 // planModeNote goes in front of each prompt sent in plan mode.
 const planModeNote = "[Plan mode is on: investigate with the read-only tools and answer with a plan. Do not change files or run commands; the user turns plan mode off to carry the plan out.]\n\n"
 
@@ -44,16 +38,16 @@ func commandPlan(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "on":
-			planMode = true
+			c.planMode = true
 		case "off":
-			planMode = false
+			c.planMode = false
 		default:
 			return fmt.Errorf("use /plan, /plan on or /plan off")
 		}
 	} else {
-		planMode = !planMode
+		c.planMode = !c.planMode
 	}
-	if planMode {
+	if c.planMode {
 		fmt.Println(formatNotice("Plan mode on: goat reads and plans but changes nothing. ") + style.Muted.Render("/plan again to let it make changes."))
 	} else {
 		fmt.Println(formatSuccess("Plan mode off: goat can change files and run commands again."))

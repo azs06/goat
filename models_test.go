@@ -392,14 +392,14 @@ func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
 		{Name: "write_file", Arguments: `{"path":"a.txt","content":"par`},
 		{Name: "write_file", Arguments: `{"path":"a.txt","content":null}`},
 	} {
-		if _, err := executeToolCall(context.Background(), call); err == nil {
+		if _, err := executeToolCall(context.Background(), call, false); err == nil {
 			t.Errorf("%s %s: expected a validation error", call.Name, call.Arguments)
 		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(workDir, "a.txt")); string(data) != "keep" {
 		t.Fatalf("expected the file untouched, got %q", data)
 	}
-	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}); err != nil {
+	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}, false); err != nil {
 		t.Fatalf("expected a tool without required arguments to accept empty input, got %v", err)
 	}
 }
@@ -415,7 +415,7 @@ func TestOpenAIRefusalThroughTheLoopKeepsPendingResults(t *testing.T) {
 	}
 
 	start := conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}, pendingToolResults: []provider.ToolResult{{CallID: "call-1", Output: "x"}}}
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello", start, provider.DefaultOpenAIModel, provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello", start, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.EffortMedium})
 	if err == nil || !strings.Contains(err.Error(), "declined") {
 		t.Fatalf("expected a refusal error, got %v", err)
 	}
