@@ -15,6 +15,10 @@ Deferred enhancements to implement later:
   - Tool text reaches scripts with its headers ("File contents for x:"); a raw-content option for scripts would save models from parsing them (one live run miscounted lines because of the header).
   - Smoke-test Claude models writing scripts (only OpenAI gpt-6-luna and DeepSeek v4 pro were tried against the real APIs).
 
+- Global .env follow-ups:
+  - A provider's *_BASE_URL is not settled together with its key, so a project .env that names a proxy without its own credential still gets the key from the shell or ~/.config/goat/.env (it was the same with shell keys before). Option: warn at startup when a provider's base URL and its key come from different places.
+  - On Windows environment names are case-insensitive, but the .env loader's checks (HOME/XDG_CONFIG_HOME not settable, credential grouping) compare names case-sensitively, so `xdg_config_home=` or `anthropic_auth_token=` in a .env slips past them. Untested; needs a Windows run.
+
 Notes:
 - Session compaction runs automatically once a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS` and is also available manually via `compact`.
 - Keep preview-first workflows for mutating tools.
