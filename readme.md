@@ -16,6 +16,13 @@ Keys can also go in a `.env` file. Only providers with a key are offered.
 Type a prompt to talk to the agent. Press Ctrl-C while it is working to interrupt the
 current turn; the next prompt continues from where it stopped.
 
+On a color terminal goat draws an inline, styled transcript: a welcome banner, a framed
+prompt with a status footer (model, effort, context size), bulleted replies and tool
+calls, colored diffs and a `run_bash` approval card. Ctrl-C at an empty prompt asks you to
+press it again to exit. Output that is piped or redirected stays plain text with no escape
+sequences. Set `NO_COLOR=1` to turn styling off, or `GOAT_FORCE_COLOR=1` to force it on
+(for example when piping through a pager that understands colors).
+
 ## Commands
 
 | Command | |
@@ -67,6 +74,8 @@ as "clear" still goes to the agent.
 | `GOAT_AUTO_COMPACT_TOKENS` | `80000` (OpenAI), `150000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits |
 | `GOAT_AUTO_APPROVE_BASH` | `false` | Run `run_bash` commands without asking first |
 | `GOAT_ANTHROPIC_FALLBACKS` | `on` | Server-side refusal fallbacks for Claude models |
+| `NO_COLOR` | | Disable colors and styling |
+| `GOAT_FORCE_COLOR` | | Style output even when stdout is not a terminal |
 | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or compatible API |
 
 ## Safety

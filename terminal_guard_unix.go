@@ -76,3 +76,12 @@ func (g *terminalInputGuard) Close() error {
 	}
 	return nil
 }
+
+// stdoutColumns is the width of the terminal stdout writes to, or 0 if unknown.
+func stdoutColumns() int {
+	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
+	if err != nil {
+		return 0
+	}
+	return int(size.Col)
+}

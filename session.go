@@ -58,7 +58,7 @@ var sessionSaver = writeSessionFile
 
 func saveSession(cfg *config) {
 	if err := sessionSaver(sessionPath, sessionFromConfig(cfg)); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to save the session: %v\n", err)
+		warnf("failed to save the session: %v", err)
 	}
 }
 
@@ -129,7 +129,7 @@ func loadSessionFile(path string) (*savedSession, error) {
 		if renameErr := os.Rename(resolvedPath, corruptPath); renameErr != nil {
 			return nil, fmt.Errorf("read %s: %w", path, decodeErr)
 		}
-		fmt.Fprintf(os.Stderr, "[warn] %s was unreadable (%v); moved it to %s\n", path, decodeErr, filepath.Base(corruptPath))
+		warnf("%s was unreadable (%v); moved it to %s", path, decodeErr, filepath.Base(corruptPath))
 		return nil, nil
 	}
 	return &session, nil
@@ -142,7 +142,7 @@ func archiveSession(cfg *config) {
 		return
 	}
 	if err := sessionSaver(previousSessionPath, sessionFromConfig(cfg)); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to keep the previous session: %v\n", err)
+		warnf("failed to keep the previous session: %v", err)
 	}
 }
 

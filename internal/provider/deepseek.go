@@ -14,6 +14,12 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
+// Warnf reports a warning from a provider. It writes a plain "[warn]" line to stderr;
+// the CLI replaces it with its own, which clears the spinner and styles the line.
+var Warnf = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[warn] "+format+"\n", args...)
+}
+
 // DeepSeek is reached through its Anthropic-compatible API, the endpoint it documents
 // for agents. It needs the reasoning of every earlier turn sent back whenever tools are
 // in use, which the append-only transcript of the Anthropic adapter already does.
@@ -177,7 +183,7 @@ func (p *anthropicProvider) deepSeekCapabilities(ctx context.Context, model stri
 			return caps, true
 		}
 	}
-	fmt.Fprintf(os.Stderr, "[warn] DeepSeek does not list a model named %q; it will answer with deepseek-flash instead\n", model)
+	Warnf("DeepSeek does not list a model named %q; it will answer with deepseek-flash instead", model)
 	return caps, true
 }
 

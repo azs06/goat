@@ -443,7 +443,7 @@ func withRecordedMutation(kind string, paths []string, mutate func() error) erro
 	if err := appendOperationRecord(record); err != nil {
 		// The change was made; it just cannot be undone.
 		cleanupOperationSnapshot(record)
-		fmt.Fprintf(os.Stderr, "[warn] %s succeeded but could not be recorded for undo: %v\n", kind, err)
+		warnf("%s succeeded but could not be recorded for undo: %v", kind, err)
 	}
 
 	return nil
@@ -514,7 +514,7 @@ func loadOperationRecords(setAsideCorrupt bool) ([]operationRecord, error) {
 		if renameErr := os.Rename(resolvedPath, corruptPath); renameErr != nil {
 			return nil, fmt.Errorf("decode operations: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "[warn] %s was unreadable (%v); moved it to %s and started a new operation log\n", defaultOperationsPath, err, filepath.Base(corruptPath))
+		warnf("%s was unreadable (%v); moved it to %s and started a new operation log", defaultOperationsPath, err, filepath.Base(corruptPath))
 		return nil, nil
 	}
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -107,35 +106,18 @@ func commandExit(ctx context.Context, c *config, args []string) error {
 }
 
 func commandHelp(ctx context.Context, c *config, args []string) error {
-	fmt.Println("Welcome to the Goat!")
-	fmt.Println("Anything else you type is sent to the agent. Press Ctrl-C while it works to interrupt the turn.")
-	fmt.Println("Commands:")
-
-	names := make([]string, 0, len(commands))
-	for name := range commands {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		cmd := commands[name]
-		line := fmt.Sprintf("  %-28s %s", cmd.usage, cmd.description)
-		if len(cmd.aliases) > 0 {
-			aliases := make([]string, len(cmd.aliases))
-			for i, alias := range cmd.aliases {
-				aliases[i] = "/" + alias
-			}
-			line += " (also " + strings.Join(aliases, ", ") + ")"
-		}
-		fmt.Println(line)
-	}
-	fmt.Println("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone.")
+	fmt.Println(styleBold("Welcome to the Goat!"))
+	fmt.Println(styleDim("Anything else you type is sent to the agent. Press Ctrl-C while it works to interrupt the turn."))
+	fmt.Println(styleBold("Commands:"))
+	fmt.Println(renderHelpTable(commands))
+	fmt.Println(styleDim("help, exit, quit, status, compact, undo, tools, history, resume and reset also work without the slash when typed alone."))
 	return nil
 }
 
 func commandClear(ctx context.Context, c *config, args []string) error {
 	replaceConversation(c, conversationState{})
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
-	fmt.Println("Started a new conversation. /resume brings the previous one back.")
+	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	return nil
 }
 
@@ -170,14 +152,18 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	adoptSavedConversation(c, previous)
 	saveSession(c)
 
-	fmt.Printf("Resumed the previous conversation on %s. /resume again switches back.\n", c.model)
+	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s. /resume again switches back.", c.model)))
 	return nil
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println("Available tools:")
+	fmt.Println(styleBold("Available tools:"))
+	bullet := "-"
+	if colorEnabled {
+		bullet = styleAccent(glyphs().bullet)
+	}
 	for _, name := range availableToolNames() {
-		fmt.Printf("- %s\n", name)
+		fmt.Println(bullet + " " + name)
 	}
 	return nil
 }
@@ -199,7 +185,7 @@ func commandUndo(ctx context.Context, c *config, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(message)
+	fmt.Println(formatSuccess(message))
 	return nil
 }
 
@@ -215,7 +201,7 @@ func commandCompact(ctx context.Context, c *config, args []string) error {
 	}
 
 	applyCompactedConversation(c, next, summary, "manual")
-	fmt.Println("Conversation context compacted.")
+	fmt.Println(formatSuccess("Conversation context compacted."))
 	return nil
 }
 
@@ -226,13 +212,13 @@ func commandHistory(ctx context.Context, c *config, args []string) error {
 	}
 
 	if info, err := os.Stat(resolvedPath); err == nil {
-		fmt.Printf("Conversation history: %s (%d bytes)\n", relPath, info.Size())
+		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", relPath, styleDim(fmt.Sprintf("(%d bytes)", info.Size())))}}))
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 
-	fmt.Printf("Conversation history: %s (not created yet)\n", relPath)
+	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", relPath + " " + styleDim("(not created yet)")}}))
 	return nil
 }
 
@@ -240,7 +226,7 @@ func commandRetry(ctx context.Context, c *config, args []string) error {
 	if strings.TrimSpace(c.lastPrompt) == "" {
 		return fmt.Errorf("there is no earlier prompt to retry")
 	}
-	fmt.Printf("Retrying: %s\n", truncateForLog(c.lastPrompt, 120))
+	fmt.Println(formatNotice("Retrying: " + truncateForLog(c.lastPrompt, 120)))
 	return runPrompt(ctx, c, c.lastPrompt)
 }
 
@@ -259,9 +245,13 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 		}
 	}
 	if c.approver.autoApprove {
-		fmt.Println("run_bash commands run without asking (/approve off to ask again).")
+		message := "run_bash commands run without asking "
+		if colorEnabled {
+			message = formatWarning(message)
+		}
+		fmt.Println(message + styleDim("(/approve off to ask again)."))
 	} else {
-		fmt.Println("run_bash asks before every command (/approve on to stop asking for this session).")
+		fmt.Println(formatSuccess("run_bash asks before every command ") + styleDim("(/approve on to stop asking for this session)."))
 	}
 	return nil
 }
@@ -275,7 +265,8 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 		saveSession(c)
 	}
-	fmt.Printf("Reasoning effort: %s (sent to %s as %s). Levels: %s\n", c.reasoningEffort, c.model, effectiveEffortDescription(c), provider.JoinEfforts(provider.EffortLevels))
+	fmt.Println("Reasoning effort: " + paint(string(c.reasoningEffort), sgrBold, fgAccent) +
+		styleDim(fmt.Sprintf(" (sent to %s as %s). Levels: %s", c.model, effectiveEffortDescription(c), provider.JoinEfforts(provider.EffortLevels))))
 	return nil
 }
 
@@ -285,13 +276,15 @@ func effectiveEffortDescription(c *config) string {
 }
 
 func commandStatus(ctx context.Context, c *config, args []string) error {
-	fmt.Printf("Model:     %s\n", c.model)
-	fmt.Printf("Effort:    %s (sent as %s)\n", c.reasoningEffort, effectiveEffortDescription(c))
+	rows := [][2]string{
+		{"Model:", paint(c.model.String(), sgrBold, fgAccent)},
+		{"Effort:", string(c.reasoningEffort) + styleDim(fmt.Sprintf(" (sent as %s)", effectiveEffortDescription(c)))},
+	}
 	for _, name := range provider.Names {
 		if source := provider.CredentialSource(name); source != "" {
-			fmt.Printf("Provider:  %-9s available (%s)\n", name, source)
+			rows = append(rows, [2]string{"Provider:", padRight(name, 9) + " " + styleSuccess("available") + styleDim(" ("+source+")")})
 		} else {
-			fmt.Printf("Provider:  %-9s unavailable (%s not set)\n", name, strings.Join(provider.CredentialVars[name], " or "))
+			rows = append(rows, [2]string{"Provider:", styleDim(padRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
 		}
 	}
 
@@ -306,16 +299,17 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	if pending := len(c.conversation.pendingToolResults); pending > 0 {
 		conversation += fmt.Sprintf(", %d tool result(s) waiting to be sent", pending)
 	}
-	fmt.Printf("Session:   %s\n", conversation)
+	rows = append(rows, [2]string{"Session:", conversation})
 	if entries, err := loadConversationHistoryEntries(); err == nil {
-		fmt.Printf("Context:   about %d tokens; auto-compacts at %d\n", estimateConversationTokens(entries), autoCompactThreshold(c))
+		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d", estimateConversationTokens(entries), autoCompactThreshold(c))})
 	}
 	if c.approver != nil {
-		fmt.Printf("run_bash:  %s\n", map[bool]string{true: "runs without asking", false: "asks before each command"}[c.approver.autoApprove])
+		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: styleWarn("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
 	}
 	if wd, err := os.Getwd(); err == nil {
-		fmt.Printf("Workspace: %s\n", wd)
+		rows = append(rows, [2]string{"Workspace:", wd})
 	}
+	fmt.Println(renderKeyValues(rows))
 	return nil
 }
 
@@ -333,7 +327,7 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 			models, err := provider.ListModels(listCtx)
 			cancel()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[warn] could not list %s models: %v\n", name, shortError(err))
+				warnf("could not list %s models: %v", name, shortError(err))
 			}
 			live[name] = models
 		}
@@ -346,13 +340,13 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 
 	printModelChoices(c, provider.ModelChoices(c.model, nil))
 	if !c.interactive {
-		fmt.Println("Use /model <number or model> to switch, or /model list for every available model.")
+		fmt.Println(styleDim("Use /model <number or model> to switch, or /model list for every available model."))
 		return nil
 	}
 
 	answer, err := c.ask(ctx, "Select a model by number or name (Enter keeps the current one): ")
 	if err != nil || answer == "" {
-		fmt.Printf("Keeping %s.\n", c.model)
+		fmt.Println(formatNotice(fmt.Sprintf("Keeping %s.", c.model)))
 		return nil
 	}
 	return switchModel(ctx, c, answer)
@@ -361,17 +355,11 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
 	if len(choices) == 0 {
-		fmt.Println("No models are available: set OPENAI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY.")
+		fmt.Println(styleWarn("No models are available: set OPENAI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY."))
 		return
 	}
-	fmt.Println("Models (only providers with an API key are listed):")
-	for i, choice := range choices {
-		marker := " "
-		if choice == c.model {
-			marker = "*"
-		}
-		fmt.Printf("%s %2d. %s\n", marker, i+1, choice)
-	}
+	fmt.Println(styleBold("Models") + styleDim(" (only providers with an API key are listed):"))
+	fmt.Println(renderModelChoices(choices, c.model))
 }
 
 // switchModel changes the model. Within a provider the conversation carries on. Across
@@ -383,7 +371,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		return err
 	}
 	if target == c.model {
-		fmt.Printf("Already using %s.\n", target)
+		fmt.Println(formatNotice(fmt.Sprintf("Already using %s.", target)))
 		return nil
 	}
 	if !provider.Available(target.Provider) {
@@ -400,18 +388,18 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	if target.Provider == c.model.Provider {
 		c.model = target
 		saveSession(c)
-		fmt.Printf("Switched to %s; the conversation continues.\n", target)
+		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s; the conversation continues.", target)))
 		return nil
 	}
 
 	if c.conversation.conversation.IsEmpty() && len(c.conversation.pendingToolResults) == 0 {
 		c.model = target
 		saveSession(c)
-		fmt.Printf("Switched to %s.\n", target)
+		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
 		return nil
 	}
 
-	fmt.Printf("Carrying the conversation over to %s...\n", target)
+	fmt.Println(formatNotice(fmt.Sprintf("Carrying the conversation over to %s...", target)))
 	next, summary, err := compactConversation(ctx, p, target.ID, "")
 	if err != nil {
 		return fmt.Errorf("could not carry the conversation over to %s, so the model was not changed: %w (use /clear first to switch without it)", target, err)
@@ -423,7 +411,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	c.model = target
 	startConversation(c, conversationState{conversation: next})
 	recordCompactionSeed(c, next, summary)
-	fmt.Printf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.\n", target, previous)
+	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
 	return nil
 }
 

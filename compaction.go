@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -222,7 +221,7 @@ func maybeAutoCompactConversation(ctx context.Context, cfg *config) (bool, error
 	}
 
 	applyCompactedConversation(cfg, next, summary, "auto")
-	fmt.Printf("Conversation auto-compacted (%s).\n", reason)
+	fmt.Println(formatNotice(fmt.Sprintf("Conversation auto-compacted (%s).", reason)))
 	return true, nil
 }
 
@@ -243,6 +242,8 @@ func compactConversation(ctx context.Context, p provider.Provider, model, focus 
 	if focus = strings.TrimSpace(focus); focus != "" {
 		summaryPrompt += " Pay particular attention to: " + focus
 	}
+	startSpinner("Compacting conversation")
+	defer stopSpinner()
 	summary, err := completeWithRetry(ctx, p, model, "You produce concise session handoff summaries for coding work.", summaryPrompt+"\n\nSession history:\n"+source)
 	if err != nil {
 		return provider.Conversation{}, "", err
@@ -270,7 +271,8 @@ func completeWithRetry(ctx context.Context, provider provider.Provider, model, s
 		if !retryable || attempt == maxStreamRateLimitRetries || ctx.Err() != nil {
 			return "", err
 		}
-		fmt.Fprintf(os.Stderr, "[warn] %v; retrying in %s (%d/%d)\n", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
+		stopSpinner()
+		warnf("%v; retrying in %s (%d/%d)", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
 		if err := streamRetrySleeper(ctx, delay); err != nil {
 			return "", err
 		}

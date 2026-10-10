@@ -95,7 +95,7 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 		}
 	}
 	if skipped > 0 {
-		fmt.Fprintf(os.Stderr, "[warn] skipped %d unreadable line(s) in %s\n", skipped, conversationHistoryPath())
+		warnf("skipped %d unreadable line(s) in %s", skipped, conversationHistoryPath())
 	}
 
 	return entries, nil
@@ -172,6 +172,6 @@ func recordHistory(entry historyEntry) {
 	entry.Content = truncateToolOutputCharsForModel(entry.Content, maxHistoryFieldChars)
 	entry.Arguments = truncateToolOutputCharsForModel(entry.Arguments, maxHistoryFieldChars)
 	if err := historyEntryAppender(entry); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to save history: %v\n", err)
+		warnf("failed to save history: %v", err)
 	}
 }

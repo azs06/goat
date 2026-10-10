@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -94,12 +95,12 @@ func startupModel(saved *savedSession) (provider.Model, string) {
 	for _, c := range candidates {
 		ref, err := provider.ResolveModel(c.raw)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[warn] ignoring the model from %s: %v\n", c.source, err)
+			warnf("ignoring the model from %s: %v", c.source, err)
 			continue
 		}
 		if !provider.Available(ref.Provider) {
 			if c.source == "GOAT_MODEL" {
-				fmt.Fprintf(os.Stderr, "[warn] ignoring GOAT_MODEL=%s: %v\n", c.raw, provider.MissingCredentialsError(ref.Provider))
+				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
 			}
 			continue
 		}
@@ -123,7 +124,7 @@ func startupEffort(saved *savedSession) provider.Effort {
 		}
 		effort, err := provider.ParseEffort(candidate.value)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[warn] invalid effort from %s: %v\n", candidate.source, err)
+			warnf("invalid effort from %s: %v", candidate.source, err)
 			continue
 		}
 		return effort
@@ -134,13 +135,13 @@ func startupEffort(saved *savedSession) provider.Effort {
 func loadConfig() *config {
 	saved, err := loadSessionFile(sessionPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to load the saved session: %v\n", err)
+		warnf("failed to load the saved session: %v", err)
 	}
 
 	model, _ := startupModel(saved)
 	autoCompactTokens, err := parseAutoCompactTokens(os.Getenv("GOAT_AUTO_COMPACT_TOKENS"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] invalid GOAT_AUTO_COMPACT_TOKENS: %v; using the default\n", err)
+		warnf("invalid GOAT_AUTO_COMPACT_TOKENS: %v; using the default", err)
 		autoCompactTokens = 0
 	}
 
@@ -158,7 +159,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	if saved == nil {
 		if cfg.model.Provider == provider.OpenAI {
 			if responseID, conversationID, err := latestResumableConversation(); err != nil {
-				fmt.Fprintf(os.Stderr, "[warn] failed to load saved conversation context: %v\n", err)
+				warnf("failed to load saved conversation context: %v", err)
 			} else if responseID != "" {
 				// Continue the last OpenAI conversation in the history log, under the
 				// history scope it was recorded in (none, from before sessions existed).
@@ -180,21 +181,21 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	// swap the two; otherwise start fresh and keep the saved one for /resume.
 	previous, _ := loadSessionFile(previousSessionPath)
 	if err := sessionSaver(previousSessionPath, *saved); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to keep the saved conversation: %v\n", err)
+		warnf("failed to keep the saved conversation: %v", err)
 		return
 	}
 	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Provider == cfg.model.Provider {
 		adoptSavedConversation(cfg, previous)
 		saveSession(cfg)
-		fmt.Printf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.\n", cfg.model.Provider, saved.Conversation.Provider)
+		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", cfg.model.Provider, saved.Conversation.Provider)))
 		return
 	}
 
 	startConversation(cfg, conversationState{})
 	if provider.Available(saved.Conversation.Provider) {
-		fmt.Printf("The saved %s conversation does not carry over to %s; it was kept, and /resume restores it.\n", saved.Model, cfg.model)
+		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation does not carry over to %s; it was kept, and /resume restores it.", saved.Model, cfg.model)))
 	} else {
-		fmt.Printf("The saved %s conversation was kept; /resume restores it once %s.\n", saved.Model, provider.MissingCredentialsError(saved.Conversation.Provider))
+		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s.", saved.Model, provider.MissingCredentialsError(saved.Conversation.Provider))))
 	}
 }
 
@@ -228,7 +229,7 @@ func runWithInputGuard(work func() error) error {
 	defer func() {
 		activeInputGuard = nil
 		if closeErr := guard.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "[warn] failed to restore terminal input state: %v\n", closeErr)
+			warnf("failed to restore terminal input state: %v", closeErr)
 		}
 	}()
 
@@ -238,16 +239,24 @@ func runWithInputGuard(work func() error) error {
 // suspendInputGuard turns terminal echo back on so the user can answer a question in
 // the middle of a turn, and returns the function that turns it off again.
 func suspendInputGuard() func() {
+	resumeSpinner := pauseSpinner()
+	suspended := time.Now()
 	guard := activeInputGuard
 	if err := guard.suspend(); err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] failed to restore terminal echo: %v\n", err)
+		warnf("failed to restore terminal echo: %v", err)
 	}
 	return func() {
+		inputWaitTotal += time.Since(suspended)
 		if err := guard.resume(); err != nil {
-			fmt.Fprintf(os.Stderr, "[warn] failed to disable terminal echo: %v\n", err)
+			warnf("failed to disable terminal echo: %v", err)
 		}
+		resumeSpinner()
 	}
 }
+
+// inputWaitTotal is the total time spent waiting on the user's answers mid-turn, so
+// a tool's elapsed time can leave out how long its approval took.
+var inputWaitTotal time.Duration
 
 // ask shows a question and reads one line of answer while a command runs.
 func (c *config) ask(ctx context.Context, question string) (string, error) {
@@ -277,7 +286,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		if ctx.Err() != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[warn] %v; continuing with the full conversation\n", err)
+		warnf("%v; continuing with the full conversation", err)
 	}
 
 	// Save after every tool round and whatever the outcome, so a crash or Ctrl-C never
@@ -300,7 +309,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 
 	// The API no longer accepts this conversation's thinking blocks. Carry it over in a
 	// summary and try once more.
-	fmt.Println("The conversation could not be continued as-is; compacting it and retrying.")
+	fmt.Println(formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
 	summaryConversation, summary, compactErr := compactConversation(ctx, p, cfg.model.ID, "")
 	if compactErr != nil {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
@@ -321,13 +330,101 @@ func handleInput(cfg *config, text string) error {
 		return err
 	}
 
-	return runWithInputGuard(func() error {
+	started := time.Now()
+	err = runWithInputGuard(func() error {
 		if cmd != nil {
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
 	})
+	if cmd == nil && err == nil && colorEnabled {
+		if elapsed := time.Since(started); elapsed >= time.Second {
+			stopSpinner()
+			fmt.Println("\n" + renderWorked(elapsed))
+		}
+	}
+	return err
 }
+
+// printWelcome shows the banner and the notices about the restored state.
+func printWelcome(cfg *config) {
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), terminalWidth()))
+	if !cfg.conversation.conversation.IsEmpty() {
+		fmt.Println(formatNotice("Resumed saved conversation context."))
+	}
+	if cfg.approver.autoApprove {
+		message := "run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH)."
+		if colorEnabled {
+			message = formatWarning(message)
+		}
+		fmt.Println(message)
+	}
+}
+
+// footerParts is the status shown under the interactive prompt.
+func footerParts(cfg *config) []string {
+	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
+	if !cfg.conversation.conversation.IsEmpty() {
+		if entries, err := loadConversationHistoryEntries(); err == nil {
+			parts = append(parts, "~"+formatTokenCount(estimateConversationTokens(entries))+" ctx")
+		}
+	}
+	if cfg.approver != nil && cfg.approver.autoApprove {
+		parts = append(parts, "auto-approve on")
+	}
+	return append(parts, "/help for commands")
+}
+
+// readPrompt shows the prompt and reads one line. On an interactive color terminal the
+// prompt sits between two rules with a status footer below, and once submitted the
+// frame is replaced by the highlighted message. gap puts a blank line above the prompt.
+// On an interactive terminal Ctrl-C returns context.Canceled instead of killing goat.
+func readPrompt(cfg *config, gap bool) (string, error) {
+	ctx := context.Background()
+	if cfg.interactive {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt)
+		defer stop()
+	}
+
+	fancy := cfg.interactive && colorEnabled
+	if !fancy {
+		fmt.Print("G.O.A.T > ")
+		text, err := cfg.input.ReadLine(ctx)
+		if err != nil {
+			fmt.Println()
+		}
+		return text, err
+	}
+
+	width := terminalWidth()
+	if gap {
+		fmt.Println()
+	}
+	fmt.Print(renderPromptFrame(renderFooter(footerParts(cfg), width), width))
+	text, err := cfg.input.ReadLine(ctx)
+	if err != nil {
+		// The cursor is still on the prompt line: clear from the rule above it down.
+		fmt.Print("\r\x1b[1A\x1b[J")
+		return text, err
+	}
+	if !cfg.input.lastTerminated {
+		// Ended with Ctrl-D rather than Enter: nothing moved the cursor below the input
+		// yet, which the cleanup expects.
+		fmt.Print("\r\n")
+	}
+	fmt.Print(renderPromptCleanup(text, width))
+	if strings.TrimSpace(text) != "" {
+		fmt.Println(renderUserMessage(text, width))
+	}
+	return text, nil
+}
+
+// exitConfirmWindow is how soon a second Ctrl-C at the prompt has to follow the first
+// to exit.
+const exitConfirmWindow = 2 * time.Second
 
 func main() {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -337,26 +434,30 @@ func main() {
 		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")
 	}
 
+	provider.Warnf = warnf
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)
 	cfg.interactive = stdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve
 
-	fmt.Println("Welcome to G.O.A.T agent")
-	fmt.Printf("Model: %s (effort %s). Type /help for commands.\n", cfg.model, cfg.reasoningEffort)
-	if !cfg.conversation.conversation.IsEmpty() {
-		fmt.Println("Resumed saved conversation context.")
-	}
-	if cfg.approver.autoApprove {
-		fmt.Println("run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH).")
-	}
+	printWelcome(cfg)
 
+	gap := true
+	var lastInterrupt time.Time
 	for {
-		fmt.Print("G.O.A.T > ")
-		text, err := cfg.input.ReadLine(context.Background())
+		text, err := readPrompt(cfg, gap)
+		gap = true
+		if errors.Is(err, context.Canceled) {
+			if time.Since(lastInterrupt) < exitConfirmWindow {
+				fmt.Println("Closing the Goat... Goodbye!")
+				return
+			}
+			lastInterrupt = time.Now()
+			fmt.Println(formatNotice("Press Ctrl-C again to exit."))
+			continue
+		}
 		if err != nil {
-			fmt.Println()
 			if !errors.Is(err, io.EOF) {
 				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
 			}
@@ -364,19 +465,25 @@ func main() {
 			return
 		}
 		if strings.TrimSpace(text) == "" {
+			gap = false
 			continue
 		}
 
 		err = handleInput(cfg, text)
+		stopSpinner()
 		switch {
 		case err == nil:
 		case errors.Is(err, errExitRequested):
 			fmt.Println("Closing the Goat... Goodbye!")
 			return
 		case errors.Is(err, context.Canceled):
-			fmt.Println("\nInterrupted.")
+			if colorEnabled {
+				fmt.Println("\n" + formatWarning("Interrupted "+glyphs().dot+" tell goat what to do instead"))
+			} else {
+				fmt.Println("\nInterrupted.")
+			}
 		default:
-			fmt.Println("Error:", err)
+			fmt.Println(formatError(err.Error()))
 		}
 	}
 }

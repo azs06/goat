@@ -11,8 +11,9 @@ import (
 )
 
 type lineResult struct {
-	text string
-	err  error
+	text       string
+	terminated bool
+	err        error
 }
 
 // lineReader reads input lines without blocking callers that need to give up when their
@@ -23,6 +24,9 @@ type lineReader struct {
 	reader   *bufio.Reader
 	results  chan lineResult
 	inFlight bool
+	// lastTerminated reports whether the last line read ended with a newline; a line
+	// ended by Ctrl-D at a terminal does not, so no newline was echoed after it.
+	lastTerminated bool
 }
 
 func newLineReader(r io.Reader) *lineReader {
@@ -41,13 +45,14 @@ func (r *lineReader) ReadLine(ctx context.Context) (string, error) {
 			if errors.Is(err, io.EOF) && line != "" {
 				err = nil
 			}
-			r.results <- lineResult{text: strings.TrimRight(line, "\r\n"), err: err}
+			r.results <- lineResult{text: strings.TrimRight(line, "\r\n"), terminated: strings.HasSuffix(line, "\n"), err: err}
 		}()
 	}
 
 	select {
 	case result := <-r.results:
 		r.inFlight = false
+		r.lastTerminated = result.terminated
 		return result.text, result.err
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -80,9 +85,17 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	resume := suspendInputGuard()
 	defer resume()
 
-	fmt.Printf("\nAllow run_bash in %s?\n%s\n[y]es / [n]o / [a]lways this session (or type feedback to decline): ", escapeControlChars(workdir), indentBlock(escapeControlChars(command), "    "))
+	if colorEnabled {
+		fmt.Print(renderApprovalCard(command, workdir, terminalWidth()))
+	} else {
+		fmt.Printf("\nAllow run_bash in %s?\n%s\n[y]es / [n]o / [a]lways this session (or type feedback to decline): ", escapeControlChars(workdir), indentBlock(escapeControlChars(command), "    "))
+	}
 	answer, err := a.input.ReadLine(ctx)
 	if err != nil {
+		if colorEnabled && errors.Is(err, context.Canceled) {
+			// Redraw the prompt row to wipe the "^C" the terminal echoed onto it.
+			fmt.Print("\r\x1b[K" + renderApprovalPrompt())
+		}
 		fmt.Println()
 		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("%w: input closed before approval", errBashCommandDeclined)

@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"math"
 	"strings"
 	"time"
 
@@ -21,8 +20,6 @@ const (
 	maxToolOutputLinesForModel    = 400
 	maxRunBashOutputCharsForModel = 6000
 	maxRunBashOutputLinesForModel = 120
-
-	maxToolLogChars = 700
 )
 
 // conversationState is where the next turn continues from. pendingToolResults answer
@@ -52,8 +49,35 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func printModelText(text string) {
-	fmt.Print(text)
+// printModelText shows streamed assistant text. On a color terminal it goes through
+// the markdown renderer, which prints each line once it is complete; plain output is
+// printed as it arrives. Either way control characters are made visible first (carriage
+// returns are dropped), so model text cannot move the cursor, clear the screen or set
+// the window title. The spinner is cleared just before anything is drawn.
+func printModelText(md *markdownStream, text string) {
+	text = escapeControlChars(strings.ReplaceAll(text, "\r", ""))
+	if !colorEnabled || md == nil {
+		fmt.Print(text)
+		return
+	}
+	if out := md.Write(text); out != "" {
+		stopSpinner()
+		fmt.Print(out)
+	}
+}
+
+// streamAttempt makes one provider call with a fresh renderer and a "Thinking" spinner.
+// Whatever ends the call, the spinner is cleared and a partial last line is printed.
+func streamAttempt(ctx context.Context, p provider.Provider, req provider.Request) (*provider.Response, bool, error) {
+	md := newMarkdownStream(terminalWidth())
+	startSpinner("Thinking")
+	defer func() {
+		stopSpinner()
+		if colorEnabled {
+			fmt.Print(md.Flush())
+		}
+	}()
+	return p.Send(ctx, req, func(text string) { printModelText(md, text) })
 }
 
 // executeStreamedResponse sends one request, retrying transient failures as long as no
@@ -61,7 +85,7 @@ func printModelText(text string) {
 func executeStreamedResponse(ctx context.Context, provider provider.Provider, req provider.Request) (*provider.Response, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxStreamRateLimitRetries; attempt++ {
-		resp, printedText, err := provider.Send(ctx, req, printModelText)
+		resp, printedText, err := streamAttempt(ctx, provider, req)
 		if err == nil {
 			return resp, printedText, nil
 		}
@@ -79,7 +103,7 @@ func executeStreamedResponse(ctx context.Context, provider provider.Provider, re
 			break
 		}
 
-		fmt.Fprintf(os.Stderr, "[warn] %v; retrying in %s (%d/%d)\n", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
+		warnf("%v; retrying in %s (%d/%d)", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
 		if err := streamRetrySleeper(ctx, delay); err != nil {
 			return nil, false, err
 		}
@@ -94,25 +118,6 @@ func shortError(err error) string {
 		message = line
 	}
 	return truncateForLog(message, 200)
-}
-
-func prettyToolArguments(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "{}" {
-		return ""
-	}
-
-	var decoded any
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return raw
-	}
-
-	formatted, err := json.MarshalIndent(decoded, "", "  ")
-	if err != nil {
-		return raw
-	}
-
-	return string(formatted)
 }
 
 func indentBlock(text, prefix string) string {
@@ -197,25 +202,24 @@ func prepareToolOutputForModel(toolName, output string) string {
 	return output
 }
 
-func logToolCallStart(toolCall provider.ToolCall) {
-	fmt.Printf("\n==> tool: %s\n", toolCall.Name)
-	if args := prettyToolArguments(toolCall.Arguments); args != "" {
-		fmt.Println(indentBlock(args, "    "))
+// toolRenderWidth is the width tool blocks are fitted to. Plain output (pipes, logs,
+// NO_COLOR) is never clipped, so logs keep the full command and error text.
+func toolRenderWidth() int {
+	if !colorEnabled {
+		return math.MaxInt32
 	}
+	return terminalWidth()
 }
 
-func logToolCallResult(name, output string, err error) {
-	status := "ok"
-	body := output
-	if err != nil {
-		status = "error"
-		body = err.Error()
-	}
+// logToolCallStart prints the "● Name(args)" header for a tool call. The leading blank
+// line separates it from the assistant text or tool block before it.
+func logToolCallStart(toolCall provider.ToolCall) {
+	fmt.Print("\n" + renderToolHeader(toolCall, toolRenderWidth()) + "\n")
+}
 
-	fmt.Printf("<== tool: %s [%s]\n", name, status)
-	if strings.TrimSpace(body) != "" {
-		fmt.Println(indentBlock(truncateForLog(body, maxToolLogChars), "    "))
-	}
+// logToolCallResult prints a finished tool call's result under its header.
+func logToolCallResult(toolCall provider.ToolCall, output string, err error, elapsed time.Duration) {
+	fmt.Println(renderToolResult(toolCall, output, err, elapsed, toolRenderWidth()))
 }
 
 // runToolCalls executes every tool call in resp and returns one result per call. Once
@@ -235,8 +239,12 @@ func runToolCalls(ctx context.Context, providerName string, resp *provider.Respo
 		logToolCallStart(toolCall)
 		recordHistory(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, ContextTokens: resp.Usage.ContextTokens(), Provider: providerName})
 
+		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
+		started, waitedBefore := time.Now(), inputWaitTotal
+		startSpinner("Running " + toolDisplayName(toolCall.Name))
 		toolOutput, err := executeToolCall(ctx, toolCall)
-		logToolCallResult(toolCall.Name, toolOutput, err)
+		stopSpinner()
+		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
 		if err != nil {
 			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
@@ -289,7 +297,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 	for round := 1; ; round++ {
 		resp, printedText, err := executeStreamedResponse(ctx, p, req)
-		if printedText {
+		// The markdown renderer ends every line itself; plain streamed text may not.
+		if printedText && !colorEnabled {
 			fmt.Println()
 		}
 		if err != nil {
