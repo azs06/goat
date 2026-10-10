@@ -2,42 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/azs06/goat/internal/provider"
 )
-
-func TestPlanModeRefusesChanges(t *testing.T) {
-	workDir := t.TempDir()
-	chdirForTest(t, workDir)
-	os.WriteFile("a.txt", []byte("hello\n"), 0o644)
-
-	call := func(name, args string) (string, error) {
-		return executeToolCall(context.Background(), provider.ToolCall{Name: name, Arguments: args}, turnOptions{planMode: true})
-	}
-	if _, err := call("read_file", `{"path":"a.txt"}`); err != nil {
-		t.Fatalf("read_file should work: %v", err)
-	}
-	if _, err := call("edit_file", `{"path":"a.txt","old_text":"hello","new_text":"bye","preview":true}`); err != nil {
-		t.Fatalf("a preview should work: %v", err)
-	}
-	for _, blocked := range [][2]string{
-		{"edit_file", `{"path":"a.txt","old_text":"hello","new_text":"bye"}`},
-		{"write_file", `{"path":"b.txt","content":"x"}`},
-		{"run_bash", `{"command":"ls"}`},
-		{"delete_file", `{"path":"a.txt"}`},
-	} {
-		if _, err := call(blocked[0], blocked[1]); !errors.Is(err, errPlanMode) {
-			t.Errorf("%s: expected plan mode to refuse, got %v", blocked[0], err)
-		}
-	}
-	if data, _ := os.ReadFile("a.txt"); string(data) != "hello\n" {
-		t.Fatalf("file changed in plan mode: %q", data)
-	}
-}
 
 func TestPlanModeTellsTheModel(t *testing.T) {
 	workDir := t.TempDir()

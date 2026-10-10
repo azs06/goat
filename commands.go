@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
@@ -182,7 +183,7 @@ func commandTools(ctx context.Context, c *config, args []string) error {
 	if style.Enabled() {
 		bullet = style.Accent.Render(style.Glyphs().Bullet)
 	}
-	for _, name := range availableToolNames() {
+	for _, name := range tools.Names() {
 		fmt.Println(bullet + " " + name)
 	}
 	return nil

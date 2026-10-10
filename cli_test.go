@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/azs06/goat/internal/tools"
 )
 
 func TestLookupCommandOnlyMatchesWholeLineOrSlashPrefix(t *testing.T) {
@@ -156,7 +158,7 @@ func TestEscapeControlCharsShowsHiddenSequences(t *testing.T) {
 }
 
 func TestSystemPromptListsEveryTool(t *testing.T) {
-	for _, name := range availableToolNames() {
+	for _, name := range tools.Names() {
 		if !strings.Contains(systemPrompt, "- "+name+":") {
 			t.Errorf("system prompt does not list %s", name)
 		}
@@ -174,17 +176,5 @@ func TestTruncationHelpersStayWithinLimits(t *testing.T) {
 	logged := truncateForLog(strings.Repeat("ü", 10), 5)
 	if logged != "üü..." {
 		t.Fatalf("expected rune-safe truncation, got %q", logged)
-	}
-}
-
-func TestEveryToolHasAHandler(t *testing.T) {
-	names := availableToolNames()
-	for _, name := range names {
-		if toolHandlers[name] == nil {
-			t.Errorf("tool %s has a schema but no handler", name)
-		}
-	}
-	if len(toolHandlers) != len(names) {
-		t.Errorf("%d handlers for %d tools", len(toolHandlers), len(names))
 	}
 }

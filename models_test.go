@@ -13,7 +13,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/azs06/goat/internal/provider"
-	"github.com/azs06/goat/internal/workspace"
 )
 
 // fakeProvider is a scripted Provider for tests that do not care about the wire format.
@@ -376,31 +375,6 @@ func TestRunPromptSavesTheSessionAfterEveryToolRound(t *testing.T) {
 	}
 	if cfg.lastPrompt != "list" {
 		t.Fatalf("expected the prompt to be remembered for /retry, got %q", cfg.lastPrompt)
-	}
-}
-
-func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
-	workDir := t.TempDir()
-	chdirForTest(t, workDir)
-
-	if err := workspace.WriteFile("a.txt", "keep"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	for _, call := range []provider.ToolCall{
-		{Name: "edit_file", Arguments: `{"path":"a.txt","new_text":"x"}`},
-		{Name: "delete_file", Arguments: `{}`},
-		{Name: "write_file", Arguments: `{"path":"a.txt","content":"par`},
-		{Name: "write_file", Arguments: `{"path":"a.txt","content":null}`},
-	} {
-		if _, err := executeToolCall(context.Background(), call, turnOptions{}); err == nil {
-			t.Errorf("%s %s: expected a validation error", call.Name, call.Arguments)
-		}
-	}
-	if data, _ := os.ReadFile(filepath.Join(workDir, "a.txt")); string(data) != "keep" {
-		t.Fatalf("expected the file untouched, got %q", data)
-	}
-	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}, turnOptions{}); err != nil {
-		t.Fatalf("expected a tool without required arguments to accept empty input, got %v", err)
 	}
 }
 

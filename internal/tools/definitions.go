@@ -1,4 +1,6 @@
-package main
+// Package tools defines the tools the model can call, their JSON schemas, and the
+// handlers that run them against the workspace.
+package tools
 
 import (
 	"encoding/json"
@@ -26,7 +28,7 @@ func functionTool(name, description string, properties map[string]any, required 
 	return provider.ToolSpec{Name: name, Description: description, Parameters: parameters}
 }
 
-func getTools() []provider.ToolSpec {
+func buildSpecs() []provider.ToolSpec {
 	transferProperties := map[string]any{
 		"source_path":      stringParam,
 		"destination_path": stringParam,
@@ -70,18 +72,20 @@ func getTools() []provider.ToolSpec {
 	}
 }
 
-var agentTools = getTools()
+// Specs are the tools offered to the model, in the order they are listed.
+var Specs = buildSpecs()
 
-func availableToolNames() []string {
-	names := make([]string, 0, len(agentTools))
-	for _, tool := range agentTools {
+// Names returns the name of every tool in Specs.
+func Names() []string {
+	names := make([]string, 0, len(Specs))
+	for _, tool := range Specs {
 		names = append(names, tool.Name)
 	}
 	return names
 }
 
-func findToolSpec(name string) (provider.ToolSpec, bool) {
-	for _, tool := range agentTools {
+func findSpec(name string) (provider.ToolSpec, bool) {
+	for _, tool := range Specs {
 		if tool.Name == name {
 			return tool, true
 		}

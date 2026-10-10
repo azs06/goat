@@ -19,6 +19,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 )
 
 // fakeAnthropic is a local Messages API that replays scripted SSE streams and records
@@ -264,11 +265,11 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 	if first.body["fallbacks"] != "default" || !strings.Contains(first.header.Get("anthropic-beta"), "server-side-fallback-2026-07-01") {
 		t.Errorf("expected fallbacks:default with its beta header, got %v / %q", first.body["fallbacks"], first.header.Get("anthropic-beta"))
 	}
-	tools := first.body["tools"].([]any)
-	if len(tools) != len(agentTools) {
-		t.Fatalf("expected %d tools, got %d", len(agentTools), len(tools))
+	sent := first.body["tools"].([]any)
+	if len(sent) != len(tools.Specs) {
+		t.Fatalf("expected %d tools, got %d", len(tools.Specs), len(sent))
 	}
-	if _, eager := tools[0].(map[string]any)["eager_input_streaming"]; eager {
+	if _, eager := sent[0].(map[string]any)["eager_input_streaming"]; eager {
 		t.Error("expected eager input streaming to stay off")
 	}
 

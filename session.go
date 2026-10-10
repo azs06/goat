@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -36,8 +37,8 @@ type savedSession struct {
 }
 
 func promptFingerprint() string {
-	tools, _ := json.Marshal(agentTools)
-	sum := sha256.Sum256(append([]byte(systemPrompt+"\x00"), tools...))
+	specs, _ := json.Marshal(tools.Specs)
+	sum := sha256.Sum256(append([]byte(systemPrompt+"\x00"), specs...))
 	return hex.EncodeToString(sum[:])
 }
 

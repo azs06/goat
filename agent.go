@@ -12,6 +12,7 @@ import (
 
 	"github.com/azs06/goat/internal/markdown"
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -268,7 +269,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOutput, err := executeToolCall(ctx, toolCall, opts)
+		toolOutput, err := tools.Execute(ctx, toolCall, tools.Options{PlanMode: opts.planMode, ApproveBash: opts.approveBash})
 		stopSpinner()
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
@@ -315,7 +316,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		Model:        opts.model,
 		System:       systemPrompt,
 		Effort:       opts.effort,
-		Tools:        agentTools,
+		Tools:        tools.Specs,
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,

@@ -1,4 +1,4 @@
-package main
+package tools
 
 import (
 	"context"
@@ -10,11 +10,20 @@ import (
 	"github.com/azs06/goat/internal/workspace"
 )
 
+// Options controls how Execute runs a call.
+type Options struct {
+	// PlanMode refuses tools that change anything; read-only tools and previews run.
+	PlanMode bool
+	// ApproveBash, when set, is asked before every run_bash command; a non-nil error
+	// rejects the command.
+	ApproveBash func(ctx context.Context, command, workdir string) error
+}
+
 // toolHandler runs one tool with its raw JSON arguments, already validated against the
 // tool's schema.
-type toolHandler func(ctx context.Context, rawArgs string, opts turnOptions) (string, error)
+type toolHandler func(ctx context.Context, rawArgs string, opts Options) (string, error)
 
-// toolHandlers maps each tool in agentTools to the code that runs it.
+// toolHandlers maps each tool in Specs to the code that runs it.
 var toolHandlers = map[string]toolHandler{
 	"read_dir":         runReadDir,
 	"tree_dir":         runTreeDir,
@@ -34,10 +43,10 @@ var toolHandlers = map[string]toolHandler{
 	"grep_files":       runGrepFiles,
 }
 
-// executeToolCall validates and runs one tool call. In plan mode only the read-only
-// tools and previews run, and run_bash commands go through opts.approveBash first.
-func executeToolCall(ctx context.Context, toolCall provider.ToolCall, opts turnOptions) (string, error) {
-	spec, ok := findToolSpec(toolCall.Name)
+// Execute validates and runs one tool call. In plan mode only the read-only tools and
+// previews run, and run_bash commands go through opts.ApproveBash first.
+func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (string, error) {
+	spec, ok := findSpec(toolCall.Name)
 	handler := toolHandlers[toolCall.Name]
 	if !ok || handler == nil {
 		return "", fmt.Errorf("unsupported tool: %s", toolCall.Name)
@@ -45,8 +54,8 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall, opts turnO
 	if err := validateToolArguments(spec, toolCall.Arguments); err != nil {
 		return "", err
 	}
-	if opts.planMode && !allowedInPlanMode(toolCall) {
-		return "", errPlanMode
+	if opts.PlanMode && !allowedInPlanMode(toolCall) {
+		return "", ErrPlanMode
 	}
 	return handler(ctx, toolCall.Arguments, opts)
 }
@@ -58,7 +67,7 @@ func decodeArgs[T any](raw string) (T, error) {
 	return args, err
 }
 
-func runReadDir(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runReadDir(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path string `json:"path"`
 	}](raw)
@@ -75,7 +84,7 @@ func runReadDir(_ context.Context, raw string, _ turnOptions) (string, error) {
 	return fmt.Sprintf("Directory listing for %s:\n%s", filepath.Clean(args.Path), strings.Join(entries, "\n")), nil
 }
 
-func runTreeDir(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runTreeDir(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path  string `json:"path"`
 		Limit int    `json:"limit"`
@@ -94,7 +103,7 @@ func runTreeDir(_ context.Context, raw string, _ turnOptions) (string, error) {
 	return message, nil
 }
 
-func runReadFile(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runReadFile(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -120,7 +129,7 @@ func runReadFile(_ context.Context, raw string, _ turnOptions) (string, error) {
 	return fmt.Sprintf("File contents for %s:\n%s", filepath.Clean(args.Path), content), nil
 }
 
-func runWriteFile(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runWriteFile(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -141,7 +150,7 @@ func runWriteFile(_ context.Context, raw string, _ turnOptions) (string, error) 
 	return fmt.Sprintf("File %s written successfully.", filepath.Clean(args.Path)), nil
 }
 
-func runEditFile(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runEditFile(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path       string `json:"path"`
 		OldText    string `json:"old_text"`
@@ -162,7 +171,7 @@ func runEditFile(_ context.Context, raw string, _ turnOptions) (string, error) {
 	return fmt.Sprintf("File %s edited successfully. Replaced %d occurrence(s).", filepath.Clean(args.Path), replaced), nil
 }
 
-func runEditJSONFile(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runEditJSONFile(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path      string `json:"path"`
 		JSONPath  string `json:"json_path"`
@@ -192,7 +201,7 @@ type transferArgs struct {
 // transferTool builds the handler for a copy or move of a file or directory: noun is
 // "File" or "Directory" and verb is how the success message says it went.
 func transferTool(noun, verb string, preview func(source, destination string, overwrite bool) (string, error), transfer func(source, destination string, overwrite bool) error) toolHandler {
-	return func(_ context.Context, raw string, _ turnOptions) (string, error) {
+	return func(_ context.Context, raw string, _ Options) (string, error) {
 		args, err := decodeArgs[transferArgs](raw)
 		if err != nil {
 			return "", err
@@ -212,7 +221,7 @@ type deleteArgs struct {
 	Preview bool   `json:"preview"`
 }
 
-func runDeleteFile(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runDeleteFile(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[deleteArgs](raw)
 	if err != nil {
 		return "", err
@@ -226,7 +235,7 @@ func runDeleteFile(_ context.Context, raw string, _ turnOptions) (string, error)
 	return fmt.Sprintf("File %s deleted successfully.", filepath.Clean(args.Path)), nil
 }
 
-func runDeleteDir(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runDeleteDir(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[deleteArgs](raw)
 	if err != nil {
 		return "", err
@@ -240,7 +249,7 @@ func runDeleteDir(_ context.Context, raw string, _ turnOptions) (string, error) 
 	return fmt.Sprintf("Directory %s deleted successfully.", filepath.Clean(args.Path)), nil
 }
 
-func runUndoLastChange(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runUndoLastChange(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Preview bool `json:"preview"`
 	}](raw)
@@ -253,7 +262,7 @@ func runUndoLastChange(_ context.Context, raw string, _ turnOptions) (string, er
 	return workspace.UndoLastChange()
 }
 
-func runBash(ctx context.Context, raw string, opts turnOptions) (string, error) {
+func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Command string `json:"command"`
 		Workdir string `json:"workdir"`
@@ -264,15 +273,15 @@ func runBash(ctx context.Context, raw string, opts turnOptions) (string, error) 
 	if strings.TrimSpace(args.Command) == "" {
 		return "", fmt.Errorf("missing command")
 	}
-	if opts.approveBash != nil {
-		if err := opts.approveBash(ctx, args.Command, args.Workdir); err != nil {
+	if opts.ApproveBash != nil {
+		if err := opts.ApproveBash(ctx, args.Command, args.Workdir); err != nil {
 			return "", err
 		}
 	}
 	return workspace.RunBash(ctx, args.Command, args.Workdir)
 }
 
-func runFindFiles(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runFindFiles(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path           string `json:"path"`
 		Pattern        string `json:"pattern"`
@@ -299,7 +308,7 @@ func runFindFiles(_ context.Context, raw string, _ turnOptions) (string, error) 
 	return message, nil
 }
 
-func runGrepFiles(_ context.Context, raw string, _ turnOptions) (string, error) {
+func runGrepFiles(_ context.Context, raw string, _ Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Path           string `json:"path"`
 		Query          string `json:"query"`
