@@ -187,7 +187,7 @@ func TestDeepSeekModelsAndCredentials(t *testing.T) {
 		t.Fatalf("expected the DeepSeek default, got %v", model)
 	}
 	t.Setenv("GOAT_MODEL", "deepseek-flash")
-	if model, _ := startupModel(nil); model != (provider.Model{Provider: provider.DeepSeek, ID: "deepseek-flash"}) {
+	if model, _ := startupModel(nil, ""); model != (provider.Model{Provider: provider.DeepSeek, ID: "deepseek-flash"}) {
 		t.Fatalf("expected GOAT_MODEL to pick DeepSeek, got %v", model)
 	}
 

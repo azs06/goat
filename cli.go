@@ -156,10 +156,6 @@ func parseCLI(args []string, output io.Writer) (cliOptions, error) {
 	return opts, nil
 }
 
-// cliModel and cliEffort are the --model and --effort values, which take precedence
-// over the environment and the saved session.
-var cliModel, cliEffort string
-
 // readPromptFromStdin reads a -p prompt that was piped in.
 func readPromptFromStdin() (string, error) {
 	if terminal.StdinIsTerminal() {

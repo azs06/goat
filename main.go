@@ -88,13 +88,13 @@ func (c *config) currentProvider() (provider.Provider, error) {
 	return c.provider(c.model.Provider)
 }
 
-// startupModel picks the first usable model in order: GOAT_MODEL, the saved session,
-// OPENAI_MODEL, then a default for whichever provider has credentials. Candidates whose
-// provider has no API key are skipped.
-func startupModel(saved *savedSession) (provider.Model, string) {
+// startupModel picks the first usable model in order: the --model flag, GOAT_MODEL, the
+// saved session, OPENAI_MODEL, then a default for whichever provider has credentials.
+// Candidates whose provider has no API key are skipped.
+func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 	type candidate struct{ source, raw string }
 	var candidates []candidate
-	if raw := strings.TrimSpace(cliModel); raw != "" {
+	if raw := strings.TrimSpace(flag); raw != "" {
 		candidates = append(candidates, candidate{"--model", raw})
 	}
 	if raw := strings.TrimSpace(os.Getenv("GOAT_MODEL")); raw != "" {
@@ -127,10 +127,10 @@ func startupModel(saved *savedSession) (provider.Model, string) {
 	return provider.DefaultModel(), "default"
 }
 
-// startupEffort picks the effort in order: GOAT_EFFORT, the saved session,
-// OPENAI_REASONING_EFFORT, then the default.
-func startupEffort(saved *savedSession) provider.Effort {
-	candidates := []struct{ source, value string }{{"--effort", cliEffort}, {"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
+// startupEffort picks the effort in order: the --effort flag, GOAT_EFFORT, the saved
+// session, OPENAI_REASONING_EFFORT, then the default.
+func startupEffort(saved *savedSession, flag string) provider.Effort {
+	candidates := []struct{ source, value string }{{"--effort", flag}, {"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
 	if saved != nil {
 		candidates = append(candidates, struct{ source, value string }{"saved session", saved.Effort})
 	}
@@ -150,20 +150,22 @@ func startupEffort(saved *savedSession) provider.Effort {
 	return provider.DefaultEffort
 }
 
-func loadConfig() *config {
+// loadConfig builds the startup configuration from the saved session, the environment
+// and the --model and --effort flags in opts.
+func loadConfig(opts cliOptions) *config {
 	saved, err := loadSessionFile(sessionPath)
 	if err != nil {
 		warnf("failed to load the saved session: %v", err)
 	}
 
-	model, _ := startupModel(saved)
+	model, _ := startupModel(saved, opts.model)
 	autoCompactTokens, err := parseAutoCompactTokens(os.Getenv("GOAT_AUTO_COMPACT_TOKENS"))
 	if err != nil {
 		warnf("invalid GOAT_AUTO_COMPACT_TOKENS: %v; using the default", err)
 		autoCompactTokens = 0
 	}
 
-	cfg := &config{model: model, reasoningEffort: startupEffort(saved), autoCompactTokens: autoCompactTokens}
+	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens}
 	restoreSavedConversation(cfg, saved)
 	return cfg
 }
@@ -501,7 +503,6 @@ func main() {
 		fmt.Println("goat " + goatVersion())
 		return
 	}
-	cliModel, cliEffort = opts.model, opts.effort
 	planMode = opts.plan
 
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -518,7 +519,7 @@ func main() {
 	workspace.Warnf = warnf
 	terminal.Warnf = warnf
 	applyTheme()
-	cfg := loadConfig()
+	cfg := loadConfig(opts)
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
 	cfg.interactive = terminal.StdinIsTerminal()
