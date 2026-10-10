@@ -39,6 +39,10 @@ var spinnerFrames = []string{"·", "✢", "✳", "✶", "✻", "✽", "✻", "�
 
 const spinnerInterval = 110 * time.Millisecond
 
+// reducedMotion keeps the spinner still: GOAT_REDUCED_MOTION=1 shows a fixed glyph and
+// redraws only once a second, for the elapsed time.
+var reducedMotion = envFlag("GOAT_REDUCED_MOTION")
+
 // startSpinner shows label with an animation until stopSpinner is called. A spinner
 // already running is replaced.
 func startSpinner(label string) {
@@ -97,7 +101,11 @@ func pauseSpinner() func() {
 
 func (s *spinner) run() {
 	defer close(s.done)
-	ticker := time.NewTicker(spinnerInterval)
+	interval := spinnerInterval
+	if reducedMotion {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -138,6 +146,9 @@ func (s *spinner) draw() {
 	frame := s.frame
 	elapsed := time.Since(s.started).Truncate(time.Second)
 	glyph := spinnerFrames[frame%len(spinnerFrames)]
+	if reducedMotion {
+		glyph = spinnerFrames[4]
+	}
 	line := style.Accent.Render(glyph+" "+s.label+style.Glyphs().Ellipsis) + " " + style.Subtle.Render(fmt.Sprintf("(%s · ctrl-c to interrupt)", formatElapsed(elapsed)))
 	// \r and erase-line redraw in place; the line is cut to the terminal width so it
 	// never wraps, which would leave stale copies behind.

@@ -24,7 +24,13 @@ const (
 	Subheading    Role = "subheading"     // markdown ### headings and smaller
 	Quote         Role = "quote"          // markdown > quotes
 	Code          Role = "code"           // lines inside a fenced code block
-	CodeComment   Role = "code-comment"   // comment lines inside a fenced code block
+	CodeComment   Role = "code-comment"   // comments inside a fenced code block
+	CodeKeyword   Role = "code-keyword"   // keywords in highlighted code
+	CodeString    Role = "code-string"    // string literals in highlighted code
+	CodeNumber    Role = "code-number"    // number literals in highlighted code
+	CodeFunction  Role = "code-function"  // function names in highlighted code
+	CodeType      Role = "code-type"      // type and class names in highlighted code
+	CodeConstant  Role = "code-constant"  // constants and builtins in highlighted code
 	InlineCode    Role = "inline-code"    // `code` spans
 	Success       Role = "success"        // success marks and messages
 	Error         Role = "error"          // error marks and messages
@@ -41,7 +47,7 @@ const (
 // Roles lists every role a theme can style.
 var Roles = []Role{
 	Accent, Muted, Subtle, Strong, Emphasis, Highlight, Title, Heading, Subheading, Quote,
-	Code, CodeComment, InlineCode, Success, Error, Warning, ApprovalTitle, DiffAdded,
+	Code, CodeComment, CodeKeyword, CodeString, CodeNumber, CodeFunction, CodeType, CodeConstant, InlineCode, Success, Error, Warning, ApprovalTitle, DiffAdded,
 	DiffRemoved, Prompt, UserMarker, UserMessage, Selected,
 }
 

@@ -1,5 +1,5 @@
 {
-  "$comment": "goat's built-in theme: black and white. The grays are exact entries of the 256-color grayscale ramp.",
+  "$comment": "goat's built-in theme: black and white, except for syntax highlighting in code blocks. The grays are exact entries of the 256-color grayscale ramp.",
   "styles": {
     ":root": "--white: #eeeeee; --light: #e4e4e4; --silver: #d0d0d0; --gray-light: #bcbcbc; --gray: #8a8a8a; --gray-dim: #808080; --gray-dark: #585858; --shade: #303030",
 
@@ -14,7 +14,13 @@
     "subheading": "font-weight: bold",
     "quote": "color: var(--gray); font-style: italic",
     "code": "color: var(--gray-light)",
-    "code-comment": "color: var(--gray-dark)",
+    "code-comment": "color: var(--gray-dim); font-style: italic",
+    "code-keyword": "color: #c678dd",
+    "code-string": "color: #98c379",
+    "code-number": "color: #d19a66",
+    "code-function": "color: #61afef",
+    "code-type": "color: #e5c07b",
+    "code-constant": "color: #56b6c2",
     "inline-code": "color: var(--light)",
     "success": "color: var(--white)",
     "error": "color: var(--gray-dim)",

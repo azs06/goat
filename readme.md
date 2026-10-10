@@ -25,7 +25,8 @@ is its workspace.
 
 ## Using goat
 
-Type a prompt and press Enter. goat streams the reply as formatted markdown and shows
+Type a prompt and press Enter. goat streams the reply as formatted markdown (code blocks syntax-highlighted, links
+clickable in terminals that support them) and shows
 each tool call as it happens, with a short summary of the result and a diff for file
 edits. Press Ctrl-C while it is working to interrupt the turn; the next prompt continues
 from where it stopped. Ctrl-C at an empty prompt asks you to press it again to exit, and
@@ -219,7 +220,8 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 
 ## Themes
 
-goat's look is black and white by default. All styling goes through a small style engine
+goat's look is black and white by default; the one exception is syntax highlighting in
+code blocks, which uses color. All styling goes through a small style engine
 (`internal/style`): text is styled by role, and a theme decides what each role looks like.
 A theme is a JSON file whose styles are CSS declarations, written as a string or as an
 object:
@@ -252,7 +254,8 @@ by property, the way CSS cascades: roles you leave out keep their defaults, and
 - **Variables:** custom properties go in `":root"` and are used with `var(--name)` or
   `var(--name, fallback)`.
 - **Roles:** `accent`, `muted`, `subtle`, `strong`, `emphasis`, `highlight`, `title`,
-  `heading`, `subheading`, `quote`, `code`, `code-comment`, `inline-code`, `success`,
+  `heading`, `subheading`, `quote`, `code`, `code-comment`, `code-keyword`, `code-string`,
+  `code-number`, `code-function`, `code-type`, `code-constant`, `inline-code`, `success`,
   `error`, `warning`, `approval-title`, `diff-added`, `diff-removed`, `prompt`,
   `user-marker`, `user-message` and `selected`. A role can also be written like a class
   (`".accent"`).
@@ -279,6 +282,7 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `GOAT_ANTHROPIC_FALLBACKS` | `on` | Server-side refusal fallbacks for Claude models |
 | `GOAT_ANTHROPIC_CACHE_TTL` | `5m` | Lifetime of Claude prompt cache entries, `5m` or `1h` |
 | `GOAT_THEME` | `~/.config/goat/theme.json` | Theme file |
+| `GOAT_REDUCED_MOTION` | | Keep the spinner still (it updates once a second) |
 | `NO_COLOR` | | Turn styling off |
 | `GOAT_FORCE_COLOR` | | Style output even when stdout is not a terminal, for example when piping through a pager that understands colors |
 

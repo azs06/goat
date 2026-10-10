@@ -91,6 +91,8 @@ func (m *markdownStream) renderLine(line string) string {
 type mdState struct {
 	inFence  bool
 	fenceSeq string // the run of ` or ~ that opened the fence
+	lang     string // the fence's language tag
+	code     []string
 }
 
 var (
@@ -114,6 +116,12 @@ func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 		if strings.HasPrefix(trimmed, st.fenceSeq) && strings.Trim(trimmed, st.fenceSeq[:1]) == "" {
 			return style.Subtle.Render(g.BottomLeft + g.HLine), mdState{}
 		}
+		st.code = append(st.code, line)
+		if style.Enabled() {
+			if highlighted, ok := highlightCodeLine(st.lang, st.code); ok {
+				return style.Subtle.Render(g.VLine) + " " + highlighted, st
+			}
+		}
 		return style.Subtle.Render(g.VLine) + " " + renderCodeLine(line), st
 	}
 
@@ -122,7 +130,7 @@ func renderMarkdownLine(line string, st mdState, width int) (string, mdState) {
 		if m[2] != "" {
 			label += " " + m[2]
 		}
-		return style.Subtle.Render(label), mdState{inFence: true, fenceSeq: m[1]}
+		return style.Subtle.Render(label), mdState{inFence: true, fenceSeq: m[1], lang: m[2]}
 	}
 
 	if strings.HasPrefix(strings.TrimSpace(line), "|") {
@@ -206,6 +214,12 @@ func renderInline(text string, active style.Style) string {
 			out.WriteString(text[i : i+n])
 			i += n
 			continue
+		case '[', '!':
+			if label, url, end, ok := parseMarkdownLink(text, i); ok {
+				out.WriteString(renderLink(label, url, c == '!', active))
+				i = end
+				continue
+			}
 		case '*', '_':
 			n := runLength(text, i, c)
 			if n <= 2 && (i == 0 || !isWordByte(text[i-1])) && i+n < len(text) && !isSpaceByte(text[i+n]) {
@@ -236,6 +250,62 @@ func runLength(text string, i int, c byte) int {
 		n++
 	}
 	return n
+}
+
+// parseMarkdownLink reads [label](url) or ![alt](url) starting at i, returning the
+// position after it.
+func parseMarkdownLink(text string, i int) (label, url string, end int, ok bool) {
+	start := i
+	if text[i] == '!' {
+		if i+1 >= len(text) || text[i+1] != '[' {
+			return "", "", 0, false
+		}
+		start++
+	}
+	depth := 0
+	closeBracket := -1
+	for j := start; j < len(text); j++ {
+		if text[j] == '[' {
+			depth++
+		} else if text[j] == ']' {
+			depth--
+			if depth == 0 {
+				closeBracket = j
+				break
+			}
+		}
+	}
+	if closeBracket < 0 || closeBracket+1 >= len(text) || text[closeBracket+1] != '(' {
+		return "", "", 0, false
+	}
+	closeParen := strings.IndexByte(text[closeBracket+2:], ')')
+	if closeParen < 0 {
+		return "", "", 0, false
+	}
+	url = strings.TrimSpace(text[closeBracket+2 : closeBracket+2+closeParen])
+	if url == "" || strings.ContainsAny(url, " \t") {
+		return "", "", 0, false
+	}
+	return text[start+1 : closeBracket], url, closeBracket + 3 + closeParen, true
+}
+
+// renderLink draws a link as its underlined label, clickable in terminals that support
+// OSC 8, followed by the address when the label hides it. Images cannot be shown
+// inline, so they become a labelled placeholder linking to the image.
+func renderLink(label, url string, image bool, active style.Style) string {
+	underline := active.Merge(style.Style{Underline: true})
+	if image {
+		if label == "" {
+			label = "image"
+		}
+		return style.Muted.Render("[image: ") + style.Hyperlink(underline.Open()+label+style.Reset, url) + style.Muted.Render("]") + active.Open()
+	}
+	text := underline.Open() + renderInline(label, underline) + style.Reset + active.Open()
+	linked := style.Hyperlink(text, url)
+	if label != url && !strings.HasPrefix(url, "#") {
+		linked += style.Subtle.Render(" ("+url+")") + active.Open()
+	}
+	return linked
 }
 
 // findCodeClose finds a backtick run of exactly n starting at or after from.

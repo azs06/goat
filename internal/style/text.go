@@ -30,9 +30,20 @@ func Glyphs() GlyphSet {
 	return asciiGlyphs
 }
 
-var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+// ansiPattern matches CSI sequences (styles, cursor movement) and OSC sequences such as
+// OSC 8 hyperlinks, neither of which takes up cells.
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 
-// StripANSI removes SGR and other CSI escape sequences.
+// Hyperlink makes text a link to url in terminals that support OSC 8; others show the
+// text alone.
+func Hyperlink(text, url string) string {
+	if !Enabled() {
+		return text
+	}
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}
+
+// StripANSI removes SGR and other CSI escape sequences, and OSC sequences.
 func StripANSI(text string) string {
 	return ansiPattern.ReplaceAllString(text, "")
 }
