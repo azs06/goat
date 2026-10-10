@@ -350,8 +350,8 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		{"Effort:", effortStatusText(c)},
 	}
 	for _, name := range provider.Names {
-		if source := provider.CredentialSource(name); source != "" {
-			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+source+")")})
+		if origin := credentialOrigin(name); origin != "" {
+			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
 		} else {
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
 		}

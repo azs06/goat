@@ -6,17 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
-	"maps"
 	"os"
 	"os/signal"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/joho/godotenv"
 
 	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/terminal"
@@ -518,17 +513,22 @@ func main() {
 		return
 	}
 
-	if err := loadDotenv(); err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
+	// Before anything else reads the environment: the files can hold any GOAT_ setting.
+	envWarnings, err := loadEnvFiles()
+	if err != nil {
+		log.Fatal(err)
 	}
 	if len(provider.AvailableNames()) == 0 {
-		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")
+		log.Fatal(noAPIKeyMessage())
 	}
 
 	provider.Warnf = warnf
 	workspace.Warnf = warnf
 	terminal.Warnf = warnf
 	applyTheme()
+	for _, warning := range envWarnings {
+		warnf("%s", warning)
+	}
 	cfg := loadConfig(opts)
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
@@ -614,16 +614,4 @@ func runInteractive(cfg *config) {
 			fmt.Println(formatError(err.Error()))
 		}
 	}
-}
-
-// loadDotenv loads .env from the workspace, if there is one, into the environment, and
-// keeps the variables it defines out of run_bash commands.
-func loadDotenv() error {
-	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if values, err := godotenv.Read(); err == nil {
-		workspace.HideFromCommands(slices.Collect(maps.Keys(values))...)
-	}
-	return nil
 }

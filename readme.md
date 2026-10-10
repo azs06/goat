@@ -34,9 +34,21 @@ go install github.com/azs06/goat@latest && goat
 # or, from a checkout: go run .   (or go build -o goat . && ./goat)
 ```
 
-Keys can also go in a `.env` file in the directory goat runs in. Only providers with a key
-are offered. Run goat from the root of the project you want it to work on: that directory
-is its workspace.
+Keys can also go in a `.env` file. Put them in `~/.config/goat/.env` (or
+`$XDG_CONFIG_HOME/goat/.env`) to use them from every folder, which is what you want after
+`go install`. A `.env` in the directory goat runs in works for that project only:
+
+```sh
+mkdir -p ~/.config/goat
+printf 'OPENAI_API_KEY=%s\n' "sk-..." >> ~/.config/goat/.env
+chmod 600 ~/.config/goat/.env
+```
+
+A variable takes the first non-empty value it finds: the shell, then the project's `.env`,
+then the global one. `/status` shows where each provider's key came from, and goat warns
+if the global file can be read by other users. Only providers with a key are offered. Run
+goat from the root of the project you want it to work on: that directory is its
+workspace.
 
 ## Using goat
 
@@ -306,9 +318,11 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
-- `run_bash` commands do not inherit goat's API keys, anything loaded from `.env`, or other
-  variables named like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`,
-  `*_PASSWORD` and similar).
+- `run_bash` commands do not inherit goat's API keys, anything loaded from either `.env`
+  file, or other variables named like credentials (`*_API_KEY`, `*_SECRET`,
+  `*_AUTH_TOKEN`, `*_PASSWORD` and similar). `~/.config/goat/.env` is outside the
+  workspace, so file tools cannot reach it, but a command can read it like any other file
+  you can read: approving commands is what guards it.
 - Every change made by a file tool is snapshotted first, so `/undo` can restore it,
   including removing directories the change created. The last 100 operations stay
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
@@ -372,6 +386,9 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 
 ## Configuration
 
+Any of these can also be set in either `.env` file, so `~/.config/goat/.env` doubles as
+goat's global settings file (e.g. `GOAT_CODEMODE=1`).
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | | Enables OpenAI models |
@@ -397,7 +414,8 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 
 | File | |
 | --- | --- |
-| `.env` in the workspace | API keys and other variables, loaded at startup |
+| `.env` in the workspace | API keys and other variables for this project, loaded at startup |
+| `~/.config/goat/.env` | API keys and other variables for every project; the shell and the project's `.env` win |
 | `AGENTS.md` (or `GOAT.md`, `CLAUDE.md`) in the workspace | Project instructions |
 | `~/.config/goat/AGENTS.md` | Your own instructions for every project |
 | `~/.config/goat/theme.json` | Theme |
@@ -407,7 +425,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 
 | Path | |
 | --- | --- |
-| `main.go`, `cli.go` | Startup, command-line flags, the prompt loop and Ctrl-C handling |
+| `main.go`, `cli.go`, `env_files.go` | Startup, command-line flags, loading the `.env` files, the prompt loop and Ctrl-C handling |
 | `agent.go` | One turn: streaming the reply, running tool calls, the 40-round limit |
 | `commands.go` | Slash commands |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
