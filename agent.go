@@ -94,10 +94,10 @@ func streamAttempt(ctx context.Context, p provider.Provider, req provider.Reques
 
 // executeStreamedResponse sends one request, retrying transient failures as long as no
 // text has been shown yet.
-func executeStreamedResponse(ctx context.Context, provider provider.Provider, req provider.Request) (*provider.Response, bool, error) {
+func executeStreamedResponse(ctx context.Context, p provider.Provider, req provider.Request) (*provider.Response, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxStreamRateLimitRetries; attempt++ {
-		resp, printedText, err := streamAttempt(ctx, provider, req)
+		resp, printedText, err := streamAttempt(ctx, p, req)
 		if err == nil {
 			return resp, printedText, nil
 		}
@@ -107,7 +107,7 @@ func executeStreamedResponse(ctx context.Context, provider provider.Provider, re
 			return nil, true, fmt.Errorf("assistant output was interrupted after partial text was already printed: %w", err)
 		}
 
-		delay, retryable := provider.RetryDelay(err, attempt)
+		delay, retryable := p.RetryDelay(err, attempt)
 		if !retryable || ctx.Err() != nil {
 			return nil, false, err
 		}
@@ -303,7 +303,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 	req := provider.Request{
 		Model:        model,
-		System:       SystemPrompt,
+		System:       systemPrompt,
 		Effort:       effort,
 		Tools:        agentTools,
 		Conversation: conv.conversation,

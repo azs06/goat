@@ -35,3 +35,10 @@ func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
 		t.Fatalf("expected the new file's entries, got %+v", fresh)
 	}
 }
+
+// loadLatestConversationResponseID returns just the response ID half of
+// latestResumableConversation.
+func loadLatestConversationResponseID() (string, error) {
+	responseID, _, err := latestResumableConversation()
+	return responseID, err
+}

@@ -157,7 +157,7 @@ func TestEscapeControlCharsShowsHiddenSequences(t *testing.T) {
 
 func TestSystemPromptListsEveryTool(t *testing.T) {
 	for _, name := range availableToolNames() {
-		if !strings.Contains(SystemPrompt, "- "+name+":") {
+		if !strings.Contains(systemPrompt, "- "+name+":") {
 			t.Errorf("system prompt does not list %s", name)
 		}
 	}

@@ -184,11 +184,6 @@ func appendHistoryEntry(entry historyEntry) error {
 	return nil
 }
 
-func loadLatestConversationResponseID() (string, error) {
-	responseID, _, err := latestResumableConversation()
-	return responseID, err
-}
-
 // latestResumableConversation finds the OpenAI response the history log last ended on,
 // and the conversation that response belongs to, for resuming without a session file.
 // Only OpenAI conversations can be resumed from a response ID alone.

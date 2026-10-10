@@ -256,7 +256,7 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 		t.Error("expected automatic caching on the official API")
 	}
 	system := first.body["system"].([]any)[0].(map[string]any)
-	if system["text"] != SystemPrompt || system["cache_control"] == nil {
+	if system["text"] != systemPrompt || system["cache_control"] == nil {
 		t.Errorf("expected the cached system prompt, got %v", system)
 	}
 	if first.body["fallbacks"] != "default" || !strings.Contains(first.header.Get("anthropic-beta"), "server-side-fallback-2026-07-01") {

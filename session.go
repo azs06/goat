@@ -36,7 +36,7 @@ type savedSession struct {
 
 func promptFingerprint() string {
 	tools, _ := json.Marshal(agentTools)
-	sum := sha256.Sum256(append([]byte(SystemPrompt+"\x00"), tools...))
+	sum := sha256.Sum256(append([]byte(systemPrompt+"\x00"), tools...))
 	return hex.EncodeToString(sum[:])
 }
 
