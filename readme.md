@@ -65,6 +65,7 @@ Command-line flags:
 goat                          # start, resuming the last conversation
 goat "fix the failing test"   # start and run this prompt first
 goat -n                       # start a new conversation (the old one stays for /resume)
+goat --plan                   # start in plan mode: read and plan, change nothing
 goat -m claude-sonnet-5-5 -e high
 goat -p "summarize main.go"   # one prompt, reply on stdout, exit code 1 on failure
 git diff | goat -p "review this diff" > review.md
@@ -98,6 +99,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
 | `/retry` | Send the last prompt again. |
 | `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Long output opens in `$PAGER` or `less`. |
+| `/plan [on\|off]` | Plan mode: goat reads and investigates but changes nothing. File tools only run as previews and `run_bash` is refused; the footer shows `plan mode`. `goat --plan` starts in it. |
 | `/diff [staged]` | Show the uncommitted changes in the workspace's git repository (in the pager when long). |
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
@@ -231,6 +233,8 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   including removing directories the change created. The last 100 operations stay
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
   still be undone.
+- In plan mode (`/plan`, `--plan`) nothing in the workspace changes: file tools only run
+  as previews and `run_bash` is refused.
 - `run_bash` asks before each command. Answer `y` to run it, `n` to decline, `a` to allow
   every command for the rest of the session, or type feedback to decline with a reason the
   model sees. Commands time out after 30 seconds, and everything a command started is
@@ -316,6 +320,7 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `mutations.go` | Snapshots, the operation log and undo |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
+| `plan_mode.go` | Plan mode |
 | `search.go`, `secrets.go` | `.gitignore` filtering, grep matching, ranged reads; keeping credentials out of tools |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the pager, git status and cost |

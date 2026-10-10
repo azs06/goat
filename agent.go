@@ -310,6 +310,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
 	}
+	if planMode {
+		req.UserText = planModeNote + req.UserText
+	}
 	if conv.conversation.IsEmpty() && len(conv.pendingToolResults) == 0 && projectInstructions != nil {
 		if instructions := projectInstructions(); instructions != "" {
 			req.UserText = instructions + "\n" + prompt

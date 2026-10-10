@@ -166,7 +166,7 @@ func TestRenderHelpTable(t *testing.T) {
 	chromeWithColor(t, false)
 	plain := renderHelpTable(commands)
 	chromeAssertPlain(t, "help", plain)
-	for _, want := range []string{"Conversation\n  /clear ", "Start a new conversation", "(also /new, /reset)", "Workspace\n  /diff [staged]"} {
+	for _, want := range []string{"Conversation\n  /clear ", "Start a new conversation", "(also /new, /reset)", "Workspace\n  /plan [on|off]"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain help lacks %q:\n%s", want, plain)
 		}

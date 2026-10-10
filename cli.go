@@ -60,6 +60,7 @@ type cliOptions struct {
 	continueSession bool
 	newConversation bool
 	autoApprove     bool
+	plan            bool
 	prompt          string
 }
 
@@ -77,6 +78,7 @@ Flags:
   -c, --continue       with -p, continue the saved conversation instead of a new one
   -n, --new            start a new conversation (the previous one stays for /resume)
   -y, --yes            run run_bash commands without asking (GOAT_AUTO_APPROVE_BASH=1)
+      --plan           start in plan mode: read and plan, change nothing
   -v, --version        print the version and exit
   -h, --help           show this help
 
@@ -113,6 +115,7 @@ func parseCLI(args []string, output io.Writer) (cliOptions, error) {
 	for _, name := range []string{"y", "yes"} {
 		fs.BoolVar(&opts.autoApprove, name, false, "")
 	}
+	fs.BoolVar(&opts.plan, "plan", false, "")
 
 	var words []string
 	for {

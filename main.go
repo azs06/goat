@@ -406,6 +406,9 @@ func printWelcome(cfg *config) {
 // footerParts is the status shown under the interactive prompt.
 func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
+	if planMode {
+		parts = append(parts, "plan mode")
+	}
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())
 	}
@@ -495,6 +498,7 @@ func main() {
 		return
 	}
 	cliModel, cliEffort = opts.model, opts.effort
+	planMode = opts.plan
 
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Fatalf("Error loading .env file: %v", err)

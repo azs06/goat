@@ -144,6 +144,9 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall) (string, e
 	if err := validateToolArguments(spec, toolCall.Arguments); err != nil {
 		return "", err
 	}
+	if planMode && !allowedInPlanMode(toolCall) {
+		return "", errPlanMode
+	}
 
 	switch toolCall.Name {
 	case "read_dir":
