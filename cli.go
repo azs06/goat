@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/terminal"
 )
 
 // version is set at build time with -ldflags "-X main.version=v1.2.3"; otherwise it is
@@ -161,7 +162,7 @@ var cliModel, cliEffort string
 
 // readPromptFromStdin reads a -p prompt that was piped in.
 func readPromptFromStdin() (string, error) {
-	if stdinIsTerminal() {
+	if terminal.StdinIsTerminal() {
 		return "", errors.New("-p needs a prompt: pass it as an argument or pipe it in")
 	}
 	data, err := io.ReadAll(os.Stdin)

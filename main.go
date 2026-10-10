@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/terminal"
 	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
@@ -233,10 +234,10 @@ func envFlag(name string) bool {
 }
 
 // activeInputGuard is the guard of the command or turn currently running, if any.
-var activeInputGuard *terminalInputGuard
+var activeInputGuard *terminal.InputGuard
 
 func runWithInputGuard(cbreak bool, work func() error) error {
-	guard, err := beginTerminalInputGuard(cbreak)
+	guard, err := terminal.BeginInputGuard(cbreak)
 	if err != nil {
 		return err
 	}
@@ -259,12 +260,12 @@ func suspendInputGuard() func() {
 	capture.pause()
 	suspended := time.Now()
 	guard := activeInputGuard
-	if err := guard.suspend(); err != nil {
+	if err := guard.Suspend(); err != nil {
 		warnf("failed to restore terminal echo: %v", err)
 	}
 	return func() {
 		inputWaitTotal += time.Since(suspended)
-		if err := guard.resume(); err != nil {
+		if err := guard.Resume(); err != nil {
 			warnf("failed to disable terminal echo: %v", err)
 		}
 		capture.resume()
@@ -515,11 +516,12 @@ func main() {
 
 	provider.Warnf = warnf
 	workspace.Warnf = warnf
+	terminal.Warnf = warnf
 	applyTheme()
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
-	cfg.interactive = stdinIsTerminal()
+	cfg.interactive = terminal.StdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve
 	argumentCompletions = commandArgumentCompletions(cfg)

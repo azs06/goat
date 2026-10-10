@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package main
+package terminal
 
 import (
 	"fmt"
@@ -9,7 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type terminalInputGuard struct {
+// InputGuard keeps what the user types during a turn from echoing into the
+// transcript. A guard for a non-terminal stdin does nothing.
+type InputGuard struct {
 	fd       int
 	termios  *unix.Termios
 	disabled bool
@@ -18,14 +20,16 @@ type terminalInputGuard struct {
 	cbreak bool
 }
 
-func beginTerminalInputGuard(cbreak bool) (*terminalInputGuard, error) {
+// BeginInputGuard turns off echo on stdin, and with cbreak also line buffering, until
+// the guard is closed.
+func BeginInputGuard(cbreak bool) (*InputGuard, error) {
 	fd := int(os.Stdin.Fd())
 	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
-		return &terminalInputGuard{}, nil
+		return &InputGuard{}, nil
 	}
 
-	guard := &terminalInputGuard{fd: fd, termios: original, cbreak: cbreak}
+	guard := &InputGuard{fd: fd, termios: original, cbreak: cbreak}
 	if err := guard.disableEcho(); err != nil {
 		return nil, err
 	}
@@ -33,12 +37,13 @@ func beginTerminalInputGuard(cbreak bool) (*terminalInputGuard, error) {
 	return guard, nil
 }
 
-func stdinIsTerminal() bool {
+// StdinIsTerminal reports whether stdin is a terminal.
+func StdinIsTerminal() bool {
 	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), ioctlReadTermios)
 	return err == nil
 }
 
-func (g *terminalInputGuard) disableEcho() error {
+func (g *InputGuard) disableEcho() error {
 	updated := *g.termios
 	updated.Lflag &^= unix.ECHO
 	if g.cbreak {
@@ -53,9 +58,9 @@ func (g *terminalInputGuard) disableEcho() error {
 	return nil
 }
 
-// suspend discards input not yet read and restores the original terminal
-// state so the user can answer a prompt; resume turns echo off again.
-func (g *terminalInputGuard) suspend() error {
+// Suspend discards input not yet read and restores the original terminal state so the
+// user can answer a prompt; Resume turns echo off again.
+func (g *InputGuard) Suspend() error {
 	if g == nil || !g.disabled {
 		return nil
 	}
@@ -67,27 +72,22 @@ func (g *terminalInputGuard) suspend() error {
 	return nil
 }
 
-func (g *terminalInputGuard) resume() error {
+// Resume undoes Suspend.
+func (g *InputGuard) Resume() error {
 	if g == nil || !g.disabled {
 		return nil
 	}
 	return g.disableEcho()
 }
 
-func (g *terminalInputGuard) Close() error {
-	if g == nil || !g.disabled {
-		return nil
-	}
-
-	_ = flushInputBuffer(g.fd)
-	if err := unix.IoctlSetTermios(g.fd, ioctlWriteTermios, g.termios); err != nil {
-		return fmt.Errorf("restore terminal state: %w", err)
-	}
-	return nil
+// Close discards input typed during the turn and restores the original terminal
+// state.
+func (g *InputGuard) Close() error {
+	return g.Suspend()
 }
 
-// stdoutRows is the height of the terminal stdout writes to, or 0 if unknown.
-func stdoutRows() int {
+// Rows is the height of the terminal stdout writes to, or 0 if unknown.
+func Rows() int {
 	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
 	if err != nil {
 		return 0
@@ -95,8 +95,8 @@ func stdoutRows() int {
 	return int(size.Row)
 }
 
-// stdoutColumns is the width of the terminal stdout writes to, or 0 if unknown.
-func stdoutColumns() int {
+// Columns is the width of the terminal stdout writes to, or 0 if unknown.
+func Columns() int {
 	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
 	if err != nil {
 		return 0
@@ -104,11 +104,11 @@ func stdoutColumns() int {
 	return int(size.Col)
 }
 
-// enterCbreakMode turns off line buffering and echo on stdin so the prompt editor sees
+// EnterCbreak turns off line buffering and echo on stdin so the prompt editor sees
 // each key as it is typed. Enter arrives as "\r", told apart from Ctrl-J's "\n". ISIG
 // stays on, so Ctrl-C still raises SIGINT. The returned function restores the previous
 // state.
-func enterCbreakMode() (func(), error) {
+func EnterCbreak() (func(), error) {
 	fd := int(os.Stdin.Fd())
 	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
@@ -124,7 +124,7 @@ func enterCbreakMode() (func(), error) {
 	}
 	return func() {
 		if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, original); err != nil {
-			warnf("failed to restore terminal input state: %v", err)
+			Warnf("failed to restore terminal input state: %v", err)
 		}
 	}, nil
 }

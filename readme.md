@@ -346,12 +346,13 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
 | `plan_mode.go` | Plan mode |
-| `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
+| `prompt_editor.go`, `selector.go`, `input.go`, `queue.go` | The interactive line editor, arrow-key pickers, messages queued during a turn and input reading |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
 | `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
+| `internal/terminal/` | Terminal modes (echo, cbreak) and size |
 | `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
 
 ## Development

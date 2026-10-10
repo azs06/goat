@@ -1,6 +1,6 @@
 //go:build darwin
 
-package main
+package terminal
 
 import "golang.org/x/sys/unix"
 
