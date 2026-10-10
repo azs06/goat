@@ -28,7 +28,7 @@ func TestCommandCompletions(t *testing.T) {
 		"/mo":        "model",
 		"/re":        "resume retry reset",
 		"/q":         "quit",
-		"/Ex":        "exit",
+		"/Ex":        "exit export",
 		"/zzz":       "",
 		"hello":      "",
 		"/model gpt": "",

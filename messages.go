@@ -12,6 +12,14 @@ import (
 
 // terminalWidth is the width of the terminal stdout writes to, clamped to a sensible
 // range, or 80 when it cannot be determined.
+// terminalRows is the terminal's height, or 24 when it is unknown.
+func terminalRows() int {
+	if rows := stdoutRows(); rows > 0 {
+		return rows
+	}
+	return 24
+}
+
 func terminalWidth() int {
 	width := stdoutColumns()
 	if width <= 0 {

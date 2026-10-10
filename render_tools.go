@@ -378,7 +378,7 @@ func layoutToolResult(first string, body []string, limit int, diff bool, width i
 		b.WriteString("\n" + style.Subtle.Render(indent) + line)
 	}
 	if hidden > 0 {
-		b.WriteString("\n" + style.Subtle.Render(indent) + style.Subtle.Render(fmt.Sprintf("%s +%s", g.Ellipsis, plural(hidden, "line"))))
+		b.WriteString("\n" + style.Subtle.Render(indent) + style.Subtle.Render(fmt.Sprintf("%s +%s %s /output shows all", g.Ellipsis, plural(hidden, "line"), g.Dot)))
 	}
 	return b.String()
 }

@@ -110,7 +110,7 @@ func TestRenderToolResultHidesExtraLines(t *testing.T) {
 	if lines[0] != "  | line 1" || lines[toolResultPreviewLines] != "  | line 6" {
 		t.Fatalf("unexpected preview:\n%s", got)
 	}
-	if last := lines[len(lines)-1]; last != "  | ... +14 lines" {
+	if last := lines[len(lines)-1]; last != "  | ... +14 lines - /output shows all" {
 		t.Fatalf("last line = %q", last)
 	}
 

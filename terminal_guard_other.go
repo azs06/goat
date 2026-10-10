@@ -41,3 +41,7 @@ func stdoutColumns() int {
 func enterCbreakMode() (func(), error) {
 	return nil, errors.New("cbreak mode is not supported on this platform")
 }
+
+func stdoutRows() int {
+	return 0
+}

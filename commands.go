@@ -37,6 +37,9 @@ func init() {
 	list := []*cliCommand{
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
+		{name: "copy", usage: "/copy", description: "Copy the last reply to the clipboard", callback: commandCopy},
+		{name: "export", usage: "/export [file]", description: "Write the conversation to a Markdown file", callback: commandExport},
+		{name: "output", usage: "/output [n]", description: "Show a tool call's full output (n=1 is the latest)", callback: commandOutput},
 		{name: "compact", usage: "/compact [focus]", description: "Summarize the conversation into a fresh, smaller context", callback: commandCompact},
 		{name: "effort", usage: "/effort [level]", description: "Show or set how much the model reasons", callback: commandEffort},
 		{name: "exit", usage: "/exit", description: "Exit the Goat", aliases: []string{"quit"}, callback: commandExit},
