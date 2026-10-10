@@ -193,7 +193,7 @@ func runOneShot(cfg *config, opts cliOptions) int {
 		activeConversationID = newConversationID()
 		cfg.conversation = conversationState{}
 		cfg.staleConversation = false
-		cfg.promptFingerprint = promptFingerprint()
+		cfg.promptFingerprint = promptFingerprint(cfg.codeMode)
 	}
 
 	activityOut = os.Stderr

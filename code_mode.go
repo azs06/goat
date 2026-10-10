@@ -11,11 +11,6 @@ import (
 	"github.com/azs06/goat/internal/tools"
 )
 
-// codeModeNote goes in front of each prompt sent in code mode. run_code is offered to
-// the model all the time, so the prompt and tool list never change; this note is what
-// tells the model it may use it.
-const codeModeNote = "[Code mode is on: run_code can run. When a task needs several dependent tool calls, a loop over many files, or filtering of large outputs, prefer one run_code script to many direct calls; use direct calls for single steps.]\n\n"
-
 func commandCodeMode(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		switch args[0] {

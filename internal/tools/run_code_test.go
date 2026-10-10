@@ -250,7 +250,7 @@ func TestCodeModeGuide(t *testing.T) {
 	if strings.Contains(guide, "run_code(") {
 		t.Error("run_code must not be callable from a script")
 	}
-	for _, spec := range codeModeTools() {
+	for _, spec := range Specs {
 		if codeDocs[spec.Name].Returns == "" {
 			t.Errorf("%s has no @returns doc", spec.Name)
 		}

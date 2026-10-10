@@ -15,8 +15,8 @@ import (
 
 // run_code runs a JavaScript script that calls the other tools as goat.<name>(args).
 // Every call goes back through Execute, so plan mode, run_bash approval and the
-// workspace checks apply to it as they do to a direct call. It only runs when the user
-// has turned code mode on; it is always in Specs so the prompt never changes.
+// workspace checks apply to it as they do to a direct call. It is offered to the model
+// only in code mode, and refuses to run outside it.
 
 // RunCode is the name of the code-mode tool.
 const RunCode = "run_code"
@@ -36,8 +36,19 @@ func init() {
 	toolHandlers[RunCode] = runCode
 }
 
+// CodeModeSpecs are the tools offered in code mode: Specs, then run_code.
+var CodeModeSpecs = append(slices.Clip(Specs), runCodeSpec())
+
+// SpecsFor returns the tools offered to the model with code mode on or off.
+func SpecsFor(codeMode bool) []provider.ToolSpec {
+	if codeMode {
+		return CodeModeSpecs
+	}
+	return Specs
+}
+
 func runCodeSpec() provider.ToolSpec {
-	return functionTool(RunCode, "Run a JavaScript async function that calls the workspace tools as goat.<tool>({...}) and get back only what it returns and logs. It runs only when code mode is on; the system prompt describes the goat API and its limits.",
+	return functionTool(RunCode, "Run a JavaScript async function that calls the workspace tools as goat.<tool>({...}) and get back only what it returns and logs. The system prompt describes the goat API and its limits.",
 		map[string]any{"code": map[string]any{"type": "string", "description": "An async arrow function in plain JavaScript, e.g. async () => { const out = await goat.read_file({ path: \"go.mod\" }); return out.split(\"\\n\")[1]; }"}}, "code")
 }
 
@@ -61,23 +72,12 @@ var codeDocs = map[string]codemode.Doc{
 	"grep_files":       {Returns: `"Found N match(es) for \"<query>\" under <path>:\n<path>:<line>:<text> per line", then "\n(truncated after N match(es))" when limited; "No matches found ..." when there are none.`},
 }
 
-// codeModeTools are the tools a script can call: all of them but run_code itself.
-func codeModeTools() []provider.ToolSpec {
-	var specs []provider.ToolSpec
-	for _, spec := range Specs {
-		if spec.Name != RunCode {
-			specs = append(specs, spec)
-		}
-	}
-	return specs
-}
-
 // CodeModeGuide is the system prompt section that describes run_code: the goat API and
 // the rules a script runs under. maxChars and maxLines are the budget the result is
 // cut to before the model sees it.
 func CodeModeGuide(maxChars, maxLines int) string {
 	limits := codemode.DefaultLimits
-	return fmt.Sprintf(`Code mode. When the user turns code mode on, the prompt says so, and run_code can run JavaScript that calls the tools as functions. One run_code call can chain, loop over and filter many tool results without a round trip to you for each; only the value the script returns and what it logs with console.log come back, so intermediate results stay out of the conversation. While code mode is off, run_code refuses to run.
+	return fmt.Sprintf(`Code mode is on: run_code runs JavaScript that calls the tools as functions. One run_code call can chain, loop over and filter many tool results without a round trip to you for each; only the value the script returns and what it logs with console.log come back, so intermediate results stay out of the conversation.
 
 The script sees this API:
 
@@ -93,7 +93,7 @@ Each goat function takes the same arguments as the tool of the same name, as one
 - For a single step, call the tool directly. Use run_code for several dependent calls, loops over many files, or filtering large outputs.
 
 Example: async () => { const out = await goat.grep_files({ path: ".", query: "TODO", glob: "*.go", limit: 1000 }); if (out.startsWith("No matches")) return []; return [...new Set(out.split("\n").slice(1).filter(line => !line.startsWith("(truncated")).map(line => line.split(":")[0]))]; }`,
-		codemode.Declarations(codeModeTools(), codeDocs), limits.MaxCalls, limits.Timeout, maxChars, maxLines)
+		codemode.Declarations(Specs, codeDocs), limits.MaxCalls, limits.Timeout, maxChars, maxLines)
 }
 
 func runCode(ctx context.Context, raw string, opts Options) (string, error) {
@@ -107,11 +107,8 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 		return "", errors.New("missing code")
 	}
 
-	specs := codeModeTools()
-	names := make([]string, len(specs))
-	for i, spec := range specs {
-		names[i] = spec.Name
-	}
+	// A script can call every tool but run_code itself.
+	names := Names()
 
 	// A declined command stops the script, so the decline and any feedback reach the
 	// model rather than a catch block, and the user is not asked again and again.

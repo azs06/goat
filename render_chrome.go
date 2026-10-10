@@ -387,7 +387,7 @@ func renderToolList() string {
 	var lines []string
 	for _, group := range groups {
 		var rows []string
-		for _, spec := range tools.Specs {
+		for _, spec := range tools.CodeModeSpecs {
 			if tools.PlanModePolicyFor(spec.Name) == group.policy {
 				rows = append(rows, row(spec))
 			}

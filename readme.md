@@ -205,10 +205,16 @@ script makes are shown indented under it as they run.
   from and the console output; changes made before it are kept. Declining a command stops
   the script, so your answer goes straight to the model.
 
-`run_code` is always in the tool list, and the system prompt always describes its API, so
-turning code mode on or off never invalidates the prompt cache. Each prompt sent in code
-mode says it is on; while it is off, `run_code` refuses to run. Code mode is off by default and, like plan
-mode, is not saved with the session.
+`run_code` and the description of its API (about 1,900 tokens) are sent only while code
+mode is on; with it off, goat sends exactly what it would without code mode. Turning it on
+or off mid-conversation is fine, but the next request misses the prompt cache once. Code
+mode is off by default and, like plan mode, is not saved with the session.
+
+Code mode pays off on tasks that take many tool calls. In a benchmark of four read-only
+tasks (gpt-6-luna and deepseek-v4-pro, three runs each), turning it on cut wall time by
+about half and input tokens by 70-78% when the model could not use the shell. With the
+shell allowed, the cut was 45% and 73% for gpt-6-luna, and close to nothing for DeepSeek.
+Single-step tasks were unchanged. Every run, on or off, got the right answer.
 
 ## Cost
 

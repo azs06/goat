@@ -69,12 +69,11 @@ func buildSpecs() []provider.ToolSpec {
 			map[string]any{"path": stringParam, "pattern": stringParam, "limit": limitParam, "include_ignored": booleanParam}, "path"),
 		functionTool("grep_files", "Recursively search inside files in the workspace and return matching lines as path:line:text. The query is plain text, or a Go regular expression with regex=true. glob limits the files searched (e.g. *.go, or cmd/*.go). Files .gitignore excludes are skipped unless include_ignored=true.",
 			map[string]any{"path": stringParam, "query": stringParam, "regex": booleanParam, "glob": stringParam, "case_sensitive": booleanParam, "limit": limitParam, "include_ignored": booleanParam}, "path", "query"),
-		// Last, so adding it left the other tools where they were.
-		runCodeSpec(),
 	}
 }
 
-// Specs are the tools offered to the model, in the order they are listed.
+// Specs are the tools offered to the model, in the order they are listed. Code mode
+// offers CodeModeSpecs instead.
 var Specs = buildSpecs()
 
 // Names returns the name of every tool in Specs.
@@ -94,7 +93,7 @@ func RequiredArguments(spec provider.ToolSpec) []string {
 }
 
 func findSpec(name string) (provider.ToolSpec, bool) {
-	for _, tool := range Specs {
+	for _, tool := range CodeModeSpecs {
 		if tool.Name == name {
 			return tool, true
 		}

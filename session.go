@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
-	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -36,9 +35,12 @@ type savedSession struct {
 	SavedAt           string `json:"saved_at"`
 }
 
-func promptFingerprint() string {
-	specs, _ := json.Marshal(tools.Specs)
-	sum := sha256.Sum256(append([]byte(systemPrompt+"\x00"), specs...))
+// promptFingerprint identifies the system prompt and tools offered with code mode on
+// or off.
+func promptFingerprint(codeMode bool) string {
+	system, specs := promptFor(codeMode)
+	encoded, _ := json.Marshal(specs)
+	sum := sha256.Sum256(append([]byte(system+"\x00"), encoded...))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -163,7 +165,7 @@ func startConversation(cfg *config, next conversationState) {
 	activeConversationID = newConversationID()
 	cfg.conversation = next
 	cfg.staleConversation = false
-	cfg.promptFingerprint = promptFingerprint()
+	cfg.promptFingerprint = promptFingerprint(cfg.codeMode)
 	saveSession(cfg)
 }
 
@@ -178,7 +180,7 @@ func adoptSavedConversation(cfg *config, saved *savedSession) {
 	cfg.promptFingerprint = saved.PromptFingerprint
 	if saved.Conversation.IsEmpty() {
 		// Nothing was built yet, so whatever comes next is built with the current prompt.
-		cfg.promptFingerprint = promptFingerprint()
+		cfg.promptFingerprint = promptFingerprint(cfg.codeMode)
 	}
 }
 
@@ -186,13 +188,15 @@ func adoptSavedConversation(cfg *config, saved *savedSession) {
 // so saving a stale conversation never makes it look current.
 func (c *config) conversationFingerprint() string {
 	if c.promptFingerprint == "" {
-		return promptFingerprint()
+		return promptFingerprint(c.codeMode)
 	}
 	return c.promptFingerprint
 }
 
-// conversationIsStale reports a saved transcript built with a different system prompt
-// or tool set. Only replayed transcripts care: OpenAI resends both every request.
+// conversationIsStale reports a saved transcript built with a system prompt or tool set
+// this goat no longer offers, with code mode on or off. Only replayed transcripts care:
+// OpenAI resends both every request.
 func conversationIsStale(saved *savedSession) bool {
-	return len(saved.Conversation.Messages) > 0 && saved.PromptFingerprint != "" && saved.PromptFingerprint != promptFingerprint()
+	fingerprint := saved.PromptFingerprint
+	return len(saved.Conversation.Messages) > 0 && fingerprint != "" && fingerprint != promptFingerprint(false) && fingerprint != promptFingerprint(true)
 }

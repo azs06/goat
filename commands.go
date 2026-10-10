@@ -179,7 +179,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.Specs))))
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs))))
 	fmt.Println()
 	fmt.Println(renderToolList())
 	return nil

@@ -6,17 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/tools"
 )
-
-func firstUserText(t *testing.T, req recordedRequest) string {
-	t.Helper()
-	return messagesOf(t, req)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-}
 
 // lastToolResult is the content of the last tool_result block a request sent.
 func lastToolResult(t *testing.T, req recordedRequest) map[string]any {
@@ -40,48 +36,54 @@ func toolResultText(block map[string]any) string {
 	return fmt.Sprint(block["content"])
 }
 
-func TestCodeModeTellsTheModel(t *testing.T) {
-	chdirForTest(t, t.TempDir())
-	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""), newSSE("msg_2").text("ok").stop("end_turn", ""))
-
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "count TODOs", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow, codeMode: true}); err != nil {
-		t.Fatal(err)
+func toolNames(t *testing.T, req recordedRequest) []string {
+	t.Helper()
+	var names []string
+	for _, tool := range req.body["tools"].([]any) {
+		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if text := firstUserText(t, fake.request(0)); !strings.HasPrefix(text, "[Code mode is on") || !strings.HasSuffix(text, "count TODOs") {
-		t.Fatalf("got %q", text)
-	}
-
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "plan it", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow, codeMode: true, planMode: true}); err != nil {
-		t.Fatal(err)
-	}
-	if text := firstUserText(t, fake.request(1)); !strings.HasPrefix(text, "[Plan mode is on") || !strings.Contains(text, "[Code mode is on") || !strings.HasSuffix(text, "plan it") {
-		t.Fatalf("both notes: %q", text)
-	}
+	return names
 }
 
-func TestCodeModeLeavesThePromptAndToolsAlone(t *testing.T) {
+func TestCodeModeOffersRunCodeOnlyWhenOn(t *testing.T) {
 	chdirForTest(t, t.TempDir())
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""), newSSE("msg_2").text("ok").stop("end_turn", ""))
 	for _, codeMode := range []bool{false, true} {
-		if _, err := sendPromptStream(context.Background(), fake.provider(true), "hi", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow, codeMode: codeMode}); err != nil {
+		if _, err := sendPromptStream(context.Background(), fake.provider(true), "count TODOs", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow, codeMode: codeMode}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	off, on := fake.request(0), fake.request(1)
-	if fmt.Sprint(off.body["system"]) != fmt.Sprint(on.body["system"]) || fmt.Sprint(off.body["tools"]) != fmt.Sprint(on.body["tools"]) {
-		t.Fatal("turning code mode on changed the system prompt or the tools, which costs the prompt cache")
+
+	// Off, goat sends exactly what it sent before code mode existed.
+	if slices.Contains(toolNames(t, off), tools.RunCode) || strings.Contains(fmt.Sprint(off.body["system"]), "run_code") {
+		t.Error("with code mode off, the model must not be offered run_code")
 	}
-	if !strings.Contains(systemPrompt, "declare const goat: {") || !strings.Contains(systemPrompt, fmt.Sprintf("about %d characters and %d lines", maxToolOutputCharsForModel, maxToolOutputLinesForModel)) {
-		t.Error("the system prompt should describe the goat API and the result budget")
+	if len(toolNames(t, off)) != len(tools.Specs) || !strings.Contains(fmt.Sprint(off.body["system"]), systemPrompt) {
+		t.Error("with code mode off, the request should carry systemPrompt and tools.Specs")
 	}
-	// Every tool keeps its line in the tool list, and run_code is listed last.
-	for _, spec := range tools.Specs {
-		if !strings.Contains(systemPrompt, "- "+spec.Name+": "+spec.Description+"\n") {
-			t.Errorf("%s is missing from the tool list", spec.Name)
+
+	names := toolNames(t, on)
+	if len(names) != len(tools.Specs)+1 || names[len(names)-1] != tools.RunCode {
+		t.Errorf("with code mode on, run_code should follow the other tools, got %v", names)
+	}
+	system := fmt.Sprint(on.body["system"])
+	if !strings.Contains(system, "declare const goat: {") || !strings.Contains(system, fmt.Sprintf("about %d characters and %d lines", maxToolOutputCharsForModel, maxToolOutputLinesForModel)) {
+		t.Error("the code mode prompt should describe the goat API and the result budget")
+	}
+	for _, spec := range tools.CodeModeSpecs {
+		if !strings.Contains(codeModeSystemPrompt, "- "+spec.Name+": "+spec.Description+"\n") {
+			t.Errorf("%s is missing from the code mode tool list", spec.Name)
 		}
 	}
-	if last := tools.Specs[len(tools.Specs)-1].Name; last != tools.RunCode {
-		t.Errorf("run_code should be the last tool, got %s", last)
+	// The prompt itself is not touched either way.
+	for _, req := range []recordedRequest{off, on} {
+		if text := messagesOf(t, req)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); text != "count TODOs" {
+			t.Errorf("got prompt %q", text)
+		}
+	}
+	if promptFingerprint(false) == promptFingerprint(true) {
+		t.Error("the two modes should have different fingerprints")
 	}
 }
 
@@ -234,5 +236,12 @@ func TestCodeModeFlagAndEnv(t *testing.T) {
 	}
 	if cfg := loadConfig(cliOptions{}); cfg.codeMode {
 		t.Error("code mode should be off by default")
+	}
+}
+
+func TestToolListShowsRunCode(t *testing.T) {
+	withColor(t, false)
+	if list := renderToolList(); !strings.Contains(list, "Code mode") || !strings.Contains(list, "run_code (code)") {
+		t.Errorf("/tools should list run_code under Code mode:\n%s", list)
 	}
 }

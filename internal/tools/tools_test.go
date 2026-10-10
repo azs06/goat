@@ -66,8 +66,17 @@ func TestPlanModeRefusesChanges(t *testing.T) {
 	}
 }
 
+// allToolNames names every tool, run_code included.
+func allToolNames() []string {
+	var names []string
+	for _, spec := range CodeModeSpecs {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
 func TestEveryToolHasAHandler(t *testing.T) {
-	names := Names()
+	names := allToolNames()
 	for _, name := range names {
 		if toolHandlers[name] == nil {
 			t.Errorf("tool %s has a schema but no handler", name)
@@ -89,10 +98,10 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 		"run_bash":         PlanModeBlocked,
 		"run_code":         PlanModePerCall,
 	}
-	if len(want) != len(Names()) {
-		t.Fatalf("the policy table covers %d of %d tools", len(want), len(Names()))
+	if len(want) != len(allToolNames()) {
+		t.Fatalf("the policy table covers %d of %d tools", len(want), len(allToolNames()))
 	}
-	for _, name := range Names() {
+	for _, name := range allToolNames() {
 		if got := PlanModePolicyFor(name); got != want[name] {
 			t.Errorf("PlanModePolicyFor(%s) = %v, want %v", name, got, want[name])
 		}

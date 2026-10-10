@@ -7,7 +7,8 @@ Deferred enhancements to implement later:
 - Code mode follow-ups:
   - Record the calls a run_code script makes in history, so `/output` can show each one in full (today only the script and its result are recorded).
   - One undo step for everything a script changed.
-  - A code-only mode that offers just run_code; it changes the tool list, so it must be fixed per conversation (the prompt fingerprint covers it).
+  - A code-only mode that offers just run_code (the tool list already depends on the mode, and both fingerprints count as current on resume).
+  - Smoke-test turning code mode on or off mid-conversation with a Claude model: the replayed thinking blocks then sit under a different system prompt and tool list. OpenAI and DeepSeek accept it (tried live); if Claude refuses, goat's existing recovery compacts the conversation and retries.
   - Anthropic's server-side programmatic tool calling for Claude models (code_execution with allowed_callers); needs pause_turn handling, a container ID in the session, and its ~4 minute limit on a pending call fits badly with run_bash approval.
   - Arrays nested about a million deep, built in a script, can still overflow the Go stack through join/toString and kill goat; only running scripts in a subprocess would contain that.
   - After a script is abandoned in native code, the next run's heap watchdog takes its baseline while the old one may still be allocating, so it could be stopped for memory it did not use.

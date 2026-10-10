@@ -326,17 +326,15 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	providerName := p.Name()
 	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName})
 
+	system, specs := promptFor(opts.codeMode)
 	req := provider.Request{
 		Model:        opts.model,
-		System:       systemPrompt,
+		System:       system,
 		Effort:       opts.effort,
-		Tools:        tools.Specs,
+		Tools:        specs,
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
-	}
-	if opts.codeMode {
-		req.UserText = codeModeNote + req.UserText
 	}
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
