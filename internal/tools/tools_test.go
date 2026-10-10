@@ -87,6 +87,7 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 		"copy_dir": PlanModePreview, "move_dir": PlanModePreview, "delete_dir": PlanModePreview,
 		"undo_last_change": PlanModePreview,
 		"run_bash":         PlanModeBlocked,
+		"run_code":         PlanModePerCall,
 	}
 	if len(want) != len(Names()) {
 		t.Fatalf("the policy table covers %d of %d tools", len(want), len(Names()))
@@ -115,6 +116,12 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 			if call("{}") || call(`{"preview":true}`) {
 				t.Errorf("%s: a blocked tool should never be allowed", name)
 			}
+		case PlanModePerCall:
+			if !call("{}") {
+				t.Errorf("%s: a per-call tool should be allowed; its calls are checked", name)
+			}
+		default:
+			t.Errorf("%s: policy %v is not covered", name, PlanModePolicyFor(name))
 		}
 	}
 }

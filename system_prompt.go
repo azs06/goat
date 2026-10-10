@@ -33,6 +33,11 @@ Use find_files and grep_files when you need fast recursive discovery inside the 
 Before mutating files or directories, prefer using preview=true on write_file, edit_file, edit_json_file, copy_file, move_file, delete_file, copy_dir, move_dir, delete_dir, or undo_last_change to inspect changes first.
 Snapshots are stored automatically before file tool changes, so undo_last_change can restore the previous state. Changes made through run_bash are not snapshotted.
 
-If a request needs multiple steps, call tools in sequence until you have enough information to answer.`)
+If a request needs multiple steps, call tools in sequence until you have enough information to answer.
+
+`)
+	// Whether code mode is on is said in each prompt, never here, so turning it on or
+	// off does not change the prompt.
+	builder.WriteString(tools.CodeModeGuide(maxToolOutputCharsForModel, maxToolOutputLinesForModel))
 	return builder.String()
 }

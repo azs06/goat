@@ -56,6 +56,10 @@ type config struct {
 	// are refused, and each prompt tells the model so. The tool list itself stays the
 	// same, so switching costs no prompt cache.
 	planMode bool
+	// codeMode, toggled with /codemode or started with --codemode or GOAT_CODEMODE,
+	// lets the agent run run_code scripts that call the tools from JavaScript. Like
+	// plan mode it is told to the model in each prompt; the tool list stays the same.
+	codeMode bool
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -170,7 +174,7 @@ func loadConfig(opts cliOptions) *config {
 		autoCompactTokens = 0
 	}
 
-	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan}
+	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan, codeMode: opts.codeMode || envFlag("GOAT_CODEMODE")}
 	restoreSavedConversation(cfg, saved)
 	return cfg
 }
@@ -321,6 +325,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		model:    cfg.model.ID,
 		effort:   cfg.reasoningEffort,
 		planMode: cfg.planMode,
+		codeMode: cfg.codeMode,
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
@@ -420,6 +425,9 @@ func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
 	if cfg.planMode {
 		parts = append(parts, "plan mode")
+	}
+	if cfg.codeMode {
+		parts = append(parts, "code mode")
 	}
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())

@@ -62,6 +62,7 @@ type cliOptions struct {
 	newConversation bool
 	autoApprove     bool
 	plan            bool
+	codeMode        bool
 	prompt          string
 }
 
@@ -80,6 +81,7 @@ Flags:
   -n, --new            start a new conversation (the previous one stays for /resume)
   -y, --yes            run run_bash commands without asking (GOAT_AUTO_APPROVE_BASH=1)
       --plan           start in plan mode: read and plan, change nothing
+      --codemode       start in code mode: batch tool calls in run_code scripts
   -v, --version        print the version and exit
   -h, --help           show this help
 
@@ -117,6 +119,7 @@ func parseCLI(args []string, output io.Writer) (cliOptions, error) {
 		fs.BoolVar(&opts.autoApprove, name, false, "")
 	}
 	fs.BoolVar(&opts.plan, "plan", false, "")
+	fs.BoolVar(&opts.codeMode, "codemode", false, "")
 
 	var words []string
 	for {

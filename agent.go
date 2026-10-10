@@ -49,6 +49,8 @@ type turnOptions struct {
 	effort provider.Effort
 	// planMode refuses tools that change anything and asks the model for a plan.
 	planMode bool
+	// codeMode lets the model run run_code scripts.
+	codeMode bool
 	// takeSteering, when set, returns what the user typed while the turn was working,
 	// to be sent to the model with the next tool results.
 	takeSteering func() string
@@ -169,6 +171,9 @@ func toolOutputBudgetForModel(toolName string) (int, int) {
 	switch toolName {
 	case "run_bash":
 		return maxRunBashOutputCharsForModel, maxRunBashOutputLinesForModel
+	case tools.RunCode:
+		// The system prompt quotes this budget to the model (see buildSystemPrompt).
+		return maxToolOutputCharsForModel, maxToolOutputLinesForModel
 	default:
 		return maxToolOutputCharsForModel, maxToolOutputLinesForModel
 	}
@@ -269,8 +274,17 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOutput, err := tools.Execute(ctx, toolCall, tools.Options{PlanMode: opts.planMode, ApproveBash: opts.approveBash})
+		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID}
+		var nested *nestedRenderer
+		if toolCall.Name == tools.RunCode {
+			nested = &nestedRenderer{}
+			toolOpts.Nested = nested
+		}
+		toolOutput, err := tools.Execute(ctx, toolCall, toolOpts)
 		stopSpinner()
+		if nested != nil {
+			nested.finish()
+		}
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
 		if err != nil {
@@ -320,6 +334,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
+	}
+	if opts.codeMode {
+		req.UserText = codeModeNote + req.UserText
 	}
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText

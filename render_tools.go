@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/azs06/goat/internal/codemode"
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
@@ -51,6 +53,8 @@ func toolDisplayName(name string) string {
 		return "Delete"
 	case "undo_last_change":
 		return "Undo"
+	case tools.RunCode:
+		return "Code"
 	default:
 		return name
 	}
@@ -112,6 +116,12 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		summary = str("source_path") + " " + style.Glyphs().Arrow + " " + str("destination_path")
 		flag("overwrite")
 	case "undo_last_change":
+	case tools.RunCode:
+		var lines int
+		summary, lines = codemode.Summary(str("code"))
+		if lines > 1 {
+			flags = append(flags, plural(lines, "line"))
+		}
 	case "run_bash":
 		summary = str("command")
 		if workdir := str("workdir"); workdir != "" && workdir != "." {
@@ -284,6 +294,11 @@ func summarizeToolOutput(call provider.ToolCall, output string) (string, []strin
 				header = header[:i]
 			}
 			return strings.TrimSuffix(header, ":"), strings.Split(rest, "\n"), false
+		}
+	case tools.RunCode:
+		// "run_code ran 4 goat calls, 1 failed." then the result and the console output.
+		if counts, found := strings.CutPrefix(header, "run_code ran "); found {
+			return "Ran " + strings.ReplaceAll(strings.TrimSuffix(counts, "."), "goat call", "call"), strings.Split(rest, "\n"), false
 		}
 	case "edit_file":
 		if lines := editDiffLines(call.Arguments); lines != nil && strings.HasPrefix(header, "File ") {

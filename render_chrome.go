@@ -297,7 +297,7 @@ var helpGroups = []struct {
 }{
 	{"Conversation", []string{"clear", "resume", "retry", "compact", "copy", "export"}},
 	{"Model", []string{"model", "effort", "status"}},
-	{"Workspace", []string{"plan", "diff", "output", "undo", "approve", "tools"}},
+	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "approve", "tools"}},
 	{"goat", []string{"theme", "history", "help", "exit"}},
 }
 
@@ -382,6 +382,7 @@ func renderToolList() string {
 		{"Read-only", "plan mode allows these", tools.PlanModeAllowed},
 		{"File changes", "plan mode runs these only as previews", tools.PlanModePreview},
 		{"Shell", "blocked in plan mode", tools.PlanModeBlocked},
+		{"Code mode", "runs only in code mode; plan mode checks each call it makes", tools.PlanModePerCall},
 	}
 	var lines []string
 	for _, group := range groups {
