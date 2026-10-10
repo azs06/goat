@@ -176,3 +176,15 @@ func TestTruncationHelpersStayWithinLimits(t *testing.T) {
 		t.Fatalf("expected rune-safe truncation, got %q", logged)
 	}
 }
+
+func TestEveryToolHasAHandler(t *testing.T) {
+	names := availableToolNames()
+	for _, name := range names {
+		if toolHandlers[name] == nil {
+			t.Errorf("tool %s has a schema but no handler", name)
+		}
+	}
+	if len(toolHandlers) != len(names) {
+		t.Errorf("%d handlers for %d tools", len(toolHandlers), len(names))
+	}
+}

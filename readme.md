@@ -342,7 +342,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `main.go`, `cli.go` | Startup, command-line flags, the prompt loop and Ctrl-C handling |
 | `agent.go` | One turn: streaming the reply, running tool calls, the 40-round limit |
 | `commands.go` | Slash commands |
-| `tool_definitions.go` | Tool schemas and dispatch |
+| `tool_definitions.go`, `tool_handlers.go` | Tool schemas, and the handler that runs each tool |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
 | `plan_mode.go` | Plan mode |
