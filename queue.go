@@ -48,6 +48,8 @@ func queueKey(key string) {
 			turnQueue.items = turnQueue.items[:last]
 		}
 	case !editor.pasting && (key == "\x04" || key == "\t"): // Ctrl-D does not end input mid-turn; Tab has no menu here.
+	case key == "?": // the shortcuts panel belongs to the prompt; here it is just text
+		editor.insert(key)
 	default:
 		if done, _ := editor.handleKey(key); done {
 			if text := strings.TrimSpace(string(editor.buf)); text != "" {

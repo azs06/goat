@@ -98,9 +98,9 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
 | `/retry` | Send the last prompt again. |
-| `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Long output opens in `$PAGER` or `less`. |
+| `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Output taller than the terminal is paged: Space for the next page, Enter for a line, `G` for the rest, `q` to stop. |
 | `/plan [on\|off]` | Plan mode: goat reads and investigates but changes nothing. File tools only run as previews and `run_bash` is refused; the footer shows `plan mode`. `goat --plan` starts in it. |
-| `/diff [staged]` | Show the uncommitted changes in the workspace's git repository (in the pager when long). |
+| `/diff [staged]` | Show the uncommitted changes in the workspace's git repository, paged like `/output`. |
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
@@ -323,7 +323,7 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 | `plan_mode.go` | Plan mode |
 | `search.go`, `secrets.go` | `.gitignore` filtering, grep matching, ranged reads; keeping credentials out of tools |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
-| `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the pager, git status and cost |
+| `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |

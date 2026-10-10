@@ -56,3 +56,23 @@ func TestPlanModeTellsTheModel(t *testing.T) {
 		t.Fatalf("got %q", text)
 	}
 }
+
+func TestPlanModeNoteSurvivesProjectInstructions(t *testing.T) {
+	workspace := t.TempDir()
+	chdirForTest(t, workspace)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	os.WriteFile("AGENTS.md", []byte("Use tabs."), 0o644)
+	planMode = true
+	previous := projectInstructions
+	projectInstructions = projectInstructionsText
+	t.Cleanup(func() { planMode = false; projectInstructions = previous })
+
+	fake := newFakeAnthropic(t, newSSE("msg_1").text("plan").stop("end_turn", ""))
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "refactor it", conversationState{}, "claude-opus-5-5", provider.EffortLow); err != nil {
+		t.Fatal(err)
+	}
+	text := messagesOf(t, fake.request(0))[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "Use tabs.") || !strings.Contains(text, "[Plan mode is on") || !strings.HasSuffix(text, "refactor it") {
+		t.Fatalf("expected the instructions and the plan note, got %q", text)
+	}
+}

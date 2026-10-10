@@ -93,34 +93,56 @@ func commandOutput(ctx context.Context, c *config, args []string) error {
 	if len(run.output.Content) >= maxHistoryFieldChars {
 		text += "\n" + style.Muted.Render(fmt.Sprintf("(the history keeps the first %d characters)", maxHistoryFieldChars))
 	}
-	return showLong(c, text)
+	return showLong(ctx, c, text)
 }
 
-// showLong prints text, through a pager when it is taller than the terminal.
-func showLong(c *config, text string) error {
-	if c.interactive && style.Enabled() && strings.Count(text, "\n")+1 > terminalRows()-2 {
-		if pager := pagerCommand(); pager != nil {
-			resume := suspendInputGuard()
-			defer resume()
-			pager.Stdin = strings.NewReader(text + "\n")
-			pager.Stdout, pager.Stderr = os.Stdout, os.Stderr
-			if err := pager.Run(); err == nil {
-				return nil
-			}
+// showLong prints text. When it is taller than the terminal it is paged like more:
+// a screenful, then Space for the next one, Enter for one more line, G for the rest or q
+// to stop. Earlier pages stay in the scrollback. Keys are read through goat's own
+// reader, so no other program competes with it for the terminal.
+func showLong(ctx context.Context, c *config, text string) error {
+	lines := strings.Split(text, "\n")
+	rows := terminalRows()
+	if c.input == nil || !c.interactive || !style.Enabled() || len(lines) <= rows-2 {
+		fmt.Println(text)
+		return nil
+	}
+	resume := suspendInputGuard()
+	defer resume()
+	restore, err := enterCbreakMode()
+	if err != nil {
+		fmt.Println(text)
+		return nil
+	}
+	defer restore()
+
+	width := terminalWidth()
+	// heightOf is how many rows a line takes once the terminal wraps it.
+	heightOf := func(line string) int { return max(1, (style.VisibleWidth(line)+width-1)/width) }
+	shown := 0
+	budget := rows - 2
+	for shown < len(lines) {
+		for used := 0; shown < len(lines) && (used == 0 || used+heightOf(lines[shown]) <= budget); shown++ {
+			fmt.Println(lines[shown])
+			used += heightOf(lines[shown])
 		}
-	}
-	fmt.Println(text)
-	return nil
-}
-
-// pagerCommand is $PAGER, or less when it is installed.
-func pagerCommand() *exec.Cmd {
-	if pager := strings.TrimSpace(os.Getenv("PAGER")); pager != "" {
-		return exec.Command("sh", "-c", pager)
-	}
-	if path, err := exec.LookPath("less"); err == nil {
-		// -R keeps styling, -F quits at once if it fits, -X leaves it on screen after.
-		return exec.Command(path, "-RFX")
+		if shown == len(lines) {
+			break
+		}
+		fmt.Print(style.Subtle.Render(fmt.Sprintf("-- %d%% %s space next page %s enter next line %s G all %s q stop --", shown*100/len(lines), style.Glyphs().Dot, style.Glyphs().Dot, style.Glyphs().Dot, style.Glyphs().Dot)))
+		key, err := c.input.readKey(ctx)
+		fmt.Print("\r\x1b[2K")
+		switch {
+		case err != nil, key == "q", key == "Q", key == "\x1b", key == "\x03":
+			fmt.Println(style.Muted.Render(fmt.Sprintf("%s %s not shown", style.Glyphs().Ellipsis, plural(len(lines)-shown, "line"))))
+			return nil
+		case key == "\r", key == "\n", key == "j", key == "\x1b[B", key == "\x1bOB":
+			budget = 1
+		case key == "G":
+			budget = len(lines) * width
+		default:
+			budget = rows - 2
+		}
 	}
 	return nil
 }

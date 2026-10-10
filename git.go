@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azs06/goat/internal/style"
@@ -29,9 +30,33 @@ func runGit(args ...string) (string, error) {
 	return string(out), err
 }
 
+// gitStateCache keeps the last status briefly, since the footer, banner and /status may
+// all ask for it within moments and git status is slow in large repositories.
+var gitStateCache struct {
+	sync.Mutex
+	dir   string
+	at    time.Time
+	state gitState
+	ok    bool
+}
+
+const gitStateTTL = 2 * time.Second
+
 // readGitState returns the repository's branch and changed files, or false when the
 // workspace is not in a git repository.
 func readGitState() (gitState, bool) {
+	dir, _ := os.Getwd()
+	gitStateCache.Lock()
+	defer gitStateCache.Unlock()
+	if gitStateCache.dir == dir && time.Since(gitStateCache.at) < gitStateTTL {
+		return gitStateCache.state, gitStateCache.ok
+	}
+	state, ok := readGitStateNow()
+	gitStateCache.dir, gitStateCache.at, gitStateCache.state, gitStateCache.ok = dir, time.Now(), state, ok
+	return state, ok
+}
+
+func readGitStateNow() (gitState, bool) {
 	out, err := runGit("status", "--porcelain=v1", "--branch", "--untracked-files=normal")
 	if err != nil {
 		return gitState{}, false
@@ -123,7 +148,7 @@ func commandDiff(ctx context.Context, c *config, args []string) error {
 			b.WriteString(renderGitDiffLine(escapeControlChars(line)) + "\n")
 		}
 	}
-	return showLong(c, strings.TrimRight(b.String(), "\n"))
+	return showLong(ctx, c, strings.TrimRight(b.String(), "\n"))
 }
 
 // renderGitDiffLine styles one line of git diff output with the diff roles.

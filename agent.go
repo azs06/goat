@@ -315,7 +315,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	}
 	if conv.conversation.IsEmpty() && len(conv.pendingToolResults) == 0 && projectInstructions != nil {
 		if instructions := projectInstructions(); instructions != "" {
-			req.UserText = instructions + "\n" + prompt
+			req.UserText = instructions + "\n" + req.UserText
 		}
 	}
 
