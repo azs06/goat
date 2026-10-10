@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -219,13 +221,17 @@ func toolRenderWidth() int {
 
 // logToolCallStart prints the "● Name(args)" header for a tool call. The leading blank
 // line separates it from the assistant text or tool block before it.
+// activityOut is where tool calls are shown. A -p run sends them to stderr, so stdout
+// holds only the reply.
+var activityOut io.Writer = os.Stdout
+
 func logToolCallStart(toolCall provider.ToolCall) {
-	fmt.Print("\n" + renderToolHeader(toolCall, toolRenderWidth()) + "\n")
+	fmt.Fprint(activityOut, "\n"+renderToolHeader(toolCall, toolRenderWidth())+"\n")
 }
 
 // logToolCallResult prints a finished tool call's result under its header.
 func logToolCallResult(toolCall provider.ToolCall, output string, err error, elapsed time.Duration) {
-	fmt.Println(renderToolResult(toolCall, output, err, elapsed, toolRenderWidth()))
+	fmt.Fprintln(activityOut, renderToolResult(toolCall, output, err, elapsed, toolRenderWidth()))
 }
 
 // runToolCalls executes every tool call in resp and returns one result per call. Once

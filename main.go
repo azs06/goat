@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -25,6 +26,9 @@ type config struct {
 	reasoningEffort   provider.Effort
 	autoCompactTokens int64
 	conversation      conversationState
+	// ephemeral is set for a -p run that does not continue the saved conversation; its
+	// session is never written.
+	ephemeral bool
 	// staleConversation is set when the saved conversation was built with a different
 	// system prompt or tool set; it is compacted before it is used again.
 	staleConversation bool
@@ -84,6 +88,9 @@ func (c *config) currentProvider() (provider.Provider, error) {
 func startupModel(saved *savedSession) (provider.Model, string) {
 	type candidate struct{ source, raw string }
 	var candidates []candidate
+	if raw := strings.TrimSpace(cliModel); raw != "" {
+		candidates = append(candidates, candidate{"--model", raw})
+	}
 	if raw := strings.TrimSpace(os.Getenv("GOAT_MODEL")); raw != "" {
 		candidates = append(candidates, candidate{"GOAT_MODEL", raw})
 	}
@@ -101,8 +108,11 @@ func startupModel(saved *savedSession) (provider.Model, string) {
 			continue
 		}
 		if !provider.Available(ref.Provider) {
-			if c.source == "GOAT_MODEL" {
+			switch c.source {
+			case "GOAT_MODEL":
 				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
+			case "--model":
+				warnf("ignoring --model %s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
 			}
 			continue
 		}
@@ -114,7 +124,7 @@ func startupModel(saved *savedSession) (provider.Model, string) {
 // startupEffort picks the effort in order: GOAT_EFFORT, the saved session,
 // OPENAI_REASONING_EFFORT, then the default.
 func startupEffort(saved *savedSession) provider.Effort {
-	candidates := []struct{ source, value string }{{"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
+	candidates := []struct{ source, value string }{{"--effort", cliEffort}, {"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
 	if saved != nil {
 		candidates = append(candidates, struct{ source, value string }{"saved session", saved.Effort})
 	}
@@ -360,7 +370,7 @@ func handleInput(cfg *config, text string) error {
 	if cmd == nil && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
-			fmt.Println("\n" + renderWorked(elapsed))
+			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed))
 		}
 	}
 	return err
@@ -458,6 +468,20 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 const exitConfirmWindow = 2 * time.Second
 
 func main() {
+	opts, err := parseCLI(os.Args[1:], os.Stdout)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "goat: "+err.Error())
+		os.Exit(2)
+	}
+	if opts.showVersion {
+		fmt.Println("goat " + goatVersion())
+		return
+	}
+	cliModel, cliEffort = opts.model, opts.effort
+
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
@@ -475,9 +499,26 @@ func main() {
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)
 	cfg.interactive = stdinIsTerminal()
-	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: envFlag("GOAT_AUTO_APPROVE_BASH")}
+	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve
 	argumentCompletions = commandArgumentCompletions(cfg)
+
+	if opts.print {
+		// A one-shot run never asks anything: stdin may hold the prompt itself.
+		cfg.interactive = false
+		cfg.approver.interactive = false
+		os.Exit(runOneShot(cfg, opts))
+	}
+	if opts.newConversation && !cfg.conversation.conversation.IsEmpty() {
+		replaceConversation(cfg, conversationState{})
+		recordHistory(historyEntry{Type: "reset", Provider: cfg.model.Provider})
+	}
+	if opts.prompt != "" {
+		// A prompt on the command line runs first, as if it had been queued.
+		turnQueue.mu.Lock()
+		turnQueue.items = append(turnQueue.items, opts.prompt)
+		turnQueue.mu.Unlock()
+	}
 
 	printWelcome(cfg)
 

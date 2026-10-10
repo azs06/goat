@@ -56,6 +56,23 @@ the footer:
 
 Pasted text keeps its line breaks and is never sent before you press Enter.
 
+Command-line flags:
+
+```sh
+goat                          # start, resuming the last conversation
+goat "fix the failing test"   # start and run this prompt first
+goat -n                       # start a new conversation (the old one stays for /resume)
+goat -m claude-sonnet-5-5 -e high
+goat -p "summarize main.go"   # one prompt, reply on stdout, exit code 1 on failure
+git diff | goat -p "review this diff" > review.md
+goat -p -c "and the tests?"   # -p continuing the saved conversation
+goat --version; goat --help
+```
+
+A `-p` run prints tool activity to stderr, so stdout holds only the reply. Unless `-c` is
+given it uses a conversation of its own and leaves the saved session alone. `-y` lets
+`run_bash` commands run without asking, like `GOAT_AUTO_APPROVE_BASH=1`.
+
 goat also works without a terminal. Piped or redirected output is plain text with no
 escape sequences, and each line of piped input is one prompt or command:
 
@@ -254,14 +271,14 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 
 | Path | |
 | --- | --- |
-| `main.go` | Startup, the prompt loop and Ctrl-C handling |
+| `main.go`, `cli.go` | Startup, command-line flags, the prompt loop and Ctrl-C handling |
 | `agent.go` | One turn: streaming the reply, running tool calls, the 40-round limit |
 | `commands.go` | Slash commands |
 | `tool_definitions.go`, `tools.go`, `json_tools.go` | Tool schemas and implementations |
 | `mutations.go` | Snapshots, the operation log and undo |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go` | The system prompt, built from the tool list |
-| `prompt_editor.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, messages queued during a turn, input reading and terminal modes |
+| `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |

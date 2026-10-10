@@ -57,6 +57,9 @@ func sessionFromConfig(cfg *config) savedSession {
 var sessionSaver = writeSessionFile
 
 func saveSession(cfg *config) {
+	if cfg.ephemeral {
+		return
+	}
 	if err := sessionSaver(sessionPath, sessionFromConfig(cfg)); err != nil {
 		warnf("failed to save the session: %v", err)
 	}
