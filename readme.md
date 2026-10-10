@@ -45,8 +45,8 @@ the footer:
 
 | Key | |
 | --- | --- |
-| Up/Down, Ctrl-P/Ctrl-N | Move the menu selection, or between lines of a longer prompt |
-| Tab | Complete the selected command so you can add arguments |
+| Up/Down, Ctrl-P/Ctrl-N | Move the menu selection, move between lines of a longer prompt, or bring back earlier prompts |
+| Tab | Complete the selected command so you can add arguments, or complete the file path before the cursor (several matches open a menu; `@path` works too) |
 | Enter | Run the selected command, or send the prompt |
 | Ctrl-J, Alt-Enter, `\` then Enter | Start a new line |
 | Esc | Close the menu |
@@ -176,6 +176,7 @@ goat keeps its state in `.goat/` inside the workspace:
 | `session.json` | The model, the effort and the current conversation, restored on the next start |
 | `session.prev.json` | The previous conversation, for `/resume` |
 | `history.jsonl` | An append-only log of every prompt, reply and tool call |
+| `prompts.jsonl` | The prompts typed at the interactive prompt, for Up |
 | `operations.json`, `snapshots/` | The record of file changes and the snapshots `/undo` restores from |
 
 When a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS`, goat compacts the

@@ -43,6 +43,8 @@ type config struct {
 	approver    *bashApprover
 
 	lastPrompt string
+	// promptHistory holds the prompts Up brings back, oldest first.
+	promptHistory []string
 	// lastModelChoices are the models the last /model listing numbered.
 	lastModelChoices []provider.Model
 }
@@ -435,8 +437,9 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 		fmt.Println()
 	}
 	footer := renderFooter(footerParts(cfg), width)
-	if text, ok, err := editPrompt(ctx, cfg.input, footer, width); ok {
+	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width); ok {
 		if err == nil && strings.TrimSpace(text) != "" {
+			cfg.promptHistory = rememberPrompt(cfg.promptHistory, text)
 			fmt.Println(renderUserMessage(text, width))
 		}
 		return text, err
@@ -498,6 +501,7 @@ func main() {
 	applyTheme()
 	cfg := loadConfig()
 	cfg.input = newLineReader(os.Stdin)
+	cfg.promptHistory = loadPromptHistory()
 	cfg.interactive = stdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	bashCommandApprover = cfg.approver.approve

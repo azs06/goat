@@ -22,6 +22,10 @@ type completion struct {
 	display, description, text string
 	// argument is set for argument values, which Enter runs straight away.
 	argument bool
+	// path is set for file path matches, which Enter and Tab put in the prompt without
+	// sending it; cursor is where the cursor goes after.
+	path   bool
+	cursor int
 }
 
 // argumentCompletions, when set, offers values for a command's first argument, such as
@@ -125,15 +129,79 @@ type promptEditor struct {
 	// pasting is set between the markers a terminal in bracketed paste mode puts around
 	// pasted text, so a pasted line break is text rather than Enter.
 	pasting bool
+	// pathItems is the menu Tab opened for a path with several matches.
+	pathItems []completion
+	// history holds earlier prompts, oldest first; historyIndex is the one shown, or
+	// len(history) for the text being written, which draft keeps while browsing.
+	history      []string
+	historyIndex int
+	draft        string
 	// cursorRow is the row of the cursor below the prompt line as last drawn.
 	cursorRow int
 }
 
 func (e *promptEditor) completions() []completion {
-	if e.menuClosed || strings.ContainsRune(string(e.buf), '\n') {
+	if e.menuClosed {
+		return nil
+	}
+	if len(e.pathItems) > 0 {
+		return e.pathItems
+	}
+	if strings.ContainsRune(string(e.buf), '\n') {
 		return nil
 	}
 	return commandCompletions(string(e.buf))
+}
+
+// apply puts a path match in the prompt.
+func (e *promptEditor) apply(item completion) {
+	e.buf = []rune(item.text)
+	e.pos = item.cursor
+	e.edited()
+}
+
+// completePath completes the path before the cursor: in place when there is one match
+// or the matches share a longer start, otherwise by opening a menu of them.
+func (e *promptEditor) completePath() {
+	matches, start := pathCompletions(e.buf, e.pos)
+	if len(matches) == 0 {
+		return
+	}
+	replace := func(with string) completion {
+		text := string(e.buf[:start]) + with + string(e.buf[e.pos:])
+		return completion{display: with, text: text, path: true, cursor: start + len([]rune(with))}
+	}
+	if len(matches) == 1 {
+		e.apply(replace(matches[0]))
+		return
+	}
+	if prefix := commonPrefix(matches); len([]rune(prefix)) > e.pos-start {
+		e.apply(replace(prefix))
+		return
+	}
+	items := make([]completion, len(matches))
+	for i, match := range matches {
+		items[i] = replace(match)
+	}
+	e.pathItems = items
+	e.selected = 0
+}
+
+// browseHistory shows the previous (-1) or next (+1) prompt from history.
+func (e *promptEditor) browseHistory(direction int) {
+	next := e.historyIndex + direction
+	if next < 0 || next > len(e.history) {
+		return
+	}
+	if e.historyIndex == len(e.history) {
+		e.draft = string(e.buf)
+	}
+	e.historyIndex = next
+	if next == len(e.history) {
+		e.setText(e.draft)
+	} else {
+		e.setText(e.history[next])
+	}
 }
 
 func (e *promptEditor) setText(text string) {
@@ -145,6 +213,7 @@ func (e *promptEditor) setText(text string) {
 func (e *promptEditor) edited() {
 	e.selected = 0
 	e.menuClosed = false
+	e.pathItems = nil
 }
 
 func (e *promptEditor) insert(text string) {
@@ -252,8 +321,13 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 			e.insert("\n")
 			return false, nil
 		}
-		// Enter runs the highlighted command, or the command with the highlighted
-		// argument, unless the text already names a command.
+		// In the path menu Enter takes the highlighted path. Otherwise it runs the
+		// highlighted command, or the command with the highlighted argument, unless the
+		// text already names a command.
+		if items := e.completions(); len(items) > 0 && items[0].path {
+			e.apply(items[e.selected])
+			return false, nil
+		}
 		if items := e.completions(); len(items) > 0 {
 			_, exact := findCommand(strings.ToLower(string(e.buf[1:])))
 			// "/effort " with nothing after the space runs /effort itself, which asks.
@@ -267,25 +341,28 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 	case "\n", "\x1b\r", "\x1b\n": // Ctrl-J, Alt-Enter
 		e.insert("\n")
 	case "\t":
-		if items := e.completions(); len(items) > 0 {
-			item := items[e.selected]
-			if item.argument {
-				e.setText(item.text)
-			} else {
-				e.setText(item.text + " ")
-			}
+		items := e.completions()
+		switch {
+		case len(items) == 0:
+			e.completePath()
+		case items[0].path:
+			e.apply(items[e.selected])
+		case items[0].argument:
+			e.setText(items[e.selected].text)
+		default:
+			e.setText(items[e.selected].text + " ")
 		}
 	case "\x10", "\x1b[A", "\x1bOA": // Ctrl-P, Up
 		if items := e.completions(); len(items) > 0 {
 			e.selected = (e.selected - 1 + len(items)) % len(items)
-		} else {
-			e.moveLine(-1)
+		} else if !e.moveLine(-1) {
+			e.browseHistory(-1)
 		}
 	case "\x0e", "\x1b[B", "\x1bOB": // Ctrl-N, Down
 		if items := e.completions(); len(items) > 0 {
 			e.selected = (e.selected + 1) % len(items)
-		} else {
-			e.moveLine(1)
+		} else if !e.moveLine(1) {
+			e.browseHistory(1)
 		}
 	case "\x1b":
 		e.menuClosed = true
@@ -428,7 +505,7 @@ func (e *promptEditor) clear() string {
 // editPrompt draws the prompt frame and edits one line in cbreak mode. ok is false when
 // the terminal cannot be put in cbreak mode, and nothing has been drawn. On return the
 // frame has been cleared.
-func editPrompt(ctx context.Context, input *lineReader, footer string, width int) (text string, ok bool, err error) {
+func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int) (text string, ok bool, err error) {
 	restore, err := enterCbreakMode()
 	if err != nil {
 		return "", false, nil
@@ -436,7 +513,7 @@ func editPrompt(ctx context.Context, input *lineReader, footer string, width int
 	defer restore()
 
 	// A line whose ReadLine was cancelled is where the user left off.
-	editor := &promptEditor{}
+	editor := &promptEditor{history: history, historyIndex: len(history)}
 	editor.setText(input.partial)
 	input.partial = ""
 
