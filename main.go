@@ -8,8 +8,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -506,9 +508,7 @@ func main() {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
 	if values, err := godotenv.Read(); err == nil {
-		for name := range values {
-			workspace.HideFromCommands(name)
-		}
+		workspace.HideFromCommands(slices.Collect(maps.Keys(values))...)
 	}
 	if len(provider.AvailableNames()) == 0 {
 		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")
