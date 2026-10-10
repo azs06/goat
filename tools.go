@@ -54,6 +54,25 @@ func isStateDirName(name string) bool {
 	return strings.EqualFold(strings.TrimRight(name, ". "), stateDirName)
 }
 
+// isSecretFileName reports files that conventionally hold credentials, such as the
+// .env goat itself loads API keys from. File tools refuse them, so their contents never
+// reach the model without the user running a command for it. Templates meant to be
+// shared (.env.example and the like) stay readable.
+func isSecretFileName(name string) bool {
+	lower := strings.ToLower(strings.TrimRight(name, ". "))
+	if lower == ".envrc" || lower == ".env" {
+		return true
+	}
+	if !strings.HasPrefix(lower, ".env.") {
+		return false
+	}
+	switch strings.TrimPrefix(lower, ".env.") {
+	case "example", "sample", "template", "dist", "defaults":
+		return false
+	}
+	return true
+}
+
 func isStatePath(relPath string) bool {
 	first, _, _ := strings.Cut(filepath.ToSlash(relPath), "/")
 	return isStateDirName(first)
@@ -126,6 +145,9 @@ func resolveToolPath(path string) (string, string, error) {
 	if isStatePath(relPath) {
 		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
 	}
+	if isSecretFileName(filepath.Base(relPath)) {
+		return "", "", errSecretFile(relPath)
+	}
 
 	workspaceRoot, err := os.Getwd()
 	if err != nil {
@@ -141,8 +163,15 @@ func resolveToolPath(path string) (string, string, error) {
 	if isStatePath(realRelPath) || isInsideExistingDir(resolvedPath, filepath.Join(workspaceRoot, stateDirName)) {
 		return "", "", fmt.Errorf("%s is reserved for goat's internal state", stateDirName)
 	}
+	if isSecretFileName(filepath.Base(realRelPath)) {
+		return "", "", errSecretFile(relPath)
+	}
 
 	return resolvedPath, relPath, nil
+}
+
+func errSecretFile(relPath string) error {
+	return fmt.Errorf("%s may hold credentials, so file tools do not open it; ask the user if its contents are needed", filepath.ToSlash(relPath))
 }
 
 // realPathRelativeToRoot resolves symlinks in the longest existing prefix of
@@ -787,8 +816,9 @@ func grepFiles(rootPath, query string, caseSensitive bool, limit int) ([]string,
 			return nil
 		}
 
-		// Symlinks may point outside the workspace, so their targets are not searched.
-		if d.Type()&fs.ModeSymlink != 0 {
+		// Symlinks may point outside the workspace, so their targets are not searched,
+		// and files holding credentials are never shown.
+		if d.Type()&fs.ModeSymlink != 0 || isSecretFileName(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -1086,6 +1116,7 @@ func runBashCommand(ctx context.Context, command, workdir string) (string, error
 
 	cmd := exec.CommandContext(runCtx, "bash", "-lc", command)
 	cmd.Dir = resolvedDir
+	cmd.Env = commandEnvironment(os.Environ())
 	configureProcessGroup(cmd)
 	cmd.WaitDelay = bashPipeWaitDelay
 

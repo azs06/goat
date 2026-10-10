@@ -31,10 +31,10 @@ func typeQueueKeys(text string) {
 func TestQueueKeysQueueLinesAndUpTakesTheLastBack(t *testing.T) {
 	resetTurnQueue(t)
 
-	typeQueueKeys("fix the tests\n")
-	typeQueueKeys("  \n") // blank lines are not queued
-	typeQueueKeys("/compact\n")
-	typeQueueKeys("then the readme\n")
+	typeQueueKeys("fix the tests\r")
+	typeQueueKeys("  \r") // blank lines are not queued
+	typeQueueKeys("/compact\r")
+	typeQueueKeys("then the readme\r")
 	if got := strings.Join(turnQueue.items, "|"); got != "fix the tests|/compact|then the readme" {
 		t.Fatalf("unexpected queue %q", got)
 	}
@@ -89,7 +89,7 @@ func TestInterruptReturnsTheQueueToThePrompt(t *testing.T) {
 
 func TestKeyCaptureCarriesTheUnsentLine(t *testing.T) {
 	resetTurnQueue(t)
-	input := newLineReader(strings.NewReader("queued\nunsent"))
+	input := newLineReader(strings.NewReader("queued\runsent"))
 	input.partial = "from before: "
 
 	startKeyCapture(context.Background(), input)
@@ -174,5 +174,16 @@ func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected the queued message in the history")
+	}
+}
+
+func TestQueuedPasteStaysOneMessage(t *testing.T) {
+	resetTurnQueue(t)
+	queueKey(pasteStart)
+	typeQueueKeys("line one\rline two")
+	queueKey(pasteEnd)
+	typeQueueKeys("\r")
+	if len(turnQueue.items) != 1 || turnQueue.items[0] != "line one\nline two" {
+		t.Fatalf("expected the paste queued as one message, got %q", turnQueue.items)
 	}
 }

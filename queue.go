@@ -40,21 +40,21 @@ func queueKey(key string) {
 	editor.menuClosed = true
 	defer func() { editor.menuClosed = true }()
 
-	switch key {
-	case "\n", "\r":
-		if text := strings.TrimSpace(string(editor.buf)); text != "" {
-			turnQueue.items = append(turnQueue.items, text)
-		}
-		editor.setText("")
-	case "\x10", "\x1b[A", "\x1bOA": // Ctrl-P, Up
-		if len(editor.buf) == 0 && len(turnQueue.items) > 0 {
+	switch {
+	case !editor.pasting && (key == "\x10" || key == "\x1b[A" || key == "\x1bOA") && len(editor.buf) == 0: // Ctrl-P, Up
+		if len(turnQueue.items) > 0 {
 			last := len(turnQueue.items) - 1
 			editor.setText(turnQueue.items[last])
 			turnQueue.items = turnQueue.items[:last]
 		}
-	case "\x04", "\t": // Ctrl-D does not end input mid-turn; Tab has no menu here.
+	case !editor.pasting && (key == "\x04" || key == "\t"): // Ctrl-D does not end input mid-turn; Tab has no menu here.
 	default:
-		editor.handleKey(key)
+		if done, _ := editor.handleKey(key); done {
+			if text := strings.TrimSpace(string(editor.buf)); text != "" {
+				turnQueue.items = append(turnQueue.items, text)
+			}
+			editor.setText("")
+		}
 	}
 }
 
@@ -116,7 +116,7 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 	available := max(width-1, 10)
 	for _, item := range turnQueue.items {
 		label := "  queued  "
-		lines = append(lines, style.Subtle.Render(label)+style.Muted.Render(style.TruncateToWidth(item, available-len(label))))
+		lines = append(lines, style.Subtle.Render(label)+style.Muted.Render(style.TruncateToWidth(flattenBreaks(item), available-len(label))))
 	}
 
 	prefix := promptPrefix()
@@ -138,8 +138,14 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 		start = editor.pos - room
 	}
 	end := min(len(editor.buf), start+room)
-	lines = append(lines, prefix+escapeControlChars(string(editor.buf[start:end])))
+	lines = append(lines, prefix+escapeControlChars(flattenBreaks(string(editor.buf[start:end]))))
 	return lines, prefixWidth + editor.pos - start + 1
+}
+
+// flattenBreaks shows a message with line breaks on a single line, one cell per break so
+// cursor positions still match.
+func flattenBreaks(text string) string {
+	return strings.ReplaceAll(text, "\n", "↵")
 }
 
 // keyCapture reads keys into the queue while a turn runs.

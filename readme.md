@@ -45,12 +45,16 @@ the footer:
 
 | Key | |
 | --- | --- |
-| Up/Down, Ctrl-P/Ctrl-N | Move the menu selection |
+| Up/Down, Ctrl-P/Ctrl-N | Move the menu selection, or between lines of a longer prompt |
 | Tab | Complete the selected command so you can add arguments |
 | Enter | Run the selected command, or send the prompt |
+| Ctrl-J, Alt-Enter, `\` then Enter | Start a new line |
 | Esc | Close the menu |
-| Left/Right, Home/End, Ctrl-A/Ctrl-E | Move the cursor |
+| Left/Right, Home/End, Ctrl-A/Ctrl-E | Move the cursor; Home and End stay on the current line |
+| Alt-Left/Alt-Right, Alt-B/Alt-F | Move by word |
 | Ctrl-U, Ctrl-K, Ctrl-W | Delete to the start of the line, to the end, or the word before the cursor |
+
+Pasted text keeps its line breaks and is never sent before you press Enter.
 
 goat also works without a terminal. Piped or redirected output is plain text with no
 escape sequences, and each line of piped input is one prompt or command:
@@ -161,7 +165,12 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 ## Safety
 
 - File tools only accept paths inside the workspace, refuse symlinks that lead outside it,
-  and cannot touch `.goat/`.
+  and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
+  as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
+  the model through a file tool.
+- `run_bash` commands do not inherit goat's API keys, anything loaded from `.env`, or other
+  variables named like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`,
+  `*_PASSWORD` and similar).
 - Every change made by a file tool is snapshotted first, so `/undo` can restore it,
   including removing directories the change created. The last 100 operations stay
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
@@ -169,7 +178,8 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 - `run_bash` asks before each command. Answer `y` to run it, `n` to decline, `a` to allow
   every command for the rest of the session, or type feedback to decline with a reason the
   model sees. Commands time out after 30 seconds, and everything a command started is
-  killed with it. Changes made through `run_bash` are not snapshotted.
+  killed with it. Changes made through `run_bash` are not snapshotted. A command that
+  mentions `.goat` is always confirmed, even when commands otherwise run without asking.
 
 ## Themes
 

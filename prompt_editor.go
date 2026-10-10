@@ -93,7 +93,9 @@ func renderCompletionMenu(items []completion, selected, width int) []string {
 	return lines
 }
 
-// promptEditor is the state of the line being typed at the interactive prompt.
+// promptEditor is the state of the text being typed at the interactive prompt. The text
+// may span several lines: Ctrl-J, Alt-Enter or a backslash before Enter starts a new
+// line, and pasted text keeps its line breaks.
 type promptEditor struct {
 	buf []rune
 	pos int
@@ -101,12 +103,15 @@ type promptEditor struct {
 	// until the text changes.
 	selected   int
 	menuClosed bool
+	// pasting is set between the markers a terminal in bracketed paste mode puts around
+	// pasted text, so a pasted line break is text rather than Enter.
+	pasting bool
 	// cursorRow is the row of the cursor below the prompt line as last drawn.
 	cursorRow int
 }
 
 func (e *promptEditor) completions() []completion {
-	if e.menuClosed {
+	if e.menuClosed || strings.ContainsRune(string(e.buf), '\n') {
 		return nil
 	}
 	return commandCompletions(string(e.buf))
@@ -139,11 +144,95 @@ func (e *promptEditor) deleteRange(from, to int) {
 	e.edited()
 }
 
-// handleKey applies one key. done is true once the line is submitted; err is io.EOF
+// lineStart and lineEnd are the bounds of the line the cursor is on.
+func (e *promptEditor) lineStart() int {
+	start := e.pos
+	for start > 0 && e.buf[start-1] != '\n' {
+		start--
+	}
+	return start
+}
+
+func (e *promptEditor) lineEnd() int {
+	end := e.pos
+	for end < len(e.buf) && e.buf[end] != '\n' {
+		end++
+	}
+	return end
+}
+
+// moveLine moves the cursor to the line above (-1) or below (+1), keeping its column
+// where the line is long enough. It reports false when there is no such line.
+func (e *promptEditor) moveLine(direction int) bool {
+	start := e.lineStart()
+	column := e.pos - start
+	if direction < 0 {
+		if start == 0 {
+			return false
+		}
+		prevEnd := start - 1
+		prevStart := prevEnd
+		for prevStart > 0 && e.buf[prevStart-1] != '\n' {
+			prevStart--
+		}
+		e.pos = min(prevStart+column, prevEnd)
+		return true
+	}
+	end := e.lineEnd()
+	if end == len(e.buf) {
+		return false
+	}
+	nextStart := end + 1
+	nextEnd := nextStart
+	for nextEnd < len(e.buf) && e.buf[nextEnd] != '\n' {
+		nextEnd++
+	}
+	e.pos = min(nextStart+column, nextEnd)
+	return true
+}
+
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+	// bracketedPasteOn asks the terminal to mark pasted text, so its line breaks do not
+	// submit it; bracketedPasteOff turns that off again.
+	bracketedPasteOn  = "\x1b[?2004h"
+	bracketedPasteOff = "\x1b[?2004l"
+)
+
+// handleKey applies one key. done is true once the text is submitted; err is io.EOF
 // when Ctrl-D is pressed on an empty line.
 func (e *promptEditor) handleKey(key string) (done bool, err error) {
 	switch key {
-	case "\n", "\r":
+	case pasteStart:
+		e.pasting = true
+		return false, nil
+	case pasteEnd:
+		e.pasting = false
+		return false, nil
+	}
+	if e.pasting {
+		switch key {
+		case "\r", "\n":
+			e.insert("\n")
+		case "\t":
+			e.insert("    ")
+		default:
+			if runes := []rune(key); len(runes) == 1 && !unicode.IsControl(runes[0]) {
+				e.insert(key)
+			}
+		}
+		return false, nil
+	}
+
+	switch key {
+	case "\r":
+		// A backslash right before the cursor turns Enter into a line break.
+		if e.pos > 0 && e.buf[e.pos-1] == '\\' {
+			e.deleteRange(e.pos-1, e.pos)
+			e.insert("\n")
+			return false, nil
+		}
 		// Enter runs the highlighted command unless the text already names one.
 		if items := e.completions(); len(items) > 0 {
 			if _, exact := findCommand(strings.ToLower(string(e.buf[1:]))); !exact {
@@ -151,6 +240,8 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 			}
 		}
 		return true, nil
+	case "\n", "\x1b\r", "\x1b\n": // Ctrl-J, Alt-Enter
+		e.insert("\n")
 	case "\t":
 		if items := e.completions(); len(items) > 0 {
 			e.setText("/" + items[e.selected].name + " ")
@@ -158,10 +249,14 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 	case "\x10", "\x1b[A", "\x1bOA": // Ctrl-P, Up
 		if items := e.completions(); len(items) > 0 {
 			e.selected = (e.selected - 1 + len(items)) % len(items)
+		} else {
+			e.moveLine(-1)
 		}
 	case "\x0e", "\x1b[B", "\x1bOB": // Ctrl-N, Down
 		if items := e.completions(); len(items) > 0 {
 			e.selected = (e.selected + 1) % len(items)
+		} else {
+			e.moveLine(1)
 		}
 	case "\x1b":
 		e.menuClosed = true
@@ -184,23 +279,20 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 		e.pos = max(e.pos-1, 0)
 	case "\x06", "\x1b[C", "\x1bOC": // Ctrl-F, Right
 		e.pos = min(e.pos+1, len(e.buf))
+	case "\x1bb", "\x1b[1;3D", "\x1b[1;5D": // Alt-B, Alt-Left, Ctrl-Left: word left
+		e.pos = e.wordStart()
+	case "\x1bf", "\x1b[1;3C", "\x1b[1;5C": // Alt-F, Alt-Right, Ctrl-Right: word right
+		e.pos = e.wordEnd()
 	case "\x01", "\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~": // Ctrl-A, Home
-		e.pos = 0
+		e.pos = e.lineStart()
 	case "\x05", "\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~": // Ctrl-E, End
-		e.pos = len(e.buf)
+		e.pos = e.lineEnd()
 	case "\x15": // Ctrl-U: delete to the start of the line
-		e.deleteRange(0, e.pos)
+		e.deleteRange(e.lineStart(), e.pos)
 	case "\x0b": // Ctrl-K: delete to the end of the line
-		e.deleteRange(e.pos, len(e.buf))
-	case "\x17": // Ctrl-W: delete the word before the cursor
-		start := e.pos
-		for start > 0 && unicode.IsSpace(e.buf[start-1]) {
-			start--
-		}
-		for start > 0 && !unicode.IsSpace(e.buf[start-1]) {
-			start--
-		}
-		e.deleteRange(start, e.pos)
+		e.deleteRange(e.pos, e.lineEnd())
+	case "\x17", "\x1b\x7f": // Ctrl-W, Alt-Backspace: delete the word before the cursor
+		e.deleteRange(e.wordStart(), e.pos)
 	default:
 		// Other control keys and unknown escape sequences are ignored, so they never
 		// end up in the prompt.
@@ -211,9 +303,63 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 	return false, nil
 }
 
-// render redraws the prompt line and everything under it: it moves from the cursor up
-// to the prompt line, clears to the end of the screen, prints the input, the rule and
-// the menu (or the footer when there is no menu), then moves the cursor back into the
+func (e *promptEditor) wordStart() int {
+	start := e.pos
+	for start > 0 && unicode.IsSpace(e.buf[start-1]) {
+		start--
+	}
+	for start > 0 && !unicode.IsSpace(e.buf[start-1]) {
+		start--
+	}
+	return start
+}
+
+func (e *promptEditor) wordEnd() int {
+	end := e.pos
+	for end < len(e.buf) && unicode.IsSpace(e.buf[end]) {
+		end++
+	}
+	for end < len(e.buf) && !unicode.IsSpace(e.buf[end]) {
+		end++
+	}
+	return end
+}
+
+// layoutRows splits the text into the rows it is drawn on. Every row starts with the
+// prompt prefix or an indent as wide, and holds at most width-1 cells, so the terminal
+// never wraps a row itself. It also returns the cursor's row and 0-based column.
+func (e *promptEditor) layoutRows(width int) (rows []string, cursorRow, cursorCol int) {
+	prefix := promptPrefix()
+	prefixWidth := style.VisibleWidth(prefix)
+	indent := strings.Repeat(" ", prefixWidth)
+	room := max(width-1-prefixWidth, 1)
+
+	offset := 0
+	for i, line := range strings.Split(string(e.buf), "\n") {
+		runes := []rune(line)
+		lead := indent
+		if i == 0 {
+			lead = prefix
+		}
+		count := len(runes)/room + 1
+		for r := 0; r < count; r++ {
+			chunk := runes[min(r*room, len(runes)):min((r+1)*room, len(runes))]
+			rows = append(rows, lead+string(chunk))
+			lead = indent
+		}
+		if e.pos >= offset && e.pos <= offset+len(runes) {
+			column := e.pos - offset
+			cursorRow = len(rows) - count + column/room
+			cursorCol = prefixWidth + column%room
+		}
+		offset += len(runes) + 1
+	}
+	return rows, cursorRow, cursorCol
+}
+
+// render redraws the prompt and everything under it: it moves from the cursor up to the
+// first prompt row, clears to the end of the screen, prints the input, the rule and the
+// menu (or the footer when there is no menu), then moves the cursor back into the
 // input. Moving up after printing works at the bottom of the screen, where printing
 // scrolls.
 func (e *promptEditor) render(footer string, width int) string {
@@ -224,16 +370,8 @@ func (e *promptEditor) render(footer string, width int) string {
 	}
 	b.WriteString("\r\x1b[J")
 
-	prefix := promptPrefix()
-	prefixWidth := style.VisibleWidth(prefix)
-	b.WriteString(prefix + string(e.buf))
-	cells := prefixWidth + len(e.buf)
-	rows := cells/width + 1
-	if cells%width == 0 {
-		// The text filled its last row exactly; the cursor belongs on the empty row
-		// after it.
-		b.WriteString("\n")
-	}
+	rows, cursorRow, cursorCol := e.layoutRows(width)
+	b.WriteString(strings.Join(rows, "\n"))
 	b.WriteString("\n" + renderRule(width-1))
 
 	below := []string{footer}
@@ -244,12 +382,11 @@ func (e *promptEditor) render(footer string, width int) string {
 		b.WriteString("\n" + line)
 	}
 
-	cursorCells := prefixWidth + e.pos
-	e.cursorRow = cursorCells / width
-	if up := rows + len(below) - e.cursorRow; up > 0 {
+	e.cursorRow = cursorRow
+	if up := len(rows) + len(below) - cursorRow; up > 0 {
 		fmt.Fprintf(&b, "\x1b[%dA", up)
 	}
-	fmt.Fprintf(&b, "\x1b[%dG", cursorCells%width+1)
+	fmt.Fprintf(&b, "\x1b[%dG", cursorCol+1)
 	return b.String()
 }
 
@@ -274,7 +411,8 @@ func editPrompt(ctx context.Context, input *lineReader, footer string, width int
 	editor.setText(input.partial)
 	input.partial = ""
 
-	fmt.Print(renderRule(width-1) + "\n" + editor.render(footer, width))
+	fmt.Print(bracketedPasteOn + renderRule(width-1) + "\n" + editor.render(footer, width))
+	defer fmt.Print(bracketedPasteOff)
 	for {
 		key, err := input.readKey(ctx)
 		if err == nil {

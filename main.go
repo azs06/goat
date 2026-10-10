@@ -347,6 +347,8 @@ func handleInput(cfg *config, text string) error {
 	started := time.Now()
 	err = runWithInputGuard(queueing, func() error {
 		if queueing {
+			fmt.Print(bracketedPasteOn)
+			defer fmt.Print(bracketedPasteOff)
 			startKeyCapture(ctx, cfg.input)
 			defer stopKeyCapture()
 		}
@@ -458,6 +460,11 @@ const exitConfirmWindow = 2 * time.Second
 func main() {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Fatalf("Error loading .env file: %v", err)
+	}
+	if values, err := godotenv.Read(); err == nil {
+		for name := range values {
+			dotenvKeys[name] = true
+		}
 	}
 	if len(provider.AvailableNames()) == 0 {
 		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")

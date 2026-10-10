@@ -60,7 +60,7 @@ func TestPromptEditorEnterRunsSelectedCommand(t *testing.T) {
 	}
 
 	e = &promptEditor{}
-	typeKeys(t, e, "/", "r", "e", "\x1b[B", "\x1b[B", "\x1b[B", "\x1b[A", "\n")
+	typeKeys(t, e, "/", "r", "e", "\x1b[B", "\x1b[B", "\x1b[B", "\x1b[A", "\r")
 	if string(e.buf) != "/reset" {
 		t.Fatalf("Down, Down, Down (wrapping), Up selected %q, want /reset", string(e.buf))
 	}
@@ -131,10 +131,10 @@ func TestPromptEditorRenderShowsMenuInPlaceOfFooter(t *testing.T) {
 func TestPromptEditorRenderWrapsLongInput(t *testing.T) {
 	withColor(t, true)
 	e := &promptEditor{}
-	// 2 prefix cells + 8 = one full 10-cell row; the cursor sits on the next row.
+	// Rows hold 9 cells: the 2-cell prefix and 7 letters, then the indent and "h".
 	e.setText("abcdefgh")
 	out := e.render("F", 10)
-	if e.cursorRow != 1 || !strings.HasSuffix(out, "\x1b[2A\x1b[1G") {
+	if e.cursorRow != 1 || !strings.Contains(out, "abcdefg\n  h\n") || !strings.HasSuffix(out, "\x1b[2A\x1b[4G") {
 		t.Fatalf("cursorRow=%d out=%q", e.cursorRow, out)
 	}
 	if again := e.render("F", 10); !strings.HasPrefix(again, "\x1b[1A\r\x1b[J") {
@@ -164,5 +164,46 @@ func TestReadKeyGroupsEscapeSequences(t *testing.T) {
 func TestReadKeyFromLoneEscape(t *testing.T) {
 	if key, err := readKeyFrom(bufio.NewReader(strings.NewReader("\x1b"))); err != nil || key != "\x1b" {
 		t.Fatalf("got %q, %v", key, err)
+	}
+}
+
+func TestPromptEditorMultiLine(t *testing.T) {
+	e := &promptEditor{}
+	// Ctrl-J, Alt-Enter and a backslash before Enter all start a new line.
+	if done, _ := typeKeys(t, e, "a", "\n", "b", "\x1b\r", "c", "\\", "\r", "d"); done {
+		t.Fatal("expected no submit")
+	}
+	if string(e.buf) != "a\nb\nc\nd" {
+		t.Fatalf("got %q", string(e.buf))
+	}
+	// Up and Down move between lines when no menu is open; Home and Ctrl-U act on the
+	// current line only.
+	typeKeys(t, e, "\x1b[A", "\x1b[A", "\x01", "X", "\x1b[B", "\x05", "\x15")
+	if string(e.buf) != "a\nXb\n\nd" {
+		t.Fatalf("got %q", string(e.buf))
+	}
+	if done, _ := typeKeys(t, e, "\r"); !done {
+		t.Fatal("expected Enter to submit")
+	}
+}
+
+func TestPromptEditorPasteKeepsLineBreaks(t *testing.T) {
+	e := &promptEditor{}
+	done, _ := typeKeys(t, e, pasteStart, "l", "1", "\r", "l", "2", "\t", "x", pasteEnd)
+	if done || string(e.buf) != "l1\nl2    x" {
+		t.Fatalf("got %q done=%v", string(e.buf), done)
+	}
+	if e.completions() != nil {
+		t.Fatal("expected no menu for multi-line text")
+	}
+}
+
+func TestPromptEditorRenderMultiLine(t *testing.T) {
+	withColor(t, true)
+	e := &promptEditor{}
+	e.setText("one\ntwo")
+	out := style.StripANSI(e.render("F", 40))
+	if !strings.Contains(out, "❯ one\n  two\n") || e.cursorRow != 1 {
+		t.Fatalf("got %q cursorRow=%d", out, e.cursorRow)
 	}
 }

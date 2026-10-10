@@ -43,6 +43,7 @@ func (g *terminalInputGuard) disableEcho() error {
 	updated.Lflag &^= unix.ECHO
 	if g.cbreak {
 		updated.Lflag &^= unix.ICANON
+		updated.Iflag &^= unix.ICRNL
 		updated.Cc[unix.VMIN] = 1
 		updated.Cc[unix.VTIME] = 0
 	}
@@ -95,8 +96,9 @@ func stdoutColumns() int {
 }
 
 // enterCbreakMode turns off line buffering and echo on stdin so the prompt editor sees
-// each key as it is typed. ISIG stays on, so Ctrl-C still raises SIGINT. The returned
-// function restores the previous state.
+// each key as it is typed. Enter arrives as "\r", told apart from Ctrl-J's "\n". ISIG
+// stays on, so Ctrl-C still raises SIGINT. The returned function restores the previous
+// state.
 func enterCbreakMode() (func(), error) {
 	fd := int(os.Stdin.Fd())
 	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
@@ -105,6 +107,7 @@ func enterCbreakMode() (func(), error) {
 	}
 	updated := *original
 	updated.Lflag &^= unix.ICANON | unix.ECHO
+	updated.Iflag &^= unix.ICRNL
 	updated.Cc[unix.VMIN] = 1
 	updated.Cc[unix.VTIME] = 0
 	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &updated); err != nil {

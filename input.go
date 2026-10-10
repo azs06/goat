@@ -135,10 +135,14 @@ type bashApprover struct {
 }
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
-	if a.autoApprove {
+	touchesState := mentionsStateDir(command)
+	if a.autoApprove && !touchesState {
 		return nil
 	}
 	if !a.interactive {
+		if touchesState {
+			return fmt.Errorf("%w: commands that touch %s always need the user's approval", errBashCommandDeclined, stateDirName)
+		}
 		return fmt.Errorf("%w: approval needs an interactive terminal; set GOAT_AUTO_APPROVE_BASH=1 to allow commands", errBashCommandDeclined)
 	}
 	if strings.TrimSpace(workdir) == "" {
@@ -148,6 +152,9 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	resume := suspendInputGuard()
 	defer resume()
 
+	if touchesState {
+		fmt.Println("\n" + formatWarning(fmt.Sprintf("This command touches %s, goat's history and undo snapshots; run_bash changes are not undoable.", stateDirName)))
+	}
 	if style.Enabled() {
 		fmt.Print(renderApprovalCard(command, workdir, terminalWidth()))
 	} else {
