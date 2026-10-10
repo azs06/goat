@@ -210,11 +210,17 @@ mode is on; with it off, goat sends exactly what it would without code mode. Tur
 or off mid-conversation is fine, but the next request misses the prompt cache once. Code
 mode is off by default and, like plan mode, is not saved with the session.
 
-Code mode pays off on tasks that take many tool calls. In a benchmark of four read-only
-tasks (gpt-6-luna and deepseek-v4-pro, three runs each), turning it on cut wall time by
-about half and input tokens by 70-78% when the model could not use the shell. With the
-shell allowed, the cut was 45% and 73% for gpt-6-luna, and close to nothing for DeepSeek.
-Single-step tasks were unchanged. Every run, on or off, got the right answer.
+Code mode pays off on tasks that take many tool calls and that the shell cannot do in one
+command. A benchmark of four read-only tasks (gpt-6-luna and deepseek-v4-pro, three runs
+of each, measured against goat with code mode off) found:
+
+- Without the shell, it cut wall time by 40-52% and input tokens by about 70%. gpt-6-luna
+  answered all 12 tasks correctly with it, against 9 of 12 without, because long tool
+  output got cut off.
+- With the shell, gpt-6-luna was 31% faster. deepseek-v4-pro was 48% slower and used 49%
+  more input, because it often wrapped a single shell command in a script.
+- For a single-step task, the extra prompt is pure cost: 1.5 to 1.7 times the input
+  tokens.
 
 ## Cost
 
