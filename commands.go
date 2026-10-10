@@ -447,7 +447,7 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
 	if len(choices) == 0 {
-		fmt.Println(style.Warning.Render("No models are available: set OPENAI_API_KEY, ANTHROPIC_API_KEY or DEEPSEEK_API_KEY."))
+		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(noAPIKeyMessage(), "no API key found; ") + "."))
 		return
 	}
 	fmt.Println(style.Strong.Render("Models") + style.Muted.Render(" (only providers with an API key are listed):"))

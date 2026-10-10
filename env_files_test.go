@@ -199,6 +199,7 @@ func TestEnvFileErrorsDoNotQuoteTheFile(t *testing.T) {
 	for name, content := range map[string]string{
 		"unclosed quote": "OPENAI_API_KEY=\"sk-SECRET-1\nDEEPSEEK_API_KEY=sk-SECRET-2\n",
 		"pasted key":     "sk-proj-SECRET-1\nANTHROPIC_API_KEY=sk-ant-SECRET-2\n",
+		"pasted last":    "ANTHROPIC_API_KEY=sk-ant-SECRET-2\nsk_live_SECRET_1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, global := envFilesTest(t)
@@ -207,8 +208,9 @@ func TestEnvFileErrorsDoNotQuoteTheFile(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), global) || strings.Contains(err.Error(), "SECRET") {
 				t.Fatalf("got %v", err)
 			}
-			if name == "pasted key" && !strings.Contains(err.Error(), "check line 1") {
-				t.Errorf("expected the line, got %v", err)
+			want := map[string]string{"pasted key": "check line 1", "pasted last": "check line 2"}[name]
+			if want != "" && !strings.Contains(err.Error(), want) {
+				t.Errorf("expected %q, got %v", want, err)
 			}
 		})
 	}
@@ -269,8 +271,38 @@ func TestProcessReadsDisplaySettingsFromTheGlobalEnvFile(t *testing.T) {
 	config := filepath.Join(workDir, "config", "goat")
 	os.MkdirAll(config, 0o700)
 	os.WriteFile(filepath.Join(config, ".env"), []byte("ANTHROPIC_API_KEY=test\nGOAT_FORCE_COLOR=1\n"), 0o600)
-	out, errOut, code := runGoat(t, workDir, "/status\n/exit\n", nil)
+	// Whatever the shell running the tests says about color.
+	out, errOut, code := runGoat(t, workDir, "/status\n/exit\n", []string{"NO_COLOR=", "TERM=xterm-256color"})
 	if code != 0 || !strings.Contains(out, "\x1b[") {
 		t.Fatalf("GOAT_FORCE_COLOR from the global file should style output (exit %d)\n%q\n%s", code, out, errOut)
+	}
+}
+
+func TestBadLineSkipsQuotedValuesThatSpanLines(t *testing.T) {
+	data := []byte("A=1\nB=\"one\ntwo\"\nC=3\nnot a line\nD=4\n")
+	if line := badLine(data); line != 5 {
+		t.Errorf("got line %d, want 5", line)
+	}
+	if line := badLine([]byte("A=1\nB=2\n")); line != 0 {
+		t.Errorf("a valid file has no bad line, got %d", line)
+	}
+}
+
+func TestEnvFilesSkipAnUnreadableGlobalFile(t *testing.T) {
+	_, global := envFilesTest(t, "GOAT_T_PROJECT_ONLY")
+	os.Remove(global)
+	os.MkdirAll(global, 0o700) // a directory where the file should be
+	os.WriteFile(".env", []byte("GOAT_T_PROJECT_ONLY=1\n"), 0o600)
+	warnings, err := loadEnvFiles()
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "skipping") || os.Getenv("GOAT_T_PROJECT_ONLY") != "1" {
+		t.Fatalf("got %v %v", warnings, err)
+	}
+}
+
+func TestGoatConfigDirIgnoresARelativeXDGConfigHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "~/cfg")
+	home, _ := os.UserHomeDir()
+	if dir := goatConfigDir(); dir != filepath.Join(home, ".config", "goat") {
+		t.Errorf("got %q", dir)
 	}
 }

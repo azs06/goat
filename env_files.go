@@ -21,7 +21,8 @@ import (
 // goatConfigDir is goat's config directory: $XDG_CONFIG_HOME/goat, or ~/.config/goat.
 // It is "" when neither can be found.
 func goatConfigDir() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+	// The XDG spec says a relative XDG_CONFIG_HOME is invalid and should be ignored.
+	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
 		return filepath.Join(dir, "goat")
 	}
 	home, err := os.UserHomeDir()
@@ -79,6 +80,12 @@ func loadEnvFiles() (warnings []string, err error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
+		var parseErr *envParseError
+		if err != nil && i > 0 && !errors.As(err, &parseErr) {
+			// A global file goat cannot open should not stop it in every folder.
+			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", displayPath(path), err))
+			continue
+		}
 		if err != nil {
 			return warnings, err
 		}
@@ -113,9 +120,23 @@ func loadEnvFiles() (warnings []string, err error) {
 	return warnings, nil
 }
 
-// readEnvFile parses a .env file. A parse error names the file and, where it can be
-// found, the line, but never quotes the file: the parser's own messages repeat its
-// contents, keys included.
+// envParseError is a .env file the parser rejects. Its message names the file and,
+// where it can be found, the line, but never quotes the file: the parser's own
+// messages repeat its contents, keys included.
+type envParseError struct {
+	path string
+	line int
+}
+
+func (e *envParseError) Error() string {
+	if e.line > 0 {
+		return fmt.Sprintf("%s is not a valid .env file: check line %d, which should look like NAME=value", e.path, e.line)
+	}
+	return fmt.Sprintf("%s is not a valid .env file: look for an unclosed quote or a line that is not NAME=value", e.path)
+}
+
+// readEnvFile parses a .env file. An I/O error is returned as it is, with the path; a
+// file the parser rejects is an *envParseError.
 func readEnvFile(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -123,50 +144,45 @@ func readEnvFile(path string) (map[string]string, error) {
 	}
 	// Editors on Windows may start the file with a byte order mark.
 	data = bytes.TrimPrefix(data, []byte("\ufeff"))
-	values, err := godotenv.UnmarshalBytes(data)
+	values, err := parseEnv(data)
 	if err != nil {
-		if line := suspectLine(data); line > 0 {
-			return nil, fmt.Errorf("%s is not a valid .env file: check line %d, which should look like NAME=value", path, line)
-		}
-		return nil, fmt.Errorf("%s is not a valid .env file: look for an unclosed quote or a line that is not NAME=value", path)
+		return nil, &envParseError{path: path, line: badLine(data)}
 	}
 	return values, nil
 }
 
-// suspectLine returns the number of the first line that is not blank, a comment or
-// NAME=..., or 0 when every line looks right (the problem is then likely a quote).
-func suspectLine(data []byte) int {
-	for i, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+// parseEnv parses .env text. Text without any NAME, such as a key pasted on its own
+// last line, comes back from the parser as a value for the empty name; that is an
+// error too.
+func parseEnv(data []byte) (map[string]string, error) {
+	values, err := godotenv.UnmarshalBytes(data)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := values[""]; ok {
+		return nil, errors.New("a line has no name")
+	}
+	return values, nil
+}
+
+// badLine finds the line a parse error starts on: the line after the longest run of
+// whole lines that parses. Lines after it all fail too, so a quoted value that spans
+// lines does not count as the error. It returns 0 when every prefix parses.
+func badLine(data []byte) int {
+	lines := strings.SplitAfter(string(data), "\n")
+	for n := len(lines); n >= 0; n-- {
+		prefix := strings.Join(lines[:n], "")
+		if !strings.HasSuffix(prefix, "\n") && prefix != "" {
+			prefix += "\n"
 		}
-		line = strings.TrimPrefix(line, "export ")
-		name, _, found := strings.Cut(line, "=")
-		if !found {
-			name, _, found = strings.Cut(line, ":")
-		}
-		if !found || !validEnvName(strings.TrimSpace(name)) {
-			return i + 1
-		}
-		// A quoted value may span lines; past an opening quote, stop guessing.
-		if value := strings.TrimSpace(line[len(name)+1:]); strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'") {
-			return 0
+		if _, err := parseEnv([]byte(prefix)); err == nil {
+			if n == len(lines) {
+				return 0
+			}
+			return n + 1
 		}
 	}
 	return 0
-}
-
-func validEnvName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i, r := range name {
-		if r != '_' && r != '.' && !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(i > 0 && r >= '0' && r <= '9') {
-			return false
-		}
-	}
-	return true
 }
 
 // sharedFileWarning warns about a key file other users can read. File modes mean
@@ -179,13 +195,13 @@ func sharedFileWarning(path string) string {
 	if err != nil || info.Mode().Perm()&0o077 == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%s can be read by other users; run chmod 600 %s", displayPath(path), shellQuote(path))
+	return fmt.Sprintf("%s is open to other users, who may read your keys; run chmod 600 %s", displayPath(path), shellQuote(path))
 }
 
 // shellQuote quotes path for pasting into a shell when it needs it.
 func shellQuote(path string) string {
 	if path != "" && strings.IndexFunc(path, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-~+,@%", r))
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+,@%", r))
 	}) < 0 {
 		return path
 	}
