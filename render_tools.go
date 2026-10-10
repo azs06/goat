@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -322,10 +323,9 @@ func editDiffLines(rawArgs string) []string {
 	if json.Unmarshal([]byte(rawArgs), &args) != nil || args.OldText == args.NewText {
 		return nil
 	}
-	ops := computeDiffOps(splitDiffLines(args.OldText), splitDiffLines(args.NewText))
-	lines := make([]string, 0, len(ops))
-	for _, op := range ops {
-		lines = append(lines, string(op.kind)+escapeControlChars(strings.TrimSuffix(op.text, "\n")))
+	lines := workspace.DiffLines(args.OldText, args.NewText)
+	for i, line := range lines {
+		lines[i] = escapeControlChars(line)
 	}
 	return lines
 }

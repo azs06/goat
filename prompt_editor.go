@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/terminal"
 )
 
 // The interactive prompt is edited in cbreak mode so slash commands can be completed
@@ -518,7 +519,7 @@ func (e *promptEditor) clear() string {
 // the terminal cannot be put in cbreak mode, and nothing has been drawn. On return the
 // frame has been cleared.
 func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int) (text string, ok bool, err error) {
-	restore, err := enterCbreakMode()
+	restore, err := terminal.EnterCbreak()
 	if err != nil {
 		return "", false, nil
 	}

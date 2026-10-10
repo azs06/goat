@@ -37,8 +37,8 @@ func newDeepSeekTestProvider(fake *fakeAnthropic) provider.Provider {
 }
 
 func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	// Credentials meant for Anthropic must never reach DeepSeek.
 	// With only the auth token set, the SDK's defaults would send it as a bearer token.
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -54,7 +54,7 @@ func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
 	fake.deepseekModels = deepSeekModelList
 	p := newDeepSeekTestProvider(fake)
 
-	conv, err := sendPromptStream(context.Background(), p, "list files", conversationState{}, "deepseek-v4-pro", provider.EffortMedium)
+	conv, err := sendPromptStream(context.Background(), p, "list files", conversationState{}, turnOptions{model: "deepseek-v4-pro", effort: provider.EffortMedium})
 	if err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
 	}
 
 	// The next user turn must still carry every earlier turn's reasoning.
-	if _, err := sendPromptStream(context.Background(), p, "thanks", conv, "deepseek-v4-pro", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), p, "thanks", conv, turnOptions{model: "deepseek-v4-pro", effort: provider.EffortMedium}); err != nil {
 		t.Fatalf("second turn: %v", err)
 	}
 	third := messagesOf(t, messageRequests[0])
@@ -120,13 +120,13 @@ func TestDeepSeekRequestsAndReasoningReplay(t *testing.T) {
 }
 
 func TestDeepSeekEffortMapping(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	cases := map[provider.Effort]string{provider.EffortMinimal: "low", provider.EffortLow: "low", provider.EffortHigh: "high", provider.EffortXhigh: "high", provider.EffortMax: "max"}
 	for effort, want := range cases {
 		fake := newFakeAnthropic(t, newSSE("ds").text("ok").stop("end_turn", ""))
-		if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, "deepseek-flash", effort); err != nil {
+		if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, turnOptions{model: "deepseek-flash", effort: effort}); err != nil {
 			t.Fatalf("%s: %v", effort, err)
 		}
 		if got := fake.request(0).body["output_config"].(map[string]any)["effort"]; got != want {
@@ -135,7 +135,7 @@ func TestDeepSeekEffortMapping(t *testing.T) {
 	}
 
 	fake := newFakeAnthropic(t, newSSE("ds").text("ok").stop("end_turn", ""))
-	if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, "deepseek-flash", provider.EffortNone); err != nil {
+	if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, turnOptions{model: "deepseek-flash", effort: provider.EffortNone}); err != nil {
 		t.Fatalf("none: %v", err)
 	}
 	body := fake.request(0).body
@@ -148,8 +148,8 @@ func TestDeepSeekEffortMapping(t *testing.T) {
 }
 
 func TestDeepSeekBusyServerIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }
@@ -159,7 +159,7 @@ func TestDeepSeekBusyServerIsRetried(t *testing.T) {
 		newSSE("ds_1").stop("insufficient_system_resource", ""),
 		newSSE("ds_2").text("ok").stop("end_turn", ""),
 	)
-	conv, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, "deepseek-flash", provider.EffortHigh)
+	conv, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, turnOptions{model: "deepseek-flash", effort: provider.EffortHigh})
 	if err != nil {
 		t.Fatalf("expected a retry, got %v", err)
 	}
@@ -169,8 +169,8 @@ func TestDeepSeekBusyServerIsRetried(t *testing.T) {
 }
 
 func TestDeepSeekModelsAndCredentials(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, false)
 	t.Setenv("DEEPSEEK_API_KEY", "ds-key")
 
@@ -187,7 +187,7 @@ func TestDeepSeekModelsAndCredentials(t *testing.T) {
 		t.Fatalf("expected the DeepSeek default, got %v", model)
 	}
 	t.Setenv("GOAT_MODEL", "deepseek-flash")
-	if model, _ := startupModel(nil); model != (provider.Model{Provider: provider.DeepSeek, ID: "deepseek-flash"}) {
+	if model, _ := startupModel(nil, ""); model != (provider.Model{Provider: provider.DeepSeek, ID: "deepseek-flash"}) {
 		t.Fatalf("expected GOAT_MODEL to pick DeepSeek, got %v", model)
 	}
 
@@ -203,8 +203,8 @@ func TestDeepSeekModelsAndCredentials(t *testing.T) {
 }
 
 func TestDeepSeekReasoningRejectionTriggersRecovery(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t)
 	fake.reject = func(body map[string]any) (int, string, bool) {
@@ -217,8 +217,8 @@ func TestDeepSeekReasoningRejectionTriggersRecovery(t *testing.T) {
 }
 
 func TestDeepSeekUnknownModelIsRefused(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	setCredentials(t, false, false)
 	t.Setenv("DEEPSEEK_API_KEY", "ds-key")
 
@@ -236,8 +236,8 @@ func TestDeepSeekUnknownModelIsRefused(t *testing.T) {
 }
 
 func TestStreamDroppedAfterKeepAliveOrPingIsRetried(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	streamRetrySleeper = func(ctx context.Context, delay time.Duration) error { return nil }
@@ -246,7 +246,7 @@ func TestStreamDroppedAfterKeepAliveOrPingIsRetried(t *testing.T) {
 	for name, prelude := range map[string]string{"keep-alive": ": keep-alive\n\n", "ping": "event: ping\ndata: {\"type\":\"ping\"}\n\n"} {
 		fake := newFakeAnthropic(t, "unused", newSSE("ds_2").text("ok").stop("end_turn", ""))
 		fake.dropAfter = prelude
-		if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, "deepseek-flash", provider.EffortHigh); err != nil {
+		if _, err := sendPromptStream(context.Background(), newDeepSeekTestProvider(fake), "hi", conversationState{}, turnOptions{model: "deepseek-flash", effort: provider.EffortHigh}); err != nil {
 			t.Fatalf("%s: expected the dropped stream to be retried, got %v", name, err)
 		}
 	}

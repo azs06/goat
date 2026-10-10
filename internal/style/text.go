@@ -96,3 +96,38 @@ func TruncateToWidth(text string, width int) string {
 	}
 	return string([]rune(text)[:keep]) + ellipsis
 }
+
+// Wrap word-wraps styled text to width visible cells. The first row starts with
+// first and the rest with rest. A style open at a row break is closed at the end of
+// the row and re-opened after the next row's prefix, so it never colors the indent.
+// Words longer than a row are left to overflow.
+func Wrap(text string, width int, first, rest string) string {
+	words := strings.Split(text, " ")
+	var rows []string
+	row := first
+	rowWidth := VisibleWidth(first)
+	empty := true
+	active := ""
+	for _, word := range words {
+		wordWidth := VisibleWidth(word)
+		switch {
+		case empty:
+			row += word
+			rowWidth += wordWidth
+			empty = false
+		case rowWidth+1+wordWidth > width && wordWidth > 0:
+			if active != "" {
+				row += Reset
+			}
+			rows = append(rows, row)
+			row = rest + active + word
+			rowWidth = VisibleWidth(rest) + wordWidth
+		default:
+			row += " " + word
+			rowWidth += 1 + wordWidth
+		}
+		active = ActiveAfter(active, word)
+	}
+	rows = append(rows, row)
+	return strings.Join(rows, "\n")
+}

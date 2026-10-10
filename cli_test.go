@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/azs06/goat/internal/tools"
 )
 
 func TestLookupCommandOnlyMatchesWholeLineOrSlashPrefix(t *testing.T) {
@@ -156,8 +158,8 @@ func TestEscapeControlCharsShowsHiddenSequences(t *testing.T) {
 }
 
 func TestSystemPromptListsEveryTool(t *testing.T) {
-	for _, name := range availableToolNames() {
-		if !strings.Contains(SystemPrompt, "- "+name+":") {
+	for _, name := range tools.Names() {
+		if !strings.Contains(systemPrompt, "- "+name+":") {
 			t.Errorf("system prompt does not list %s", name)
 		}
 	}

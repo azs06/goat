@@ -11,8 +11,8 @@ import (
 )
 
 func TestProjectInstructionsGoWithTheFirstMessageOnly(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	os.MkdirAll(filepath.Join(config, "goat"), 0o755)
@@ -33,7 +33,7 @@ func TestProjectInstructionsGoWithTheFirstMessageOnly(t *testing.T) {
 		newSSE("msg_2").text("ok").stop("end_turn", ""),
 	)
 	p := fake.provider(true)
-	conv, err := sendPromptStream(context.Background(), p, "hello", conversationState{}, "claude-opus-5-5", provider.EffortLow)
+	conv, err := sendPromptStream(context.Background(), p, "hello", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestProjectInstructionsGoWithTheFirstMessageOnly(t *testing.T) {
 	if strings.Contains(first, "Should not be used") {
 		t.Error("expected CLAUDE.md to be skipped when AGENTS.md exists")
 	}
-	if _, err := sendPromptStream(context.Background(), p, "again", conv, "claude-opus-5-5", provider.EffortLow); err != nil {
+	if _, err := sendPromptStream(context.Background(), p, "again", conv, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow}); err != nil {
 		t.Fatal(err)
 	}
 	second := messagesOf(t, fake.request(1))

@@ -29,8 +29,8 @@ func TestPromptHistoryBrowsing(t *testing.T) {
 }
 
 func TestPromptHistoryFile(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	history := loadPromptHistory()
 	history = rememberPrompt(history, "one")
@@ -43,8 +43,8 @@ func TestPromptHistoryFile(t *testing.T) {
 }
 
 func TestPathCompletion(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 	for _, dir := range []string{"internal/provider", "internal/style", ".goat"} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // Project instructions are notes for the agent kept with the code: AGENTS.md (or
@@ -53,7 +55,7 @@ func findProjectInstructions() []instructionFile {
 		read(path, "~/.config/goat/AGENTS.md")
 	}
 	for _, name := range projectInstructionFiles {
-		if _, _, err := resolveToolPath(name); err != nil {
+		if _, _, err := workspace.ResolvePath(name); err != nil {
 			continue
 		}
 		if read(name, name) {

@@ -342,17 +342,18 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `main.go`, `cli.go` | Startup, command-line flags, the prompt loop and Ctrl-C handling |
 | `agent.go` | One turn: streaming the reply, running tool calls, the 40-round limit |
 | `commands.go` | Slash commands |
-| `tool_definitions.go`, `tools.go`, `json_tools.go` | Tool schemas and implementations |
-| `mutations.go` | Snapshots, the operation log and undo |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
 | `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
 | `plan_mode.go` | Plan mode |
-| `search.go`, `secrets.go` | `.gitignore` filtering, grep matching, ranged reads; keeping credentials out of tools |
-| `prompt_editor.go`, `selector.go`, `input.go`, `queue.go`, `terminal_guard_*.go` | The interactive line editor, arrow-key pickers, messages queued during a turn, input reading and terminal modes |
+| `prompt_editor.go`, `selector.go`, `input.go`, `queue.go` | The interactive line editor, arrow-key pickers, messages queued during a turn and input reading |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
+| `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
+| `internal/terminal/` | Terminal modes (echo, cbreak) and size |
+| `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules and the handler that runs each one |
+| `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
 
 ## Development
 
@@ -361,13 +362,13 @@ gofmt -l .                      # should print nothing
 go vet ./...
 staticcheck ./...               # configured in staticcheck.conf
 go test -race ./...
-go test -run '^$' -fuzz FuzzResolveToolPath -fuzztime 30s .
+go test -run '^$' -fuzz FuzzResolveToolPath -fuzztime 30s ./internal/workspace/
 ```
 
 The tests run against fake provider servers, so they need no API keys. Fuzz targets cover
-path resolution (`FuzzResolveToolPath`), markdown rendering (`FuzzRenderMarkdownLine`),
-the prompt editor (`FuzzPromptEditorKeys`) and theme parsing (`FuzzParseTheme`, in
-`internal/style`). CI (`.github/workflows/ci.yml`) runs all of the above on Linux and
+path resolution (`FuzzResolveToolPath`, in `internal/workspace`), markdown rendering
+(`FuzzRenderMarkdownLine`, in `internal/markdown`), the prompt editor
+(`FuzzPromptEditorKeys`) and theme parsing (`FuzzParseTheme`, in `internal/style`). CI (`.github/workflows/ci.yml`) runs all of the above on Linux and
 macOS, with a 70% coverage floor and a cross-build for every platform.
 
 When you change anything that prints, also check that piped output stays free of escape

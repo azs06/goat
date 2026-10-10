@@ -48,9 +48,9 @@ jobs:
 
       - name: Fuzz (short)
         run: |
-          for target in FuzzResolveToolPath FuzzRenderMarkdownLine FuzzPromptEditorKeys; do
-            go test -run '^$' -fuzz "^${target}\$" -fuzztime 20s .
-          done
+          go test -run '^$' -fuzz '^FuzzPromptEditorKeys$' -fuzztime 20s .
+          go test -run '^$' -fuzz '^FuzzRenderMarkdownLine$' -fuzztime 20s ./internal/markdown/
+          go test -run '^$' -fuzz '^FuzzResolveToolPath$' -fuzztime 20s ./internal/workspace/
           go test -run '^$' -fuzz '^FuzzParseTheme$' -fuzztime 20s ./internal/style/
 
   cross-build:

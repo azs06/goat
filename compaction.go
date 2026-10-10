@@ -269,13 +269,13 @@ func compactConversation(ctx context.Context, p provider.Provider, model, focus 
 }
 
 // completeWithRetry retries transient failures the way turns do.
-func completeWithRetry(ctx context.Context, provider provider.Provider, model, system, prompt string) (string, error) {
+func completeWithRetry(ctx context.Context, p provider.Provider, model, system, prompt string) (string, error) {
 	for attempt := 0; ; attempt++ {
-		text, err := provider.Complete(ctx, model, system, prompt)
+		text, err := p.Complete(ctx, model, system, prompt)
 		if err == nil {
 			return text, nil
 		}
-		delay, retryable := provider.RetryDelay(err, attempt)
+		delay, retryable := p.RetryDelay(err, attempt)
 		if !retryable || attempt == maxStreamRateLimitRetries || ctx.Err() != nil {
 			return "", err
 		}

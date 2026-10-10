@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/terminal"
 )
 
 // selectOption is one entry of an interactive list.
@@ -179,7 +180,7 @@ func selectOptionInteractive(ctx context.Context, c *config, title string, optio
 	}
 	resume := suspendInputGuard()
 	defer resume()
-	restore, err := enterCbreakMode()
+	restore, err := terminal.EnterCbreak()
 	if err != nil {
 		return -1, errSelectorUnavailable
 	}

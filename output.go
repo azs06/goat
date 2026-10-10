@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/terminal"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // toolRun is a tool call of the active conversation with its recorded output.
@@ -109,7 +111,7 @@ func showLong(ctx context.Context, c *config, text string) error {
 	}
 	resume := suspendInputGuard()
 	defer resume()
-	restore, err := enterCbreakMode()
+	restore, err := terminal.EnterCbreak()
 	if err != nil {
 		fmt.Println(text)
 		return nil
@@ -174,7 +176,7 @@ func copyToClipboard(text string) (string, error) {
 			return tool[0], nil
 		}
 	}
-	if !stdinIsTerminal() {
+	if !terminal.StdinIsTerminal() {
 		return "", errors.New("no clipboard tool found (pbcopy, wl-copy, xclip, xsel)")
 	}
 	fmt.Print("\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\a")
@@ -249,7 +251,7 @@ func commandExport(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		name = strings.Join(args, " ")
 	}
-	resolved, relPath, err := resolveToolPath(name)
+	resolved, relPath, err := workspace.ResolvePath(name)
 	if err != nil {
 		return err
 	}

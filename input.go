@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 type keyResult struct {
@@ -135,13 +136,13 @@ type bashApprover struct {
 }
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
-	touchesState := mentionsStateDir(command)
+	touchesState := workspace.MentionsStateDir(command)
 	if a.autoApprove && !touchesState {
 		return nil
 	}
 	if !a.interactive {
 		if touchesState {
-			return fmt.Errorf("%w: commands that touch %s always need the user's approval", errBashCommandDeclined, stateDirName)
+			return fmt.Errorf("%w: commands that touch %s always need the user's approval", errBashCommandDeclined, workspace.StateDirName)
 		}
 		return fmt.Errorf("%w: approval needs an interactive terminal; set GOAT_AUTO_APPROVE_BASH=1 to allow commands", errBashCommandDeclined)
 	}
@@ -153,7 +154,7 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	defer resume()
 
 	if touchesState {
-		fmt.Println("\n" + formatWarning(fmt.Sprintf("This command touches %s, goat's history and undo snapshots; run_bash changes are not undoable.", stateDirName)))
+		fmt.Println("\n" + formatWarning(fmt.Sprintf("This command touches %s, goat's history and undo snapshots; run_bash changes are not undoable.", workspace.StateDirName)))
 	}
 	if style.Enabled() {
 		fmt.Print(renderApprovalCard(command, workdir, terminalWidth()))

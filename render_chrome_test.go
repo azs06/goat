@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 
 	"github.com/azs06/goat/internal/style"
 )
 
-func chromeWithColor(t *testing.T, enabled bool) {
+// withColor turns styling on or off for the rest of the test.
+func withColor(t *testing.T, enabled bool) {
 	t.Helper()
 	t.Cleanup(style.SetEnabled(enabled))
 	t.Cleanup(style.SetTrueColor(false))
@@ -38,7 +40,7 @@ func TestShortenHome(t *testing.T) {
 }
 
 func TestTruncateToWidth(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if got := style.TruncateToWidth("hello", 10); got != "hello" {
 		t.Errorf("short text changed: %q", got)
 	}
@@ -51,14 +53,14 @@ func TestTruncateToWidth(t *testing.T) {
 }
 
 func TestRenderBanner(t *testing.T) {
-	chromeWithColor(t, false)
+	withColor(t, false)
 	plain := renderBanner("openai:gpt-6", "medium", "~/code", "", 80)
 	chromeAssertPlain(t, "banner", plain)
 	if !strings.Contains(plain, "Welcome to G.O.A.T agent") || !strings.Contains(plain, "Model: openai:gpt-6 (effort medium)") {
 		t.Errorf("plain banner lost its text: %q", plain)
 	}
 
-	chromeWithColor(t, true)
+	withColor(t, true)
 	for _, width := range []int{20, 50, 200} {
 		banner := renderBanner("anthropic:claude-opus-5-5", "high", "~/a/very/long/path/that/does/not/fit/in/a/narrow/terminal", "", width)
 		lines := strings.Split(banner, "\n")
@@ -78,7 +80,7 @@ func TestRenderBanner(t *testing.T) {
 }
 
 func TestRenderFooterFitsWidth(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	footer := renderFooter([]string{"anthropic:claude-opus-5-5", "effort high", "~12k ctx", "auto-approve on", "/help for commands"}, 40)
 	if w := style.VisibleWidth(footer); w > 39 {
 		t.Errorf("footer is %d wide, want at most 39", w)
@@ -114,7 +116,7 @@ func TestInputRowsAndCleanup(t *testing.T) {
 		}
 	}
 
-	chromeWithColor(t, true)
+	withColor(t, true)
 	// One input row plus the rule above it.
 	if got := renderPromptCleanup("hi", 80); got != "\x1b[2A\r\x1b[J" {
 		t.Errorf("cleanup = %q", got)
@@ -122,7 +124,7 @@ func TestInputRowsAndCleanup(t *testing.T) {
 }
 
 func TestRenderPromptFrameEndsOnPromptLine(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	frame := renderPromptFrame(renderFooter([]string{"model"}, 40), 40)
 	if !strings.HasSuffix(frame, "\x1b[2A\x1b[3G") {
 		t.Errorf("frame does not move back to the prompt: %q", frame)
@@ -133,23 +135,23 @@ func TestRenderPromptFrameEndsOnPromptLine(t *testing.T) {
 }
 
 func TestRenderUserMessage(t *testing.T) {
-	chromeWithColor(t, false)
+	withColor(t, false)
 	chromeAssertPlain(t, "user message", renderUserMessage("fix it", 80))
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if got := style.StripANSI(renderUserMessage("fix it", 80)); got != "❯ fix it " {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestRenderWorked(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if got := style.StripANSI(renderWorked(12*time.Second + 400*time.Millisecond)); got != "✻ Worked for 12s" {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestRenderApprovalCard(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	raw := renderApprovalCard("echo hi\nrm -rf \x1b[2Jbuild", "sub dir", 80)
 	if strings.Contains(raw, "\x1b[2J") {
 		t.Errorf("command escape reached the terminal: %q", raw)
@@ -163,7 +165,7 @@ func TestRenderApprovalCard(t *testing.T) {
 }
 
 func TestRenderHelpTable(t *testing.T) {
-	chromeWithColor(t, false)
+	withColor(t, false)
 	plain := renderHelpTable(commands)
 	chromeAssertPlain(t, "help", plain)
 	for _, want := range []string{"Conversation\n  /clear ", "Start a new conversation", "(also /new, /reset)", "Workspace\n  /plan [on|off]"} {
@@ -173,7 +175,7 @@ func TestRenderHelpTable(t *testing.T) {
 	}
 
 	// Colored help wraps long descriptions under their column, but says the same.
-	chromeWithColor(t, true)
+	withColor(t, true)
 	colored := style.StripANSI(renderHelpTable(commands))
 	if strings.Join(strings.Fields(colored), " ") != strings.Join(strings.Fields(plain), " ") {
 		t.Errorf("colored help differs from plain once unstyled:\n%s", colored)
@@ -185,8 +187,56 @@ func TestRenderHelpTable(t *testing.T) {
 	}
 }
 
+func TestRenderToolList(t *testing.T) {
+	withColor(t, false)
+	plain := renderToolList()
+	chromeAssertPlain(t, "tool list", plain)
+	for _, spec := range tools.Specs {
+		if !strings.Contains(plain, spec.Name) {
+			t.Errorf("plain tool list lacks %s", spec.Name)
+		}
+	}
+	for _, want := range []string{"Read-only", "plan mode allows these", "File changes", "Shell", "blocked in plan mode",
+		"read_file (path)\n    Read a file from a relative path in the workspace.\n", "grep_files (path, query)", "run_bash (command)"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("plain tool list lacks %q:\n%s", want, plain)
+		}
+	}
+
+	if strings.Contains(plain, "Set preview=true") {
+		t.Errorf("expected only each description's first sentence:\n%s", plain)
+	}
+
+	// Colored, the summaries wrap but every word survives.
+	withColor(t, true)
+	colored := style.StripANSI(renderToolList())
+	flat := strings.Join(strings.Fields(colored), " ")
+	for _, spec := range tools.Specs {
+		if !strings.Contains(flat, strings.Join(strings.Fields(firstSentence(spec.Description)), " ")) {
+			t.Errorf("colored tool list lost %s's summary:\n%s", spec.Name, colored)
+		}
+	}
+	for _, line := range strings.Split(colored, "\n") {
+		if style.VisibleWidth(line) >= terminalWidth() {
+			t.Errorf("line too wide: %q", line)
+		}
+	}
+}
+
+func TestFirstSentence(t *testing.T) {
+	for in, want := range map[string]string{
+		"Read a file. Set preview=true.": "Read a file.",
+		"Glob like *.go or cmd/*.go.":    "Glob like *.go or cmd/*.go.",
+		"No period":                      "No period",
+	} {
+		if got := firstSentence(in); got != want {
+			t.Errorf("firstSentence(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRenderKeyValues(t *testing.T) {
-	chromeWithColor(t, false)
+	withColor(t, false)
 	got := renderKeyValues([][2]string{{"Model:", "x"}, {"Workspace:", "/w"}})
 	if got != "Model:     x\nWorkspace: /w" {
 		t.Errorf("got %q", got)
@@ -197,21 +247,21 @@ func TestRenderModelChoices(t *testing.T) {
 	a := provider.Model{Provider: provider.OpenAI, ID: "gpt-a"}
 	b := provider.Model{Provider: provider.Anthropic, ID: "claude-b"}
 
-	chromeWithColor(t, false)
+	withColor(t, false)
 	got := renderModelChoices([]provider.Model{a, b}, b)
 	want := "   1. " + a.String() + "\n*  2. " + b.String()
 	if got != want {
 		t.Errorf("plain listing = %q, want %q", got, want)
 	}
 
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if colored := style.StripANSI(renderModelChoices([]provider.Model{a, b}, b)); !strings.Contains(colored, "❯  2. "+b.String()) {
 		t.Errorf("colored listing = %q", colored)
 	}
 }
 
 func TestRenderUserMessageEscapesAndFitsWidth(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	if raw := renderUserMessage("up\x1b[Aarrow", 80); strings.Contains(style.StripANSI(raw), "\x1b") {
 		t.Errorf("control characters reached the terminal: %q", raw)
 	}
@@ -225,7 +275,7 @@ func TestRenderUserMessageEscapesAndFitsWidth(t *testing.T) {
 }
 
 func TestRenderApprovalCardWrapsLongCommands(t *testing.T) {
-	chromeWithColor(t, true)
+	withColor(t, true)
 	card := style.StripANSI(renderApprovalCard("echo "+strings.Repeat("x", 120), ".", 50))
 	lines := strings.Split(card, "\n")
 	joined := ""

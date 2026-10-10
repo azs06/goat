@@ -232,3 +232,18 @@ func TestActiveAfter(t *testing.T) {
 		t.Errorf("reset and cursor moves: got %q", got)
 	}
 }
+
+func TestWrapBreaksAtWidthAndCarriesOpenStyles(t *testing.T) {
+	if got := Wrap("one two three", 8, "- ", "  "); got != "- one\n  two\n  three" {
+		t.Fatalf("plain wrap: %q", got)
+	}
+	bold := "\x1b[1m"
+	got := Wrap(bold+"aaa bbb"+Reset, 5, "", "> ")
+	want := bold + "aaa" + Reset + "\n> " + bold + "bbb" + Reset
+	if got != want {
+		t.Fatalf("styled wrap:\n got %q\nwant %q", got, want)
+	}
+	if got := Wrap("averyveryverylongword", 4, "", ""); got != "averyveryverylongword" {
+		t.Fatalf("long words should overflow, got %q", got)
+	}
+}

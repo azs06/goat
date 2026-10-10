@@ -8,8 +8,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,8 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/terminal"
+	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -47,6 +51,11 @@ type config struct {
 	promptHistory []string
 	// lastModelChoices are the models the last /model listing numbered.
 	lastModelChoices []provider.Model
+	// planMode, toggled with /plan or started with --plan, lets the agent read and
+	// investigate but not change anything: tools that would change files, and run_bash,
+	// are refused, and each prompt tells the model so. The tool list itself stays the
+	// same, so switching costs no prompt cache.
+	planMode bool
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -84,13 +93,13 @@ func (c *config) currentProvider() (provider.Provider, error) {
 	return c.provider(c.model.Provider)
 }
 
-// startupModel picks the first usable model in order: GOAT_MODEL, the saved session,
-// OPENAI_MODEL, then a default for whichever provider has credentials. Candidates whose
-// provider has no API key are skipped.
-func startupModel(saved *savedSession) (provider.Model, string) {
+// startupModel picks the first usable model in order: the --model flag, GOAT_MODEL, the
+// saved session, OPENAI_MODEL, then a default for whichever provider has credentials.
+// Candidates whose provider has no API key are skipped.
+func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 	type candidate struct{ source, raw string }
 	var candidates []candidate
-	if raw := strings.TrimSpace(cliModel); raw != "" {
+	if raw := strings.TrimSpace(flag); raw != "" {
 		candidates = append(candidates, candidate{"--model", raw})
 	}
 	if raw := strings.TrimSpace(os.Getenv("GOAT_MODEL")); raw != "" {
@@ -123,10 +132,10 @@ func startupModel(saved *savedSession) (provider.Model, string) {
 	return provider.DefaultModel(), "default"
 }
 
-// startupEffort picks the effort in order: GOAT_EFFORT, the saved session,
-// OPENAI_REASONING_EFFORT, then the default.
-func startupEffort(saved *savedSession) provider.Effort {
-	candidates := []struct{ source, value string }{{"--effort", cliEffort}, {"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
+// startupEffort picks the effort in order: the --effort flag, GOAT_EFFORT, the saved
+// session, OPENAI_REASONING_EFFORT, then the default.
+func startupEffort(saved *savedSession, flag string) provider.Effort {
+	candidates := []struct{ source, value string }{{"--effort", flag}, {"GOAT_EFFORT", os.Getenv("GOAT_EFFORT")}}
 	if saved != nil {
 		candidates = append(candidates, struct{ source, value string }{"saved session", saved.Effort})
 	}
@@ -146,20 +155,22 @@ func startupEffort(saved *savedSession) provider.Effort {
 	return provider.DefaultEffort
 }
 
-func loadConfig() *config {
+// loadConfig builds the startup configuration from the saved session, the environment
+// and the --model and --effort flags in opts.
+func loadConfig(opts cliOptions) *config {
 	saved, err := loadSessionFile(sessionPath)
 	if err != nil {
 		warnf("failed to load the saved session: %v", err)
 	}
 
-	model, _ := startupModel(saved)
+	model, _ := startupModel(saved, opts.model)
 	autoCompactTokens, err := parseAutoCompactTokens(os.Getenv("GOAT_AUTO_COMPACT_TOKENS"))
 	if err != nil {
 		warnf("invalid GOAT_AUTO_COMPACT_TOKENS: %v; using the default", err)
 		autoCompactTokens = 0
 	}
 
-	cfg := &config{model: model, reasoningEffort: startupEffort(saved), autoCompactTokens: autoCompactTokens}
+	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan}
 	restoreSavedConversation(cfg, saved)
 	return cfg
 }
@@ -232,10 +243,10 @@ func envFlag(name string) bool {
 }
 
 // activeInputGuard is the guard of the command or turn currently running, if any.
-var activeInputGuard *terminalInputGuard
+var activeInputGuard *terminal.InputGuard
 
 func runWithInputGuard(cbreak bool, work func() error) error {
-	guard, err := beginTerminalInputGuard(cbreak)
+	guard, err := terminal.BeginInputGuard(cbreak)
 	if err != nil {
 		return err
 	}
@@ -258,12 +269,12 @@ func suspendInputGuard() func() {
 	capture.pause()
 	suspended := time.Now()
 	guard := activeInputGuard
-	if err := guard.suspend(); err != nil {
+	if err := guard.Suspend(); err != nil {
 		warnf("failed to restore terminal echo: %v", err)
 	}
 	return func() {
 		inputWaitTotal += time.Since(suspended)
-		if err := guard.resume(); err != nil {
+		if err := guard.Resume(); err != nil {
 			warnf("failed to disable terminal echo: %v", err)
 		}
 		capture.resume()
@@ -306,26 +317,27 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		warnf("%v; continuing with the full conversation", err)
 	}
 
+	opts := turnOptions{
+		model:    cfg.model.ID,
+		effort:   cfg.reasoningEffort,
+		planMode: cfg.planMode,
+		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
+		// never loses work the model already did.
+		checkpoint: func(state conversationState) {
+			cfg.conversation = state
+			saveSession(cfg)
+		},
+	}
+	defer saveSession(cfg)
+	if cfg.approver != nil {
+		opts.approveBash = cfg.approver.approve
+	}
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {
-		previousSteering := takeSteering
-		takeSteering = takeQueuedText
-		defer func() { takeSteering = previousSteering }()
+		opts.takeSteering = takeQueuedText
 	}
 
-	// Save after every tool round and whatever the outcome, so a crash or Ctrl-C never
-	// loses work the model already did.
-	previousCheckpoint := turnCheckpoint
-	turnCheckpoint = func(state conversationState) {
-		cfg.conversation = state
-		saveSession(cfg)
-	}
-	defer func() {
-		turnCheckpoint = previousCheckpoint
-		saveSession(cfg)
-	}()
-
-	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, cfg.model.ID, cfg.reasoningEffort)
+	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || !provider.IsThinkingBindingError(err) {
 		return err
@@ -339,7 +351,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
-	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, cfg.model.ID, cfg.reasoningEffort)
+	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
 	return err
 }
@@ -406,7 +418,7 @@ func printWelcome(cfg *config) {
 // footerParts is the status shown under the interactive prompt.
 func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
-	if planMode {
+	if cfg.planMode {
 		parts = append(parts, "plan mode")
 	}
 	if state, ok := readGitState(); ok {
@@ -497,29 +509,23 @@ func main() {
 		fmt.Println("goat " + goatVersion())
 		return
 	}
-	cliModel, cliEffort = opts.model, opts.effort
-	planMode = opts.plan
 
-	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := loadDotenv(); err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
-	}
-	if values, err := godotenv.Read(); err == nil {
-		for name := range values {
-			dotenvKeys[name] = true
-		}
 	}
 	if len(provider.AvailableNames()) == 0 {
 		log.Fatal("no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY, in the environment or a .env file")
 	}
 
 	provider.Warnf = warnf
+	workspace.Warnf = warnf
+	terminal.Warnf = warnf
 	applyTheme()
-	cfg := loadConfig()
+	cfg := loadConfig(opts)
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
-	cfg.interactive = stdinIsTerminal()
+	cfg.interactive = terminal.StdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
-	bashCommandApprover = cfg.approver.approve
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
 
@@ -535,13 +541,16 @@ func main() {
 	}
 	if opts.prompt != "" {
 		// A prompt on the command line runs first, as if it had been queued.
-		turnQueue.mu.Lock()
-		turnQueue.items = append(turnQueue.items, opts.prompt)
-		turnQueue.mu.Unlock()
+		enqueue(opts.prompt)
 	}
 
 	printWelcome(cfg)
+	runInteractive(cfg)
+}
 
+// runInteractive is the prompt loop: it reads a prompt or command, runs it, and
+// repeats until the user exits.
+func runInteractive(cfg *config) {
 	gap := true
 	var lastInterrupt time.Time
 	for {
@@ -597,4 +606,16 @@ func main() {
 			fmt.Println(formatError(err.Error()))
 		}
 	}
+}
+
+// loadDotenv loads .env from the workspace, if there is one, into the environment, and
+// keeps the variables it defines out of run_bash commands.
+func loadDotenv() error {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if values, err := godotenv.Read(); err == nil {
+		workspace.HideFromCommands(slices.Collect(maps.Keys(values))...)
+	}
+	return nil
 }

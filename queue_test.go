@@ -107,7 +107,7 @@ func TestKeyCaptureCarriesTheUnsentLine(t *testing.T) {
 
 func TestQueuedInputLines(t *testing.T) {
 	resetTurnQueue(t)
-	chromeWithColor(t, true)
+	withColor(t, true)
 
 	if lines, _ := queuedInputLines(80); lines != nil {
 		t.Fatalf("expected nothing while keys are not captured, got %q", lines)
@@ -136,16 +136,15 @@ func TestQueuedInputLines(t *testing.T) {
 }
 
 func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t,
 		newSSE("msg_1").toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
 		newSSE("msg_2").text("Done.").stop("end_turn", ""),
 	)
 	steering := []string{"also check the tests"}
-	previous := takeSteering
-	takeSteering = func() string {
+	takeSteering := func() string {
 		if len(steering) == 0 {
 			return ""
 		}
@@ -153,9 +152,8 @@ func TestQueuedTextSteersTheNextToolRound(t *testing.T) {
 		steering = steering[1:]
 		return text
 	}
-	t.Cleanup(func() { takeSteering = previous })
 
-	if _, err := sendPromptStream(context.Background(), fake.provider(true), "list files", conversationState{}, "claude-opus-5-5", provider.EffortMedium); err != nil {
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "list files", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortMedium, takeSteering: takeSteering}); err != nil {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 

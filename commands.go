@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
+	"github.com/azs06/goat/internal/workspace"
 
 	"github.com/azs06/goat/internal/style"
 )
@@ -119,7 +121,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		if !style.Enabled() {
 			return text
 		}
-		return wrapStyled(style.Muted.Render(text), width-1, "", "")
+		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
 	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Ctrl-C interrupts a turn."))
 	fmt.Println()
@@ -176,25 +178,20 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render("Available tools:"))
-	bullet := "-"
-	if style.Enabled() {
-		bullet = style.Accent.Render(style.Glyphs().Bullet)
-	}
-	for _, name := range availableToolNames() {
-		fmt.Println(bullet + " " + name)
-	}
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.Specs))))
+	fmt.Println()
+	fmt.Println(renderToolList())
 	return nil
 }
 
 func commandUndo(ctx context.Context, c *config, args []string) error {
-	undo := undoLastChange
+	undo := workspace.UndoLastChange
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "skip":
-			undo = skipLastChange
+			undo = workspace.SkipLastChange
 		case "preview":
-			undo = previewUndoLastChange
+			undo = workspace.PreviewUndoLastChange
 		default:
 			return fmt.Errorf("unknown undo option %q; use /undo, /undo preview or /undo skip", args[0])
 		}
@@ -225,7 +222,7 @@ func commandCompact(ctx context.Context, c *config, args []string) error {
 }
 
 func commandHistory(ctx context.Context, c *config, args []string) error {
-	resolvedPath, relPath, err := resolveStatePath(conversationHistoryPath())
+	resolvedPath, relPath, err := workspace.ResolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return err
 	}
@@ -391,7 +388,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		rows = append(rows, [2]string{"Instructions:", strings.Join(sources, ", ")})
 	}
-	if planMode {
+	if c.planMode {
 		rows = append(rows, [2]string{"Plan mode:", "on (changes are refused)"})
 	}
 	if c.approver != nil {

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/terminal"
 )
 
 // The style engine lives in internal/style; this file holds goat's own message
@@ -14,14 +15,14 @@ import (
 // range, or 80 when it cannot be determined.
 // terminalRows is the terminal's height, or 24 when it is unknown.
 func terminalRows() int {
-	if rows := stdoutRows(); rows > 0 {
+	if rows := terminal.Rows(); rows > 0 {
 		return rows
 	}
 	return 24
 }
 
 func terminalWidth() int {
-	width := stdoutColumns()
+	width := terminal.Columns()
 	if width <= 0 {
 		return 80
 	}

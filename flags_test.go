@@ -39,20 +39,17 @@ func TestCLIModelAndEffortWin(t *testing.T) {
 	setCredentials(t, true, true)
 	t.Setenv("GOAT_MODEL", "gpt-6-luna")
 	t.Setenv("GOAT_EFFORT", "low")
-	cliModel, cliEffort = "claude-haiku-5-5", "max"
-	t.Cleanup(func() { cliModel, cliEffort = "", "" })
-
-	if model, source := startupModel(nil); model.ID != "claude-haiku-5-5" || source != "--model" {
+	if model, source := startupModel(nil, "claude-haiku-5-5"); model.ID != "claude-haiku-5-5" || source != "--model" {
 		t.Fatalf("got %v from %s", model, source)
 	}
-	if effort := startupEffort(nil); effort != provider.EffortMax {
+	if effort := startupEffort(nil, "max"); effort != provider.EffortMax {
 		t.Fatalf("got effort %s", effort)
 	}
 }
 
 func TestOneShotLeavesTheSavedSessionAlone(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("hello there").stop("end_turn", ""))
 	saved := 0

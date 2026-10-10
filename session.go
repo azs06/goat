@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 const (
-	sessionPath         = stateDirName + "/session.json"
-	previousSessionPath = stateDirName + "/session.prev.json"
+	sessionPath         = workspace.StateDirName + "/session.json"
+	previousSessionPath = workspace.StateDirName + "/session.prev.json"
 	sessionVersion      = 1
 )
 
@@ -35,8 +37,8 @@ type savedSession struct {
 }
 
 func promptFingerprint() string {
-	tools, _ := json.Marshal(agentTools)
-	sum := sha256.Sum256(append([]byte(SystemPrompt+"\x00"), tools...))
+	specs, _ := json.Marshal(tools.Specs)
+	sum := sha256.Sum256(append([]byte(systemPrompt+"\x00"), specs...))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -66,7 +68,7 @@ func saveSession(cfg *config) {
 }
 
 func writeSessionFile(path string, session savedSession) error {
-	resolvedPath, _, err := resolveStatePath(path)
+	resolvedPath, _, err := workspace.ResolveStatePath(path)
 	if err != nil {
 		return err
 	}
@@ -106,7 +108,7 @@ func writeSessionFile(path string, session savedSession) error {
 // loadSessionFile returns nil when there is no session. An unreadable file is set
 // aside with a warning so it cannot block startup.
 func loadSessionFile(path string) (*savedSession, error) {
-	resolvedPath, _, err := resolveStatePath(path)
+	resolvedPath, _, err := workspace.ResolveStatePath(path)
 	if err != nil {
 		return nil, err
 	}

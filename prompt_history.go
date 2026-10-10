@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // The prompts typed at the interactive prompt are kept in .goat/prompts.jsonl, one JSON
 // string per line, so Up can bring them back in later sessions too.
 
 const (
-	promptHistoryPath = stateDirName + "/prompts.jsonl"
+	promptHistoryPath = workspace.StateDirName + "/prompts.jsonl"
 	// maxPromptHistory is how many past prompts Up can reach.
 	maxPromptHistory = 1000
 )
@@ -21,7 +23,7 @@ const (
 // loadPromptHistory returns the saved prompts, oldest first. A missing or unreadable
 // file is an empty history.
 func loadPromptHistory() []string {
-	resolved, _, err := resolveStatePath(promptHistoryPath)
+	resolved, _, err := workspace.ResolveStatePath(promptHistoryPath)
 	if err != nil {
 		return nil
 	}
@@ -56,7 +58,7 @@ func rememberPrompt(history []string, prompt string) []string {
 		history = history[len(history)-maxPromptHistory:]
 	}
 
-	resolved, _, err := resolveStatePath(promptHistoryPath)
+	resolved, _, err := workspace.ResolveStatePath(promptHistoryPath)
 	if err != nil {
 		return history
 	}
@@ -99,7 +101,7 @@ func pathCompletions(text []rune, pos int) (matches []string, wordStart int) {
 	if listDir == "" {
 		listDir = "."
 	}
-	if _, _, err := resolveToolPath(listDir); err != nil && listDir != "." {
+	if _, _, err := workspace.ResolvePath(listDir); err != nil && listDir != "." {
 		return nil, wordStart
 	}
 	entries, err := os.ReadDir(listDir)
@@ -109,7 +111,7 @@ func pathCompletions(text []rune, pos int) (matches []string, wordStart int) {
 	showHidden := strings.HasPrefix(base, ".")
 	for _, entry := range entries {
 		name := entry.Name()
-		if isStateDirName(name) || !strings.HasPrefix(strings.ToLower(name), strings.ToLower(base)) {
+		if workspace.IsStateDirName(name) || !strings.HasPrefix(strings.ToLower(name), strings.ToLower(base)) {
 			continue
 		}
 		if strings.HasPrefix(name, ".") && !showHidden {

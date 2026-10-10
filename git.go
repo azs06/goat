@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/style"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 // gitState is what goat shows about the workspace's repository.
@@ -25,7 +26,7 @@ func runGit(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = append(commandEnvironment(os.Environ()), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(workspace.CommandEnvironment(os.Environ()), "GIT_OPTIONAL_LOCKS=0")
 	out, err := cmd.Output()
 	return string(out), err
 }

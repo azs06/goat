@@ -51,132 +51,9 @@ func mustResponseOutputItemUnion(t *testing.T, raw string) responses.ResponseOut
 	return item
 }
 
-func TestRunBashCommandUsesRelativeWorkdir(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	subdir := filepath.Join(workspace, "nested")
-	if err := os.Mkdir(subdir, 0755); err != nil {
-		t.Fatalf("create subdir: %v", err)
-	}
-
-	output, err := runBashCommand(context.Background(), "pwd", "nested")
-	if err != nil {
-		t.Fatalf("run bash command: %v", err)
-	}
-
-	if !strings.Contains(output, filepath.Join(workspace, "nested")) {
-		t.Fatalf("expected output to contain resolved workdir, got %q", output)
-	}
-}
-
-func TestRunBashCommandRejectsEscapingWorkspace(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	_, err := runBashCommand(context.Background(), "pwd", "../outside")
-	if err == nil {
-		t.Fatal("expected escaping workdir to fail")
-	}
-
-	if !strings.Contains(err.Error(), "path escapes the workspace") {
-		t.Fatalf("expected workspace escape error, got %v", err)
-	}
-}
-
-func TestRunBashCommandIncludesFailureOutput(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	_, err := runBashCommand(context.Background(), "echo failure >&2; exit 7", ".")
-	if err == nil {
-		t.Fatal("expected bash command to fail")
-	}
-
-	if !strings.Contains(err.Error(), "exit status 7") {
-		t.Fatalf("expected exit status in error, got %v", err)
-	}
-
-	if !strings.Contains(err.Error(), "failure") {
-		t.Fatalf("expected stderr in error, got %v", err)
-	}
-}
-
-func TestEditFileReplacesSingleMatch(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("hello goat"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-
-	replaced, err := editFile("sample.txt", "goat", "agent", false)
-	if err != nil {
-		t.Fatalf("edit file: %v", err)
-	}
-
-	if replaced != 1 {
-		t.Fatalf("expected 1 replacement, got %d", replaced)
-	}
-
-	content, err := os.ReadFile(filepath.Join(workspace, "sample.txt"))
-	if err != nil {
-		t.Fatalf("read edited file: %v", err)
-	}
-
-	if string(content) != "hello agent" {
-		t.Fatalf("unexpected content %q", string(content))
-	}
-}
-
-func TestEditFileRejectsAmbiguousMatchWithoutReplaceAll(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("goat goat"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-
-	_, err := editFile("sample.txt", "goat", "agent", false)
-	if err == nil {
-		t.Fatal("expected ambiguous edit to fail")
-	}
-
-	if !strings.Contains(err.Error(), "matched 2 times") {
-		t.Fatalf("expected ambiguous match error, got %v", err)
-	}
-}
-
-func TestEditFileReplaceAllReplacesEveryMatch(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
-
-	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("goat goat goat"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-
-	replaced, err := editFile("sample.txt", "goat", "agent", true)
-	if err != nil {
-		t.Fatalf("replace all edit failed: %v", err)
-	}
-
-	if replaced != 3 {
-		t.Fatalf("expected 3 replacements, got %d", replaced)
-	}
-
-	content, err := os.ReadFile(filepath.Join(workspace, "sample.txt"))
-	if err != nil {
-		t.Fatalf("read edited file: %v", err)
-	}
-
-	if string(content) != "agent agent agent" {
-		t.Fatalf("unexpected content %q", string(content))
-	}
-}
-
 func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	responsesToReturn := []*responses.Response{
 		{
@@ -209,7 +86,7 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files twice", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files twice", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
@@ -262,8 +139,8 @@ func TestSendPromptStreamContinuesThroughToolCallRounds(t *testing.T) {
 }
 
 func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
 		return &responses.Response{
@@ -274,7 +151,7 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello history", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "hello history", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("send prompt stream: %v", err)
 	}
@@ -282,7 +159,7 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 		t.Fatalf("expected resp-history, got %q", conv.conversation.ResponseID)
 	}
 
-	historyData, err := os.ReadFile(filepath.Join(workspace, ".goat", "history.jsonl"))
+	historyData, err := os.ReadFile(filepath.Join(workDir, ".goat", "history.jsonl"))
 	if err != nil {
 		t.Fatalf("read history file: %v", err)
 	}
@@ -297,8 +174,8 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 }
 
 func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	defer func() {
@@ -331,7 +208,7 @@ func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
 		return nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "retry please", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "retry please", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
@@ -351,8 +228,8 @@ func TestSendPromptStreamRetriesRateLimitErrors(t *testing.T) {
 }
 
 func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	var callCount int
 	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
@@ -365,7 +242,7 @@ func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T
 		}
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "partial retry", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "partial retry", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected interrupted partial output to return an error")
 	}
@@ -381,8 +258,8 @@ func TestSendPromptStreamReturnsErrorAfterPartialOutputInterruption(t *testing.T
 }
 
 func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	previousSleeper := streamRetrySleeper
 	defer func() {
@@ -406,7 +283,7 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 		return nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "still limited", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "still limited", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected rate-limit exhaustion to return an error")
 	}
@@ -428,8 +305,8 @@ func TestSendPromptStreamReturnsErrorAfterRateLimitRetriesExhausted(t *testing.T
 }
 
 func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	command := "i=1; while [ $i -le 260 ]; do printf 'line-%03d\\n' \"$i\"; i=$((i+1)); done"
 	argumentsJSON, err := json.Marshal(map[string]string{
@@ -465,7 +342,7 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 		return responsesToReturn[index], false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "run a large bash command", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "run a large bash command", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("sendPromptStream returned error: %v", err)
 	}
@@ -500,8 +377,8 @@ func TestSendPromptStreamTruncatesLargeRunBashToolOutputForModel(t *testing.T) {
 }
 
 func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	argumentsJSON, err := json.Marshal(map[string]string{"path": "."})
 	if err != nil {
@@ -531,7 +408,7 @@ func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.
 		}
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "list files", conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-prev"}}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil {
 		t.Fatal("expected follow-up failure to be returned")
 	}
@@ -542,7 +419,7 @@ func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.
 		t.Fatalf("expected the undelivered tool output to be kept, got %d", len(conv.pendingToolResults))
 	}
 
-	conv, err = sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "try again", conv, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err = sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "try again", conv, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err != nil {
 		t.Fatalf("expected the next prompt to succeed, got %v", err)
 	}
@@ -568,8 +445,8 @@ func TestSendPromptStreamKeepsUnansweredToolOutputsWhenFollowupFails(t *testing.
 }
 
 func TestSendPromptStreamAnswersRemainingCallsWhenInterrupted(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	callCount := 0
@@ -585,7 +462,7 @@ func TestSendPromptStreamAnswersRemainingCallsWhenInterrupted(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(ctx, provider.NewOpenAIWith(nil, stream), "list", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(ctx, provider.NewOpenAIWith(nil, stream), "list", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -598,8 +475,8 @@ func TestSendPromptStreamAnswersRemainingCallsWhenInterrupted(t *testing.T) {
 }
 
 func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	callCount := 0
 	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
@@ -612,7 +489,7 @@ func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
 		}, false, nil
 	}
 
-	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "loop forever", conversationState{}, provider.DefaultOpenAIModel, provider.DefaultEffort)
+	conv, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "loop forever", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
 	if err == nil || !strings.Contains(err.Error(), "tool rounds") {
 		t.Fatalf("expected tool round limit error, got %v", err)
 	}
@@ -625,8 +502,8 @@ func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
 }
 
 func TestCommandCompactCreatesFreshResponseChain(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	recordHistory(historyEntry{Type: "user", Content: "Please fix the rate-limit handling."})
 	recordHistory(historyEntry{Type: "assistant", Content: "Working on it.", ResponseID: "resp-old"})
@@ -787,8 +664,8 @@ func TestShouldAutoCompactConversationCountsEveryToolOutputOfLatestResponse(t *t
 }
 
 func TestMaybeAutoCompactConversationCompactsAndUpdatesResponseID(t *testing.T) {
-	workspace := t.TempDir()
-	chdirForTest(t, workspace)
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
 
 	recordHistory(historyEntry{Type: "user", Content: "request"})
 	recordHistory(historyEntry{Type: "assistant", Content: "Previous context", ResponseID: "resp-old", ContextTokens: defaultAutoCompactTokens + 1})

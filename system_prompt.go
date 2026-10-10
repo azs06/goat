@@ -3,14 +3,16 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/azs06/goat/internal/tools"
 )
 
-// SystemPrompt lists the tools from agentTools so the prompt and the tool schema never drift.
-// It and agentTools must stay the same for the whole process: every provider caches the
+// systemPrompt lists the tools from tools.Specs so the prompt and the tool schema never drift.
+// It and tools.Specs must stay the same for the whole process: every provider caches the
 // tools and system prompt as the start of each request's prefix, so anything that varies
 // here (a date, the working directory, git state) would make every request a cache miss.
 // Send changing context in the conversation instead.
-var SystemPrompt = buildSystemPrompt()
+var systemPrompt = buildSystemPrompt()
 
 func buildSystemPrompt() string {
 	var builder strings.Builder
@@ -19,7 +21,7 @@ func buildSystemPrompt() string {
 When a user asks a question or makes a request, make a function call plan. You can use the following tools:
 
 `)
-	for _, tool := range agentTools {
+	for _, tool := range tools.Specs {
 		fmt.Fprintf(&builder, "- %s: %s\n", tool.Name, tool.Description)
 	}
 	builder.WriteString(`
