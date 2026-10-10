@@ -168,3 +168,109 @@ func runGoatWithHome(t *testing.T, workDir, home, stdin string) (string, string,
 	t.Helper()
 	return runGoat(t, workDir, stdin, []string{"HOME=" + home, "XDG_CONFIG_HOME=" + filepath.Join(home, "config")})
 }
+
+func TestEnvFilesSettleACredentialAsAWhole(t *testing.T) {
+	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
+	os.WriteFile(global, []byte("ANTHROPIC_API_KEY=global-key\n"), 0o600)
+
+	// The project uses a proxy with a token; the global key must not be sent there.
+	os.WriteFile(".env", []byte("ANTHROPIC_AUTH_TOKEN=proxy-token\nANTHROPIC_BASE_URL=https://proxy.example\n"), 0o600)
+	if _, err := loadEnvFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" || credentialOrigin("anthropic") != "ANTHROPIC_AUTH_TOKEN from .env" {
+		t.Fatalf("the project's token should win as a whole, got key %q, origin %q", os.Getenv("ANTHROPIC_API_KEY"), credentialOrigin("anthropic"))
+	}
+}
+
+func TestEnvFilesKeepAShellCredential(t *testing.T) {
+	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
+	os.WriteFile(global, []byte("ANTHROPIC_API_KEY=global-key\n"), 0o600)
+	if _, err := loadEnvFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		t.Fatal("a token from the shell should keep the global key out")
+	}
+}
+
+func TestEnvFileErrorsDoNotQuoteTheFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"unclosed quote": "OPENAI_API_KEY=\"sk-SECRET-1\nDEEPSEEK_API_KEY=sk-SECRET-2\n",
+		"pasted key":     "sk-proj-SECRET-1\nANTHROPIC_API_KEY=sk-ant-SECRET-2\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, global := envFilesTest(t)
+			os.WriteFile(global, []byte(content), 0o600)
+			_, err := loadEnvFiles()
+			if err == nil || !strings.Contains(err.Error(), global) || strings.Contains(err.Error(), "SECRET") {
+				t.Fatalf("got %v", err)
+			}
+			if name == "pasted key" && !strings.Contains(err.Error(), "check line 1") {
+				t.Errorf("expected the line, got %v", err)
+			}
+		})
+	}
+}
+
+func TestEnvFilesAcceptAByteOrderMark(t *testing.T) {
+	_, global := envFilesTest(t, "GOAT_T_BOM")
+	os.WriteFile(global, []byte("\xef\xbb\xbfGOAT_T_BOM=yes\r\n"), 0o600)
+	if _, err := loadEnvFiles(); err != nil || os.Getenv("GOAT_T_BOM") != "yes" {
+		t.Fatalf("got %q %v", os.Getenv("GOAT_T_BOM"), err)
+	}
+}
+
+func TestEnvFilesCannotMoveTheConfigDirectory(t *testing.T) {
+	_, global := envFilesTest(t, "GOAT_T_WHERE")
+	config := os.Getenv("XDG_CONFIG_HOME")
+	os.WriteFile(".env", []byte("XDG_CONFIG_HOME=/elsewhere\n"), 0o600)
+	os.WriteFile(global, []byte("GOAT_T_WHERE=global\n"), 0o600)
+	if _, err := loadEnvFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("XDG_CONFIG_HOME") != config || os.Getenv("GOAT_T_WHERE") != "global" {
+		t.Fatalf("XDG_CONFIG_HOME %q, GOAT_T_WHERE %q", os.Getenv("XDG_CONFIG_HOME"), os.Getenv("GOAT_T_WHERE"))
+	}
+}
+
+func TestEnvFilesLeaveShellValuesToCommands(t *testing.T) {
+	_, global := envFilesTest(t, "GOAT_T_SHELL_PROXY")
+	t.Setenv("GOAT_T_SHELL_PROXY", "http://proxy:3128")
+	os.WriteFile(global, []byte("GOAT_T_SHELL_PROXY=http://other:3128\n"), 0o600)
+	if _, err := loadEnvFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(workspace.CommandEnvironment(os.Environ()), "GOAT_T_SHELL_PROXY=http://proxy:3128") {
+		t.Error("a value from the shell should still reach commands")
+	}
+}
+
+func TestSharedFileWarningQuotesThePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes mean nothing on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "My Config")
+	os.MkdirAll(dir, 0o700)
+	path := filepath.Join(dir, ".env")
+	os.WriteFile(path, nil, 0o644)
+	os.Chmod(path, 0o644)
+	if warning := sharedFileWarning(path); !strings.HasSuffix(warning, "chmod 600 '"+path+"'") {
+		t.Errorf("got %q", warning)
+	}
+	if quoted := shellQuote("/a/it's"); quoted != `'/a/it'\''s'` {
+		t.Errorf("got %s", quoted)
+	}
+}
+
+func TestProcessReadsDisplaySettingsFromTheGlobalEnvFile(t *testing.T) {
+	workDir := t.TempDir()
+	config := filepath.Join(workDir, "config", "goat")
+	os.MkdirAll(config, 0o700)
+	os.WriteFile(filepath.Join(config, ".env"), []byte("ANTHROPIC_API_KEY=test\nGOAT_FORCE_COLOR=1\n"), 0o600)
+	out, errOut, code := runGoat(t, workDir, "/status\n/exit\n", nil)
+	if code != 0 || !strings.Contains(out, "\x1b[") {
+		t.Fatalf("GOAT_FORCE_COLOR from the global file should style output (exit %d)\n%q\n%s", code, out, errOut)
+	}
+}

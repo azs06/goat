@@ -513,11 +513,14 @@ func main() {
 		return
 	}
 
-	// Before anything else reads the environment: the files can hold any GOAT_ setting.
+	// The files can hold any GOAT_ setting, so they load before the settings are read.
 	envWarnings, err := loadEnvFiles()
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Read at package initialization, before the files loaded.
+	style.Detect()
+	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
 	if len(provider.AvailableNames()) == 0 {
 		log.Fatal(noAPIKeyMessage())
 	}

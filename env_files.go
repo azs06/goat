@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -43,43 +44,129 @@ func globalEnvPath() string {
 // Variables that were already in the environment are not in it.
 var envSources = map[string]string{}
 
+// fixedByEnvironment are variables a .env file cannot set: goat finds the global file
+// through them before it reads either file.
+var fixedByEnvironment = map[string]bool{"HOME": true, "XDG_CONFIG_HOME": true}
+
 // loadEnvFiles fills the environment from the workspace's .env and then the global .env
 // in goat's config directory. A variable takes the first non-empty value among the
 // environment, the workspace file and the global file, so the shell wins and a project
-// can override what is set for every project. Every variable either file defines is
-// kept out of run_bash commands. It returns warnings to show once the terminal is set
-// up, and fails on a file that exists but cannot be read or parsed.
+// can override what is set for every project. A provider's credentials are settled
+// together: once one source supplies, say, ANTHROPIC_AUTH_TOKEN, a later file's
+// ANTHROPIC_API_KEY is ignored, since either one is a complete credential. Variables
+// goat takes from a file are kept out of run_bash commands. It returns warnings to show
+// once the terminal is set up, and fails on a file that exists but cannot be read or
+// parsed, without quoting the file, which holds keys.
 func loadEnvFiles() (warnings []string, err error) {
 	files := []string{".env"}
 	if global := globalEnvPath(); global != "" {
 		files = append(files, global)
 	}
+
+	settled := map[string]bool{}
+	for _, name := range provider.Names {
+		settled[name] = provider.CredentialSource(name) != ""
+	}
+	credentialOf := map[string]string{}
+	for name, vars := range provider.CredentialVars {
+		for _, variable := range vars {
+			credentialOf[variable] = name
+		}
+	}
+
 	for i, path := range files {
-		values, err := godotenv.Read(path)
+		values, err := readEnvFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return warnings, fmt.Errorf("reading %s: %w", path, err)
+			return warnings, err
 		}
 		if i > 0 {
 			if warning := sharedFileWarning(path); warning != "" {
 				warnings = append(warnings, warning)
 			}
 		}
-		names := slices.Sorted(maps.Keys(values))
-		workspace.HideFromCommands(names...)
-		for _, name := range names {
-			if strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
+		suppliedBy := map[string]bool{}
+		var taken []string
+		for _, name := range slices.Sorted(maps.Keys(values)) {
+			if fixedByEnvironment[name] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 				continue
+			}
+			if owner := credentialOf[name]; owner != "" {
+				if settled[owner] {
+					continue
+				}
+				suppliedBy[owner] = true
 			}
 			if err := os.Setenv(name, values[name]); err != nil {
 				return warnings, fmt.Errorf("setting %s from %s: %w", name, path, err)
 			}
 			envSources[name] = displayPath(path)
+			taken = append(taken, name)
 		}
+		for owner := range suppliedBy {
+			settled[owner] = true
+		}
+		workspace.HideFromCommands(taken...)
 	}
 	return warnings, nil
+}
+
+// readEnvFile parses a .env file. A parse error names the file and, where it can be
+// found, the line, but never quotes the file: the parser's own messages repeat its
+// contents, keys included.
+func readEnvFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// Editors on Windows may start the file with a byte order mark.
+	data = bytes.TrimPrefix(data, []byte("\ufeff"))
+	values, err := godotenv.UnmarshalBytes(data)
+	if err != nil {
+		if line := suspectLine(data); line > 0 {
+			return nil, fmt.Errorf("%s is not a valid .env file: check line %d, which should look like NAME=value", path, line)
+		}
+		return nil, fmt.Errorf("%s is not a valid .env file: look for an unclosed quote or a line that is not NAME=value", path)
+	}
+	return values, nil
+}
+
+// suspectLine returns the number of the first line that is not blank, a comment or
+// NAME=..., or 0 when every line looks right (the problem is then likely a quote).
+func suspectLine(data []byte) int {
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		name, _, found := strings.Cut(line, "=")
+		if !found {
+			name, _, found = strings.Cut(line, ":")
+		}
+		if !found || !validEnvName(strings.TrimSpace(name)) {
+			return i + 1
+		}
+		// A quoted value may span lines; past an opening quote, stop guessing.
+		if value := strings.TrimSpace(line[len(name)+1:]); strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'") {
+			return 0
+		}
+	}
+	return 0
+}
+
+func validEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r != '_' && r != '.' && !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // sharedFileWarning warns about a key file other users can read. File modes mean
@@ -92,7 +179,17 @@ func sharedFileWarning(path string) string {
 	if err != nil || info.Mode().Perm()&0o077 == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%s can be read by other users; run chmod 600 %s", displayPath(path), path)
+	return fmt.Sprintf("%s can be read by other users; run chmod 600 %s", displayPath(path), shellQuote(path))
+}
+
+// shellQuote quotes path for pasting into a shell when it needs it.
+func shellQuote(path string) string {
+	if path != "" && strings.IndexFunc(path, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-~+,@%", r))
+	}) < 0 {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // displayPath shortens a path under the home directory to ~/...

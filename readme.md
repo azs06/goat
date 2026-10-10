@@ -34,19 +34,23 @@ go install github.com/azs06/goat@latest && goat
 # or, from a checkout: go run .   (or go build -o goat . && ./goat)
 ```
 
-Keys can also go in a `.env` file. Put them in `~/.config/goat/.env` (or
-`$XDG_CONFIG_HOME/goat/.env`) to use them from every folder, which is what you want after
+Keys can also go in a `.env` file. Put them in `~/.config/goat/.env`
+(`$XDG_CONFIG_HOME/goat/.env` when `XDG_CONFIG_HOME` is set) to use them from every folder, which is what you want after
 `go install`. A `.env` in the directory goat runs in works for that project only:
 
 ```sh
 mkdir -p ~/.config/goat
-printf 'OPENAI_API_KEY=%s\n' "sk-..." >> ~/.config/goat/.env
-chmod 600 ~/.config/goat/.env
+(umask 077 && touch ~/.config/goat/.env)   # readable only by you
+${EDITOR:-vi} ~/.config/goat/.env           # add a line such as OPENAI_API_KEY=sk-...
 ```
 
-A variable takes the first non-empty value it finds: the shell, then the project's `.env`,
-then the global one. `/status` shows where each provider's key came from, and goat warns
-if the global file can be read by other users. Only providers with a key are offered. Run
+Adding the key in an editor keeps it out of your shell history. A variable takes the
+first non-empty value it finds: the shell, then the project's `.env`, then the global
+one. A provider's key is settled as a whole: if the shell or the project supplies
+`ANTHROPIC_AUTH_TOKEN`, a global `ANTHROPIC_API_KEY` is not used. `/status` shows where
+each provider's key came from, and goat warns if the global file can be read by other
+users. If a file cannot be parsed, goat names the file (and the line, where it can tell)
+without printing its contents. Only providers with a key are offered. Run
 goat from the root of the project you want it to work on: that directory is its
 workspace.
 
@@ -387,7 +391,8 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 ## Configuration
 
 Any of these can also be set in either `.env` file, so `~/.config/goat/.env` doubles as
-goat's global settings file (e.g. `GOAT_CODEMODE=1`).
+goat's global settings file (e.g. `GOAT_CODEMODE=1`). `HOME` and `XDG_CONFIG_HOME` are
+the exception: they locate the global file, so they come only from the environment.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

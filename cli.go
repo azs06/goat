@@ -87,7 +87,8 @@ Flags:
 
 API keys come from OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and
 DEEPSEEK_API_KEY: in the environment, a .env file in the project, or
-~/.config/goat/.env for every project. See the readme for the rest.
+~/.config/goat/.env ($XDG_CONFIG_HOME/goat/.env when that is set) for every
+project. See the readme for the rest.
 `
 
 // parseCLI reads the command line. Flags may come before or after the prompt words.
