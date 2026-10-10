@@ -392,14 +392,14 @@ func TestToolCallsWithMissingRequiredArgumentsDoNotRun(t *testing.T) {
 		{Name: "write_file", Arguments: `{"path":"a.txt","content":"par`},
 		{Name: "write_file", Arguments: `{"path":"a.txt","content":null}`},
 	} {
-		if _, err := executeToolCall(context.Background(), call, false); err == nil {
+		if _, err := executeToolCall(context.Background(), call, turnOptions{}); err == nil {
 			t.Errorf("%s %s: expected a validation error", call.Name, call.Arguments)
 		}
 	}
 	if data, _ := os.ReadFile(filepath.Join(workDir, "a.txt")); string(data) != "keep" {
 		t.Fatalf("expected the file untouched, got %q", data)
 	}
-	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}, false); err != nil {
+	if _, err := executeToolCall(context.Background(), provider.ToolCall{Name: "undo_last_change", Arguments: ""}, turnOptions{}); err != nil {
 		t.Fatalf("expected a tool without required arguments to accept empty input, got %v", err)
 	}
 }

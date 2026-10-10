@@ -16,7 +16,7 @@ func TestPlanModeRefusesChanges(t *testing.T) {
 	os.WriteFile("a.txt", []byte("hello\n"), 0o644)
 
 	call := func(name, args string) (string, error) {
-		return executeToolCall(context.Background(), provider.ToolCall{Name: name, Arguments: args}, true)
+		return executeToolCall(context.Background(), provider.ToolCall{Name: name, Arguments: args}, turnOptions{planMode: true})
 	}
 	if _, err := call("read_file", `{"path":"a.txt"}`); err != nil {
 		t.Fatalf("read_file should work: %v", err)

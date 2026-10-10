@@ -329,6 +329,9 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		},
 	}
 	defer saveSession(cfg)
+	if cfg.approver != nil {
+		opts.approveBash = cfg.approver.approve
+	}
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {
 		opts.takeSteering = takeQueuedText
@@ -526,7 +529,6 @@ func main() {
 	cfg.promptHistory = loadPromptHistory()
 	cfg.interactive = terminal.StdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
-	bashCommandApprover = cfg.approver.approve
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
 

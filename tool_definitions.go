@@ -126,10 +126,6 @@ func decodeToolArguments(raw string, target any) error {
 	return nil
 }
 
-// bashCommandApprover is asked before every run_bash command; a non-nil error rejects
-// the command. main installs an interactive approver, and nil allows everything.
-var bashCommandApprover func(ctx context.Context, command, workdir string) error
-
 type transferArgs struct {
 	SourcePath      string `json:"source_path"`
 	DestinationPath string `json:"destination_path"`
@@ -138,8 +134,8 @@ type transferArgs struct {
 }
 
 // executeToolCall validates and runs one tool call. In plan mode only the read-only
-// tools and previews run.
-func executeToolCall(ctx context.Context, toolCall provider.ToolCall, planMode bool) (string, error) {
+// tools and previews run, and run_bash commands go through opts.approveBash first.
+func executeToolCall(ctx context.Context, toolCall provider.ToolCall, opts turnOptions) (string, error) {
 	spec, ok := findToolSpec(toolCall.Name)
 	if !ok {
 		return "", fmt.Errorf("unsupported tool: %s", toolCall.Name)
@@ -147,7 +143,7 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall, planMode b
 	if err := validateToolArguments(spec, toolCall.Arguments); err != nil {
 		return "", err
 	}
-	if planMode && !allowedInPlanMode(toolCall) {
+	if opts.planMode && !allowedInPlanMode(toolCall) {
 		return "", errPlanMode
 	}
 
@@ -364,8 +360,8 @@ func executeToolCall(ctx context.Context, toolCall provider.ToolCall, planMode b
 		if strings.TrimSpace(args.Command) == "" {
 			return "", fmt.Errorf("missing command")
 		}
-		if bashCommandApprover != nil {
-			if err := bashCommandApprover(ctx, args.Command, args.Workdir); err != nil {
+		if opts.approveBash != nil {
+			if err := opts.approveBash(ctx, args.Command, args.Workdir); err != nil {
 				return "", err
 			}
 		}

@@ -54,6 +54,9 @@ type turnOptions struct {
 	// checkpoint, when set, receives the state after every tool round so it can be
 	// saved before the turn finishes.
 	checkpoint func(conversationState)
+	// approveBash, when set, is asked before every run_bash command; a non-nil error
+	// rejects the command.
+	approveBash func(ctx context.Context, command, workdir string) error
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -265,7 +268,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOutput, err := executeToolCall(ctx, toolCall, opts.planMode)
+		toolOutput, err := executeToolCall(ctx, toolCall, opts)
 		stopSpinner()
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
