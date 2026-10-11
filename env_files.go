@@ -341,7 +341,7 @@ func noAPIKeyMessage() string {
 	// Entries from config.json say what each one is missing.
 	var entries []string
 	for _, name := range provider.Names {
-		if _, ok := provider.LookupEntry(name); ok {
+		if entry, ok := provider.LookupEntry(name); ok && !entry.Preset {
 			if err := provider.Unavailable(name); err != nil {
 				entries = append(entries, err.Error())
 			}
@@ -352,7 +352,7 @@ func noAPIKeyMessage() string {
 	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
 	if auth := authPath(); auth != "" {
-		message = "no API key found; add one to " + auth + `, such as {"openai": {"key": "sk-..."}}, or set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment`
+		message = "no API key found; run goat and type /login to add one, or add one to " + auth + `, such as {"openai": {"key": "sk-..."}}, or set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment`
 	}
 	if info, err := os.Stat(".env"); err == nil && !info.IsDir() {
 		message += " (goat does not read the .env in this folder: it belongs to the project)"

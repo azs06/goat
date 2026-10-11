@@ -32,6 +32,9 @@ type Entry struct {
 	// Source is the file the entry came from, for messages, such as
 	// "~/.config/goat/config.json".
 	Source string
+	// Preset marks one of goat's own presets, such as openrouter, rather than an entry
+	// from the user's files.
+	Preset bool
 
 	endpoint Endpoint
 }
@@ -120,6 +123,9 @@ func unknownProviderError(name string) error {
 
 // sourceName is the file an entry came from, by name alone.
 func (e Entry) sourceName() string {
+	if e.Preset {
+		return "goat's presets"
+	}
 	if e.Source == "" {
 		return "config.json"
 	}

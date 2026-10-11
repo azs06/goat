@@ -3,8 +3,11 @@ package main
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/azs06/goat/internal/provider"
 )
 
 // TestMainProcess runs goat's main in a child process when GOAT_TEST_MAIN is set; the
@@ -45,7 +48,8 @@ func cleanGoatEnv() []string {
 	var env []string
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, "GOAT_") || strings.HasPrefix(name, "OPENAI_") || strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "DEEPSEEK_") {
+		base := strings.TrimSuffix(name, "_COMMAND")
+		if strings.HasPrefix(name, "GOAT_") || strings.HasPrefix(name, "OPENAI_") || strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "DEEPSEEK_") || slices.Contains(provider.PresetKeyVars(), base) {
 			continue
 		}
 		env = append(env, entry)

@@ -50,6 +50,7 @@ func init() {
 		{name: "exit", usage: "/exit", description: "Exit the Goat", aliases: []string{"quit"}, callback: commandExit},
 		{name: "help", usage: "/help", description: "List the commands and keys", callback: commandHelp},
 		{name: "history", usage: "/history", description: "Show the conversation history path", callback: commandHistory},
+		{name: "login", usage: "/login [provider]", description: "Save a provider's API key to auth.json and start using it", aliases: []string{"auth"}, callback: commandLogin},
 		{name: "model", usage: "/model [name|list]", description: "Pick the model, or switch to one by name", callback: commandModel},
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
@@ -354,11 +355,17 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	}
 	width := 9
 	for _, name := range provider.Names {
-		width = max(width, len(name))
+		if !provider.IsPreset(name) || provider.Available(name) {
+			width = max(width, len(name))
+		}
 	}
 	for _, name := range provider.Names {
 		origin := credentialOrigin(name)
-		_, isEntry := provider.LookupEntry(name)
+		entry, isEntry := provider.LookupEntry(name)
+		if entry.Preset && !provider.Available(name) {
+			// Presets without a key would bury the rows that matter; /login lists them.
+			continue
+		}
 		switch err := provider.Unavailable(name); {
 		case err != nil && isEntry:
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
@@ -579,6 +586,14 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 				}
 			}
 			add("list", "every model the providers report")
+		case "login":
+			for _, name := range provider.Names {
+				description := loginStatus(name)
+				if label := provider.Label(name); label != name {
+					description = label + " · " + description
+				}
+				add(name, description)
+			}
 		case "approve":
 			add("on", "run commands without asking")
 			add("off", "ask before each command")

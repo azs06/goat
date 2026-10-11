@@ -20,7 +20,7 @@ func configTest(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY", "GOAT_THEME", "GOAT_AUTO_APPROVE_BASH", "GOAT_CODEMODE", "GOAT_AUTO_COMPACT_TOKENS", "GOAT_ANTHROPIC_FALLBACKS", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"} {
+	for _, name := range append([]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY", "GOAT_THEME", "GOAT_AUTO_APPROVE_BASH", "GOAT_CODEMODE", "GOAT_AUTO_COMPACT_TOKENS", "GOAT_ANTHROPIC_FALLBACKS", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"}, provider.PresetKeyVars()...) {
 		t.Setenv(name, "")
 		t.Setenv(name+"_COMMAND", "")
 	}

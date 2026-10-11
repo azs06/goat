@@ -569,7 +569,9 @@ func main() {
 	// Read at package initialization, before the files loaded.
 	style.Detect()
 	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
-	if len(provider.AvailableNames()) == 0 {
+	// Without a key, an interactive session still starts, so /login can add one.
+	keyless := len(provider.AvailableNames()) == 0
+	if keyless && (opts.print || !terminal.StdinIsTerminal()) {
 		// A failed key command or an unreadable global file may be why.
 		for _, warning := range envWarnings {
 			fmt.Fprintln(os.Stderr, "[warn] "+warning)
@@ -608,6 +610,9 @@ func main() {
 	}
 
 	printWelcome(cfg)
+	if keyless {
+		fmt.Println(formatWarning(keylessNotice()))
+	}
 	runInteractive(cfg)
 }
 
