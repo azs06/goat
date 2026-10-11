@@ -336,7 +336,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
-| `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
+| `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands and keys. |
@@ -605,9 +605,12 @@ theme, after Atom's: blue accents and borders, red headings, green and red for s
 errors and diffs, yellow for warnings and approvals.
 
 ```sh
-/theme one-dark        # switch for this session; /theme default switches back
-"theme": "one-dark"    # in ~/.config/goat/config.json, to start with it
+/theme                 # pick a theme with the arrow keys
+/theme one-dark        # or name it; /theme default switches back
 ```
+
+Either way the choice is saved as `"theme": "one-dark"` in `~/.config/goat/config.json`,
+so goat starts with it next time (unless `GOAT_THEME` is set in your shell, which wins).
 
 Case, spaces, hyphens and underscores in a built-in theme's name do not matter, so
 `onedark` and `One Dark` are one-dark too. A misspelled name is not applied; `/theme` and
@@ -638,7 +641,7 @@ property, the way CSS cascades: roles you leave out keep their defaults, and
 `font-weight: normal` turns a default bold off. To adjust a built-in theme instead, name
 it in `"extends"`, e.g. `{"extends": "one-dark", "styles": {"heading": "color: #61afef"}}`;
 the built-in themes are in [`internal/style/themes`](internal/style/themes). `/theme`
-reloads the file and lists the built-in themes.
+offers your file alongside the built-in themes; picking it again reloads it after an edit.
 
 - **Properties:** `color`, `background-color` (or `background`), `font-weight` (`bold`,
   `normal`, `lighter`, or 100-900; light weights draw faint), `font-style` (`italic`,
