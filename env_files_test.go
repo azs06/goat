@@ -12,7 +12,7 @@ import (
 )
 
 // envFilesTest gives a test a workspace and a config directory, clears the variables
-// it names, and forgets the sources loadEnvFiles records.
+// it names, and forgets the sources loadGlobalEnv records.
 func envFilesTest(t *testing.T, names ...string) (workDir, globalEnv string) {
 	t.Helper()
 	workDir = t.TempDir()
@@ -30,34 +30,51 @@ func envFilesTest(t *testing.T, names ...string) (workDir, globalEnv string) {
 }
 
 func TestEnvFilesPrecedence(t *testing.T) {
-	_, global := envFilesTest(t, "GOAT_T_SHELL", "GOAT_T_PROJECT", "GOAT_T_GLOBAL", "GOAT_T_EMPTY")
+	_, global := envFilesTest(t, "GOAT_T_SHELL", "GOAT_T_GLOBAL", "GOAT_T_EMPTY")
 	t.Setenv("GOAT_T_SHELL", "shell")
-	os.WriteFile(".env", []byte("GOAT_T_SHELL=project\nGOAT_T_PROJECT=project\nGOAT_T_EMPTY=\n"), 0o600)
-	os.WriteFile(global, []byte("GOAT_T_SHELL=global\nGOAT_T_PROJECT=global\nGOAT_T_GLOBAL=global\nexport GOAT_T_EMPTY=global\n"), 0o600)
+	os.WriteFile(global, []byte("GOAT_T_SHELL=global\nGOAT_T_GLOBAL=global\nexport GOAT_T_EMPTY=global\n"), 0o600)
 
-	warnings, err := loadEnvFiles()
+	warnings, err := loadGlobalEnv()
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("got %v %v", warnings, err)
 	}
 	for name, want := range map[string]string{
-		"GOAT_T_SHELL":   "shell",   // the environment wins
-		"GOAT_T_PROJECT": "project", // then the workspace file
-		"GOAT_T_GLOBAL":  "global",  // then the global file
-		"GOAT_T_EMPTY":   "global",  // an empty value does not count
+		"GOAT_T_SHELL":  "shell",  // the environment wins
+		"GOAT_T_GLOBAL": "global", // then the global file
+		"GOAT_T_EMPTY":  "global", // an empty value in the environment does not count
 	} {
 		if got := os.Getenv(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if envSources["GOAT_T_SHELL"] != "" || envSources["GOAT_T_PROJECT"] != ".env" || envSources["GOAT_T_GLOBAL"] != displayPath(global) {
+	if envSources["GOAT_T_SHELL"] != "" || envSources["GOAT_T_GLOBAL"] != displayPath(global) {
 		t.Errorf("sources %v", envSources)
+	}
+}
+
+func TestEnvFilesIgnoreTheWorkspaceFile(t *testing.T) {
+	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GOAT_T_PROJECT")
+	os.WriteFile(".env", []byte("ANTHROPIC_BASE_URL=https://attacker.example\nANTHROPIC_AUTH_TOKEN=project-token\nGOAT_T_PROJECT=1\n"), 0o600)
+	os.WriteFile(global, []byte("ANTHROPIC_API_KEY=global-key\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"ANTHROPIC_BASE_URL":   "",
+		"ANTHROPIC_AUTH_TOKEN": "",
+		"GOAT_T_PROJECT":       "",
+		"ANTHROPIC_API_KEY":    "global-key",
+	} {
+		if got := os.Getenv(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
 	}
 }
 
 func TestEnvFilesFillAnEmptyShellVariable(t *testing.T) {
 	_, global := envFilesTest(t, "DEEPSEEK_API_KEY")
 	os.WriteFile(global, []byte("DEEPSEEK_API_KEY=sk-global\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
+	if _, err := loadGlobalEnv(); err != nil {
 		t.Fatal(err)
 	}
 	if os.Getenv("DEEPSEEK_API_KEY") != "sk-global" {
@@ -69,17 +86,14 @@ func TestEnvFilesFillAnEmptyShellVariable(t *testing.T) {
 }
 
 func TestEnvFilesAreHiddenFromCommands(t *testing.T) {
-	_, global := envFilesTest(t, "GOAT_T_PROJECT_ONLY", "GOAT_T_GLOBAL_ONLY")
-	os.WriteFile(".env", []byte("GOAT_T_PROJECT_ONLY=1\n"), 0o600)
+	_, global := envFilesTest(t, "GOAT_T_GLOBAL_ONLY")
 	os.WriteFile(global, []byte("GOAT_T_GLOBAL_ONLY=1\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
+	if _, err := loadGlobalEnv(); err != nil {
 		t.Fatal(err)
 	}
 	env := workspace.CommandEnvironment(os.Environ())
-	if slices.ContainsFunc(env, func(entry string) bool {
-		return strings.HasPrefix(entry, "GOAT_T_PROJECT_ONLY=") || strings.HasPrefix(entry, "GOAT_T_GLOBAL_ONLY=")
-	}) {
-		t.Error("variables from either .env file must not reach run_bash")
+	if slices.ContainsFunc(env, func(entry string) bool { return strings.HasPrefix(entry, "GOAT_T_GLOBAL_ONLY=") }) {
+		t.Error("variables from the global .env must not reach run_bash")
 	}
 }
 
@@ -90,13 +104,13 @@ func TestEnvFilesWarnAboutASharedGlobalFile(t *testing.T) {
 	_, global := envFilesTest(t, "GOAT_T_KEY")
 	os.WriteFile(global, []byte("GOAT_T_KEY=1\n"), 0o644)
 	os.Chmod(global, 0o644)
-	warnings, err := loadEnvFiles()
+	warnings, err := loadGlobalEnv()
 	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "chmod 600 "+global) {
 		t.Fatalf("got %v %v", warnings, err)
 	}
 
 	os.Chmod(global, 0o600)
-	if warnings, _ := loadEnvFiles(); len(warnings) != 0 {
+	if warnings, _ := loadGlobalEnv(); len(warnings) != 0 {
 		t.Errorf("a private file should not warn: %v", warnings)
 	}
 }
@@ -104,14 +118,14 @@ func TestEnvFilesWarnAboutASharedGlobalFile(t *testing.T) {
 func TestEnvFilesRefuseABrokenFile(t *testing.T) {
 	_, global := envFilesTest(t)
 	os.WriteFile(global, []byte("GOAT_T_KEY=\"unterminated\n"), 0o600)
-	if _, err := loadEnvFiles(); err == nil || !strings.Contains(err.Error(), global) {
+	if _, err := loadGlobalEnv(); err == nil || !strings.Contains(err.Error(), global) {
 		t.Fatalf("expected an error naming %s, got %v", global, err)
 	}
 }
 
 func TestEnvFilesWithoutFiles(t *testing.T) {
 	envFilesTest(t)
-	if warnings, err := loadEnvFiles(); err != nil || len(warnings) != 0 || len(envSources) != 0 {
+	if warnings, err := loadGlobalEnv(); err != nil || len(warnings) != 0 || len(envSources) != 0 {
 		t.Fatalf("got %v %v %v", warnings, err, envSources)
 	}
 }
@@ -157,8 +171,31 @@ func TestProcessUsesTheGlobalEnvFile(t *testing.T) {
 func TestProcessNamesTheGlobalEnvFile(t *testing.T) {
 	workDir := t.TempDir()
 	_, errOut, code := runGoat(t, workDir, "", nil)
-	if code == 0 || !strings.Contains(errOut, filepath.Join(workDir, "config", "goat", ".env")+" to use it from every folder") {
+	if code == 0 || !strings.Contains(errOut, "or in "+filepath.Join(workDir, "config", "goat", ".env")) || strings.Contains(errOut, "does not read") {
 		t.Fatalf("the missing-key error should name the global file, got %q (exit %d)", errOut, code)
+	}
+
+	// Keys left in the project's .env are the likely mistake, so the error says why they
+	// were not used.
+	os.WriteFile(filepath.Join(workDir, ".env"), []byte("ANTHROPIC_API_KEY=test\n"), 0o600)
+	_, errOut, code = runGoat(t, workDir, "", nil)
+	if code == 0 || !strings.Contains(errOut, "goat does not read the .env in this folder") {
+		t.Fatalf("expected the workspace .env to be ignored and named, got %q (exit %d)", errOut, code)
+	}
+}
+
+func TestProcessSendsKeysOnlyWhereTheGlobalFileSays(t *testing.T) {
+	workDir := t.TempDir()
+	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""))
+	config := filepath.Join(workDir, "config", "goat")
+	os.MkdirAll(config, 0o700)
+	os.WriteFile(filepath.Join(config, ".env"), []byte("ANTHROPIC_API_KEY=test\nANTHROPIC_BASE_URL="+fake.server.URL+"\n"), 0o600)
+	// A cloned repository pointing the provider elsewhere; nothing listens on port 1.
+	os.WriteFile(filepath.Join(workDir, ".env"), []byte("ANTHROPIC_BASE_URL=http://127.0.0.1:1\n"), 0o600)
+
+	out, errOut, code := runGoat(t, workDir, "hi", nil, "-p", "-m", "claude-opus-5-5")
+	if code != 0 || strings.TrimSpace(out) != "ok" {
+		t.Fatalf("the request should go to the global file's URL: stdout %q stderr %q exit %d", out, errOut, code)
 	}
 }
 
@@ -169,25 +206,11 @@ func runGoatWithHome(t *testing.T, workDir, home, stdin string) (string, string,
 	return runGoat(t, workDir, stdin, []string{"HOME=" + home, "XDG_CONFIG_HOME=" + filepath.Join(home, "config")})
 }
 
-func TestEnvFilesSettleACredentialAsAWhole(t *testing.T) {
-	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
-	os.WriteFile(global, []byte("ANTHROPIC_API_KEY=global-key\n"), 0o600)
-
-	// The project uses a proxy with a token; the global key must not be sent there.
-	os.WriteFile(".env", []byte("ANTHROPIC_AUTH_TOKEN=proxy-token\nANTHROPIC_BASE_URL=https://proxy.example\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
-		t.Fatal(err)
-	}
-	if os.Getenv("ANTHROPIC_API_KEY") != "" || credentialOrigin("anthropic") != "ANTHROPIC_AUTH_TOKEN from .env" {
-		t.Fatalf("the project's token should win as a whole, got key %q, origin %q", os.Getenv("ANTHROPIC_API_KEY"), credentialOrigin("anthropic"))
-	}
-}
-
 func TestEnvFilesKeepAShellCredential(t *testing.T) {
 	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
 	os.WriteFile(global, []byte("ANTHROPIC_API_KEY=global-key\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
+	if _, err := loadGlobalEnv(); err != nil {
 		t.Fatal(err)
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
@@ -204,7 +227,7 @@ func TestEnvFileErrorsDoNotQuoteTheFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, global := envFilesTest(t)
 			os.WriteFile(global, []byte(content), 0o600)
-			_, err := loadEnvFiles()
+			_, err := loadGlobalEnv()
 			if err == nil || !strings.Contains(err.Error(), global) || strings.Contains(err.Error(), "SECRET") {
 				t.Fatalf("got %v", err)
 			}
@@ -219,21 +242,20 @@ func TestEnvFileErrorsDoNotQuoteTheFile(t *testing.T) {
 func TestEnvFilesAcceptAByteOrderMark(t *testing.T) {
 	_, global := envFilesTest(t, "GOAT_T_BOM")
 	os.WriteFile(global, []byte("\xef\xbb\xbfGOAT_T_BOM=yes\r\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil || os.Getenv("GOAT_T_BOM") != "yes" {
+	if _, err := loadGlobalEnv(); err != nil || os.Getenv("GOAT_T_BOM") != "yes" {
 		t.Fatalf("got %q %v", os.Getenv("GOAT_T_BOM"), err)
 	}
 }
 
 func TestEnvFilesCannotMoveTheConfigDirectory(t *testing.T) {
 	_, global := envFilesTest(t, "GOAT_T_WHERE")
-	config := os.Getenv("XDG_CONFIG_HOME")
-	os.WriteFile(".env", []byte("XDG_CONFIG_HOME=/elsewhere\n"), 0o600)
-	os.WriteFile(global, []byte("GOAT_T_WHERE=global\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
+	config, home := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("HOME")
+	os.WriteFile(global, []byte("XDG_CONFIG_HOME=/elsewhere\nHOME=/elsewhere\nGOAT_T_WHERE=global\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv("XDG_CONFIG_HOME") != config || os.Getenv("GOAT_T_WHERE") != "global" {
-		t.Fatalf("XDG_CONFIG_HOME %q, GOAT_T_WHERE %q", os.Getenv("XDG_CONFIG_HOME"), os.Getenv("GOAT_T_WHERE"))
+	if os.Getenv("XDG_CONFIG_HOME") != config || os.Getenv("HOME") != home || os.Getenv("GOAT_T_WHERE") != "global" {
+		t.Fatalf("XDG_CONFIG_HOME %q, HOME %q, GOAT_T_WHERE %q", os.Getenv("XDG_CONFIG_HOME"), os.Getenv("HOME"), os.Getenv("GOAT_T_WHERE"))
 	}
 }
 
@@ -241,7 +263,7 @@ func TestEnvFilesLeaveShellValuesToCommands(t *testing.T) {
 	_, global := envFilesTest(t, "GOAT_T_SHELL_PROXY")
 	t.Setenv("GOAT_T_SHELL_PROXY", "http://proxy:3128")
 	os.WriteFile(global, []byte("GOAT_T_SHELL_PROXY=http://other:3128\n"), 0o600)
-	if _, err := loadEnvFiles(); err != nil {
+	if _, err := loadGlobalEnv(); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(workspace.CommandEnvironment(os.Environ()), "GOAT_T_SHELL_PROXY=http://proxy:3128") {
@@ -289,12 +311,11 @@ func TestBadLineSkipsQuotedValuesThatSpanLines(t *testing.T) {
 }
 
 func TestEnvFilesSkipAnUnreadableGlobalFile(t *testing.T) {
-	_, global := envFilesTest(t, "GOAT_T_PROJECT_ONLY")
+	_, global := envFilesTest(t)
 	os.Remove(global)
 	os.MkdirAll(global, 0o700) // a directory where the file should be
-	os.WriteFile(".env", []byte("GOAT_T_PROJECT_ONLY=1\n"), 0o600)
-	warnings, err := loadEnvFiles()
-	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "skipping") || os.Getenv("GOAT_T_PROJECT_ONLY") != "1" {
+	warnings, err := loadGlobalEnv()
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "skipping") {
 		t.Fatalf("got %v %v", warnings, err)
 	}
 }

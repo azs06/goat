@@ -514,7 +514,7 @@ func main() {
 	}
 
 	// The files can hold any GOAT_ setting, so they load before the settings are read.
-	envWarnings, err := loadEnvFiles()
+	envWarnings, err := loadGlobalEnv()
 	if err != nil {
 		log.Fatal(err)
 	}

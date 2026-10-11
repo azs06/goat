@@ -6,12 +6,12 @@ import (
 	"github.com/azs06/goat/internal/provider"
 )
 
-// dotenvKeys are the variables goat loaded from .env at startup. They are secrets the
+// dotenvKeys are the variables goat loaded from its global .env at startup. They are secrets the
 // user gave goat, not the shell, so commands the model runs do not inherit them.
 var dotenvKeys = map[string]bool{}
 
 // HideFromCommands keeps the named variables out of the environment run_bash commands
-// get. Call it at startup with the variables loaded from .env.
+// get. Call it at startup with the variables loaded from the global .env.
 func HideFromCommands(names ...string) {
 	for _, name := range names {
 		dotenvKeys[name] = true
@@ -38,7 +38,7 @@ func isCredentialVar(name string) bool {
 }
 
 // CommandEnvironment is the environment run_bash commands get: goat's own, without
-// credentials or anything loaded from .env. A command that prints its environment
+// credentials or anything loaded from the global .env. A command that prints its environment
 // would otherwise put the user's keys in the transcript the model provider receives.
 func CommandEnvironment(environ []string) []string {
 	kept := make([]string, 0, len(environ))

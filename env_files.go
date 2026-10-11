@@ -45,28 +45,47 @@ func globalEnvPath() string {
 // Variables that were already in the environment are not in it.
 var envSources = map[string]string{}
 
-// fixedByEnvironment are variables a .env file cannot set: goat finds the global file
-// through them before it reads either file.
+// fixedByEnvironment are variables the global .env cannot set: goat finds the file
+// through them before it reads it.
 var fixedByEnvironment = map[string]bool{"HOME": true, "XDG_CONFIG_HOME": true}
 
-// loadEnvFiles fills the environment from the workspace's .env and then the global .env
-// in goat's config directory. A variable takes the first non-empty value among the
-// environment, the workspace file and the global file, so the shell wins and a project
-// can override what is set for every project. A provider's credentials are settled
-// together: once one source supplies, say, ANTHROPIC_AUTH_TOKEN, a later file's
-// ANTHROPIC_API_KEY is ignored, since either one is a complete credential. Variables
-// goat takes from a file are kept out of run_bash commands. It returns warnings to show
-// once the terminal is set up, and fails on a file that exists but cannot be read or
-// parsed, without quoting the file, which holds keys.
-func loadEnvFiles() (warnings []string, err error) {
-	files := []string{".env"}
-	if global := globalEnvPath(); global != "" {
-		files = append(files, global)
+// loadGlobalEnv fills the environment from the .env in goat's config directory, so the
+// same keys work in every folder. A variable the environment already gives a non-empty
+// value keeps it, so the shell wins. A provider's credentials are settled together: if
+// the shell supplies, say, ANTHROPIC_AUTH_TOKEN, the file's ANTHROPIC_API_KEY is ignored,
+// since either one is a complete credential. Variables goat takes from the file are kept
+// out of run_bash commands.
+//
+// goat does not read the .env in the workspace. That file belongs to the project (its
+// own keys, database URLs and the like), and a cloned repository could use it to point a
+// provider's base URL at a server that would then receive the user's key.
+//
+// It returns warnings to show once the terminal is set up, and fails on a file that
+// cannot be parsed, without quoting it, since it holds keys.
+func loadGlobalEnv() (warnings []string, err error) {
+	path := globalEnvPath()
+	if path == "" {
+		return nil, nil
+	}
+	values, err := readEnvFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	var parseErr *envParseError
+	if err != nil && !errors.As(err, &parseErr) {
+		// A file goat cannot open should not stop it in every folder.
+		return []string{fmt.Sprintf("skipping %s: %v", displayPath(path), err)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if warning := sharedFileWarning(path); warning != "" {
+		warnings = append(warnings, warning)
 	}
 
-	settled := map[string]bool{}
+	fromShell := map[string]bool{}
 	for _, name := range provider.Names {
-		settled[name] = provider.CredentialSource(name) != ""
+		fromShell[name] = provider.CredentialSource(name) != ""
 	}
 	credentialOf := map[string]string{}
 	for name, vars := range provider.CredentialVars {
@@ -75,48 +94,21 @@ func loadEnvFiles() (warnings []string, err error) {
 		}
 	}
 
-	for i, path := range files {
-		values, err := readEnvFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
+	var taken []string
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		if fixedByEnvironment[name] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 			continue
 		}
-		var parseErr *envParseError
-		if err != nil && i > 0 && !errors.As(err, &parseErr) {
-			// A global file goat cannot open should not stop it in every folder.
-			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", displayPath(path), err))
+		if owner := credentialOf[name]; owner != "" && fromShell[owner] {
 			continue
 		}
-		if err != nil {
-			return warnings, err
+		if err := os.Setenv(name, values[name]); err != nil {
+			return warnings, fmt.Errorf("setting %s from %s: %w", name, path, err)
 		}
-		if i > 0 {
-			if warning := sharedFileWarning(path); warning != "" {
-				warnings = append(warnings, warning)
-			}
-		}
-		suppliedBy := map[string]bool{}
-		var taken []string
-		for _, name := range slices.Sorted(maps.Keys(values)) {
-			if fixedByEnvironment[name] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
-				continue
-			}
-			if owner := credentialOf[name]; owner != "" {
-				if settled[owner] {
-					continue
-				}
-				suppliedBy[owner] = true
-			}
-			if err := os.Setenv(name, values[name]); err != nil {
-				return warnings, fmt.Errorf("setting %s from %s: %w", name, path, err)
-			}
-			envSources[name] = displayPath(path)
-			taken = append(taken, name)
-		}
-		for owner := range suppliedBy {
-			settled[owner] = true
-		}
-		workspace.HideFromCommands(taken...)
+		envSources[name] = displayPath(path)
+		taken = append(taken, name)
 	}
+	workspace.HideFromCommands(taken...)
 	return warnings, nil
 }
 
@@ -234,11 +226,15 @@ func credentialOrigin(name string) string {
 }
 
 // noAPIKeyMessage is the error for a start without any credentials. It names the full
-// path of the global file, since that is the place that works from every folder.
+// path of the global file, and says the workspace's .env is not read, since keys left
+// there from before are the likely mistake.
 func noAPIKeyMessage() string {
-	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment or in a .env file in this folder"
+	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
 	if global := globalEnvPath(); global != "" {
-		message += ", or put it in " + global + " to use it from every folder"
+		message += " or in " + global
+	}
+	if info, err := os.Stat(".env"); err == nil && !info.IsDir() {
+		message += " (goat does not read the .env in this folder: it belongs to the project)"
 	}
 	return message
 }
