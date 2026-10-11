@@ -99,11 +99,15 @@ func isLoopback(host string) bool {
 // keyClient is the HTTP client for requests that carry a key. It never follows a
 // redirect: the SDKs send the key in headers such as x-api-key, which Go copies to
 // whatever host a redirect names, so a redirect could carry it somewhere goat never
-// checked. The redirect comes back as an error response instead.
-func keyClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// As the Anthropic SDK's own client does, for a server that never answers.
-	transport.ResponseHeaderTimeout = 10 * time.Minute
+// checked. The redirect comes back as an error response instead. headerTimeout bounds
+// the wait for a response to start; zero means no bound.
+func keyClient(headerTimeout time.Duration) *http.Client {
+	transport := http.DefaultTransport
+	if t, ok := transport.(*http.Transport); ok && headerTimeout > 0 {
+		t = t.Clone()
+		t.ResponseHeaderTimeout = headerTimeout
+		transport = t
+	}
 	return &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
