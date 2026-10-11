@@ -204,6 +204,7 @@ func TestConfigFileErrorsNameTheLineAndNeverAKey(t *testing.T) {
 		{"{\n  \"sk-proj-SECRET\": 1\n}", "line 2: config.json has a field for a key; keys go in auth.json"},
 		{`{"colour": "red"}`, `an unknown field "colour"`},
 		{`{"theme": "solarized"}`, "theme must be a built-in theme (default, one-dark) or the full path"},
+		{`{"theme": "ondedark"}`, "full path of a theme file; did you mean one-dark?"},
 		{`{"code_mode": "yes"}`, "code_mode must be true or false"},
 		{`{"auto_compact_tokens": -5}`, "auto_compact_tokens must be a whole number above 0"},
 		{`{"effort": "turbo"}`, "effort must be one of"},

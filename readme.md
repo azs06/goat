@@ -336,7 +336,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
-| `/theme` | Reload the theme file and show which one is in use. |
+| `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands and keys. |
@@ -608,6 +608,10 @@ errors and diffs, yellow for warnings and approvals.
 /theme one-dark        # switch for this session; /theme default switches back
 "theme": "one-dark"    # in ~/.config/goat/config.json, to start with it
 ```
+
+Case, spaces, hyphens and underscores in a built-in theme's name do not matter, so
+`onedark` and `One Dark` are one-dark too. A misspelled name is not applied; `/theme` and
+the `"theme"` setting say which theme it probably meant.
 
 All styling goes through a small style engine
 (`internal/style`): text is styled by role, and a theme decides what each role looks like.

@@ -234,7 +234,11 @@ func parseThemeSetting(raw json.RawMessage) (string, error) {
 		}
 	}
 	if !filepath.IsAbs(value) {
-		return "", fmt.Errorf("must be a built-in theme (%s) or the full path of a theme file", strings.Join(style.BuiltinNames(), ", "))
+		hint := ""
+		if suggestion, ok := style.SuggestBuiltin(value); ok {
+			hint = "; did you mean " + suggestion + "?"
+		}
+		return "", fmt.Errorf("must be a built-in theme (%s) or the full path of a theme file%s", strings.Join(style.BuiltinNames(), ", "), hint)
 	}
 	return value, nil
 }

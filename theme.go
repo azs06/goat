@@ -33,11 +33,10 @@ func themePath() (path string, explicit bool) {
 // valid JSON leaves the default theme in place. It returns what is in use, such as
 // "the built-in one-dark theme" or the file's path, or "" for the default theme.
 func applyTheme() string {
-	if name := strings.TrimSpace(os.Getenv("GOAT_THEME")); name != "" {
-		if theme, ok := style.Builtin(name); ok {
-			style.Use(theme)
-			return "the built-in " + strings.ToLower(name) + " theme"
-		}
+	if name, ok := style.BuiltinName(os.Getenv("GOAT_THEME")); ok {
+		theme, _ := style.Builtin(name)
+		style.Use(theme)
+		return "the built-in " + name + " theme"
 	}
 	path, explicit := themePath()
 	if path == "" {
@@ -63,11 +62,16 @@ func applyTheme() string {
 // reloads the configured theme and lists the built-in ones.
 func commandTheme(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
-		name := strings.ToLower(strings.TrimSpace(args[0]))
-		theme, ok := style.Builtin(name)
+		// "/theme one dark" names one theme.
+		wanted := strings.Join(args, " ")
+		name, ok := style.BuiltinName(wanted)
 		if !ok {
-			return fmt.Errorf("there is no built-in theme %q; the built-in themes are %s", args[0], strings.Join(style.BuiltinNames(), ", "))
+			if suggestion, ok := style.SuggestBuiltin(wanted); ok {
+				return fmt.Errorf("there is no built-in theme %q; did you mean %s? The built-in themes are %s", wanted, suggestion, strings.Join(style.BuiltinNames(), ", "))
+			}
+			return fmt.Errorf("there is no built-in theme %q; the built-in themes are %s", wanted, strings.Join(style.BuiltinNames(), ", "))
 		}
+		theme, _ := style.Builtin(name)
 		style.Use(theme)
 		fmt.Println(formatSuccess("Switched to the "+name+" theme for this session.") + style.Muted.Render(fmt.Sprintf(` To keep it, set "theme": %q in %s.`, name, displayPath(configPath()))))
 		return nil

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Role names what a piece of text is; the theme decides how it looks.
@@ -112,8 +113,72 @@ func Default() *Theme { return defaultTheme }
 
 // Builtin returns the built-in theme with this name, such as "one-dark".
 func Builtin(name string) (*Theme, bool) {
-	theme, ok := builtins[strings.ToLower(strings.TrimSpace(name))]
-	return theme, ok
+	canonical, ok := BuiltinName(name)
+	return builtins[canonical], ok
+}
+
+// BuiltinName returns the name of the built-in theme name refers to. Case, spaces,
+// hyphens and underscores do not matter, so "One Dark" and "onedark" are one-dark.
+func BuiltinName(name string) (string, bool) {
+	key := themeKey(name)
+	for canonical := range builtins {
+		if themeKey(canonical) == key {
+			return canonical, true
+		}
+	}
+	return "", false
+}
+
+// SuggestBuiltin returns the built-in theme a misspelled name most likely meant, such as
+// one-dark for "ondedark" or "dark": the one closest to it, if that is at most two edits
+// away or contains the name whole.
+func SuggestBuiltin(name string) (string, bool) {
+	key := themeKey(name)
+	best, bestDistance := "", 3
+	for _, canonical := range BuiltinNames() {
+		distance := editDistance(key, themeKey(canonical))
+		if len(key) >= 3 && strings.Contains(themeKey(canonical), key) {
+			distance = min(distance, 2)
+		}
+		if distance < bestDistance {
+			best, bestDistance = canonical, distance
+		}
+	}
+	return best, best != ""
+}
+
+// themeKey is what is left of a theme's name to compare: lowercase, without spaces,
+// hyphens or underscores.
+func themeKey(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, name)
+}
+
+// editDistance counts the single-rune insertions, deletions and substitutions that turn a
+// into b.
+func editDistance(a, b string) int {
+	x, y := []rune(a), []rune(b)
+	previous := make([]int, len(y)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+	for i := 1; i <= len(x); i++ {
+		current := make([]int, len(y)+1)
+		current[0] = i
+		for j := 1; j <= len(y); j++ {
+			cost := 1
+			if x[i-1] == y[j-1] {
+				cost = 0
+			}
+			current[j] = min(previous[j]+1, current[j-1]+1, previous[j-1]+cost)
+		}
+		previous = current
+	}
+	return previous[len(y)]
 }
 
 // BuiltinNames lists the built-in themes, the default first.
