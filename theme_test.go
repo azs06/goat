@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,9 +58,12 @@ func TestGoatThemeNamesABuiltinTheme(t *testing.T) {
 // isolateThemeSettings keeps a test's theme switches and config.json reads to itself.
 func isolateThemeSettings(t *testing.T) {
 	t.Helper()
-	previous := envSources
-	envSources = map[string]string{}
-	t.Cleanup(func() { envSources = previous; style.Use(style.Default()) })
+	previous, previousInUse, previousFiles := envSources, themeInUse, themeFiles
+	envSources, themeInUse, themeFiles = map[string]string{}, "", nil
+	t.Cleanup(func() {
+		envSources, themeInUse, themeFiles = previous, previousInUse, previousFiles
+		style.Use(style.Default())
+	})
 	t.Setenv("GOAT_THEME", "")
 	t.Setenv("GOAT_CODEMODE", "")
 }
@@ -142,6 +146,7 @@ func TestThemeOptionsMarkTheThemeInUse(t *testing.T) {
 	isolateThemeSettings(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GOAT_THEME", "one-dark")
+	applyTheme()
 	options, values := themeOptions()
 	if len(options) != 2 || values[1] != "one-dark" || !options[1].current || options[0].current {
 		t.Fatalf("got %+v %v", options, values)
@@ -152,6 +157,7 @@ func TestThemeOptionsMarkTheThemeInUse(t *testing.T) {
 	path, _ := themePath()
 	os.MkdirAll(filepath.Dir(path), 0o700)
 	os.WriteFile(path, []byte(`{"styles": {}}`), 0o600)
+	applyTheme()
 	options, values = themeOptions()
 	if len(options) != 3 || values[2] != path || !options[2].current || options[0].current {
 		t.Fatalf("got %+v %v", options, values)
@@ -223,5 +229,72 @@ func TestThemeSavedAfterAFailedSave(t *testing.T) {
 	})
 	if data, _ := os.ReadFile(configFile); !strings.Contains(out, "Saved in") || !strings.Contains(string(data), `"theme": "default"`) {
 		t.Fatalf("got %q, %s", out, data)
+	}
+}
+
+func TestThemePickerFollowsWhatIsOnScreen(t *testing.T) {
+	isolateThemeSettings(t)
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+
+	// A theme file config.json named at startup stays offered after a built-in theme
+	// is chosen.
+	mine := filepath.Join(t.TempDir(), "mine.json")
+	os.WriteFile(mine, []byte(`{"styles": {"accent": "color: red"}}`), 0o600)
+	t.Setenv("GOAT_THEME", mine)
+	envSources["GOAT_THEME"] = "config.json"
+	applyTheme()
+	if currentThemeSetting() != mine {
+		t.Fatalf("got %q", currentThemeSetting())
+	}
+	captureStdout(t, func() {
+		if err := switchTheme("one-dark"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, values := themeOptions(); !slices.Contains(values, mine) || currentThemeSetting() != "one-dark" {
+		t.Fatalf("got %v, current %q", values, currentThemeSetting())
+	}
+
+	// With GOAT_THEME from the shell, what /theme switched to is still what is in use.
+	t.Setenv("GOAT_THEME", "default")
+	delete(envSources, "GOAT_THEME")
+	applyTheme()
+	captureStdout(t, func() {
+		if err := switchTheme("one-dark"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if options, _ := themeOptions(); !options[1].current || options[0].current {
+		t.Fatalf("expected one-dark marked, got %+v", options)
+	}
+
+	// A theme file that failed to load is not marked as in use.
+	t.Setenv("GOAT_THEME", "")
+	broken := filepath.Join(configDir, "goat", "theme.json")
+	os.MkdirAll(filepath.Dir(broken), 0o700)
+	os.WriteFile(broken, []byte(`{"styles":`), 0o600)
+	captureStdout(t, func() { applyTheme() })
+	if currentThemeSetting() != "default" {
+		t.Fatalf("expected the default theme in use, got %q", currentThemeSetting())
+	}
+}
+
+func TestThemeFileUnderHomeIsSavedWithTilde(t *testing.T) {
+	isolateThemeSettings(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	file := filepath.Join(home, "dotfiles", "goat-theme.json")
+	os.MkdirAll(filepath.Dir(file), 0o700)
+	os.WriteFile(file, []byte(`{"styles": {}}`), 0o600)
+	captureStdout(t, func() {
+		if err := switchTheme(file); err != nil {
+			t.Fatal(err)
+		}
+	})
+	data, _ := os.ReadFile(filepath.Join(home, ".config", "goat", "config.json"))
+	if !strings.Contains(string(data), `"theme": "~/dotfiles/goat-theme.json"`) {
+		t.Fatalf("got %s", data)
 	}
 }
