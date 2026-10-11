@@ -417,13 +417,7 @@ func handleInput(cfg *config, text string) error {
 
 // printWelcome shows the banner and the notices about the restored state.
 func printWelcome(cfg *config) {
-	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
-	git := ""
-	if state, ok := readGitState(); ok {
-		git = state.footerText()
-	}
-	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), git, terminalWidth()))
+	printBanner(cfg)
 	if !cfg.conversation.conversation.IsEmpty() {
 		fmt.Println(formatNotice("Resumed saved conversation context."))
 	}
@@ -436,6 +430,26 @@ func printWelcome(cfg *config) {
 			message = formatWarning(message)
 		}
 		fmt.Println(message)
+	}
+}
+
+// printBanner shows the welcome box with the current model, effort, directory and branch.
+func printBanner(cfg *config) {
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	git := ""
+	if state, ok := readGitState(); ok {
+		git = state.footerText()
+	}
+	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), git, terminalWidth()))
+}
+
+// printModelLine restates the banner's model row after the model or effort changed, so
+// the current values are on screen next to the change. Plain output has no banner box
+// and already names the change, so it gets nothing.
+func printModelLine(cfg *config) {
+	if style.Enabled() {
+		fmt.Println(renderModelLine(cfg.model.String(), string(cfg.reasoningEffort), terminalWidth()))
 	}
 }
 

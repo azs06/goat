@@ -324,7 +324,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
 | `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter, xAI and Meta, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
-| `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
+| `/clear` (`/new`, `/reset`) | Start a new conversation under a fresh welcome banner; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
 | `/retry` | Send the last prompt again. |
@@ -344,6 +344,10 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 
 The pickers (`/model`, `/effort`, `/output`, `/login`) take Up/Down to move, typing to filter,
 Enter to choose and Esc to cancel.
+
+The welcome banner stays in the scrollback as it was printed, so when `/model`, `/effort` or
+`/resume` changes the model or effort, goat restates the banner's model row underneath. The
+footer under the prompt always shows the current values.
 
 The older commands (`help`, `exit`, `quit`, `status`, `compact`, `undo`, `tools`, `history`,
 `resume`, `reset`) also run when typed alone without the slash. Newer ones need the slash,

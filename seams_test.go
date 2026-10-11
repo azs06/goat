@@ -148,3 +148,43 @@ func TestRunPromptAsksTheApproverBeforeRunBash(t *testing.T) {
 		t.Fatalf("the declined command ran: %v", err)
 	}
 }
+
+func TestModelAndEffortChangesRestateTheBannerRow(t *testing.T) {
+	cfg := seamConfig(t, newFakeAnthropic(t).provider(true))
+	sessionSaver = func(string, savedSession) error { return nil }
+	t.Cleanup(func() { sessionSaver = writeSessionFile })
+
+	withColor(t, true)
+	out := style.StripANSI(captureStdout(t, func() {
+		if err := commandEffort(context.Background(), cfg, []string{"high"}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	if !strings.Contains(out, "Effort set to high.") || !strings.Contains(out, "model  anthropic:claude-opus-5-5 · effort high") {
+		t.Fatalf("expected the banner's row with the new effort:\n%s", out)
+	}
+
+	// /clear starts the new conversation under a banner with the current values.
+	out = style.StripANSI(captureStdout(t, func() {
+		if err := commandClear(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	if !strings.Contains(out, "✻ Welcome") || !strings.Contains(out, "effort high") {
+		t.Fatalf("expected a fresh banner after /clear:\n%s", out)
+	}
+
+	// Plain output names the change once and draws no banner.
+	withColor(t, false)
+	out = captureStdout(t, func() {
+		if err := commandEffort(context.Background(), cfg, []string{"low"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := commandClear(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "model  ") || strings.Contains(out, "Welcome") || strings.ContainsAny(out, "\x1b\r") {
+		t.Fatalf("plain output changed:\n%q", out)
+	}
+}

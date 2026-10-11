@@ -141,6 +141,11 @@ func commandClear(ctx context.Context, c *config, args []string) error {
 	replaceConversation(c, conversationState{})
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
+	// A new conversation starts under a fresh banner with the current model and effort.
+	if style.Enabled() {
+		fmt.Println()
+		printBanner(c)
+	}
 	return nil
 }
 
@@ -172,13 +177,18 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		return err
 	}
 	c.model = model
+	effortNote := ""
 	if effort, err := provider.ParseEffort(previous.Effort); err == nil && previous.Effort != "" {
+		if effort != c.reasoningEffort {
+			effortNote = " at effort " + string(effort)
+		}
 		c.reasoningEffort = effort
 	}
 	adoptSavedConversation(c, previous)
 	saveSession(c)
 
-	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s. /resume again switches back.", c.model)))
+	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))
+	printModelLine(c)
 	return nil
 }
 
@@ -328,6 +338,7 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 		saveSession(c)
 		fmt.Println(formatSuccess("Effort set to "+string(effort)+".") + sent())
+		printModelLine(c)
 		return nil
 	}
 	fmt.Println("Reasoning effort: " + style.Highlight.Render(string(c.reasoningEffort)) + sent())
@@ -335,7 +346,6 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 	return nil
 }
 
-// effectiveEffortDescription says what the provider will actually receive.
 // effortStatusText is the effort, with what the model receives when that differs.
 func effortStatusText(c *config) string {
 	if sent := effectiveEffortDescription(c); sent != string(c.reasoningEffort) {
@@ -344,6 +354,7 @@ func effortStatusText(c *config) string {
 	return string(c.reasoningEffort)
 }
 
+// effectiveEffortDescription says what the provider will actually receive.
 func effectiveEffortDescription(c *config) string {
 	return provider.DescribeEffort(c.providers[c.model.Provider], c.model, c.reasoningEffort)
 }
@@ -530,6 +541,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		}
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -537,6 +549,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		c.model = target
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s; the conversation continues.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -544,6 +557,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		c.model = target
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -560,6 +574,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	startConversation(c, conversationState{conversation: next})
 	recordCompactionSeed(c, next, summary)
 	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
+	printModelLine(c)
 	return nil
 }
 
