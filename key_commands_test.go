@@ -142,3 +142,32 @@ func TestProcessKeepsPipedInputFromAKeyCommand(t *testing.T) {
 		t.Fatalf("stdout %q stderr %q exit %d", out, errOut, code)
 	}
 }
+
+func TestKeyCommandsAreHiddenFromCommands(t *testing.T) {
+	env := workspace.CommandEnvironment([]string{"OPENAI_API_KEY_COMMAND=echo sk-literal", "ANTHROPIC_AUTH_TOKEN_COMMAND=op read x", "MY_SERVICE_API_KEY_COMMAND=x", "BUILD_COMMAND=make"})
+	if !slices.Equal(env, []string{"BUILD_COMMAND=make"}) {
+		t.Errorf("got %q", env)
+	}
+}
+
+func TestKeyCommandMayLeaveAHelperRunning(t *testing.T) {
+	keyCommandsTest(t)
+	t.Setenv("OPENAI_API_KEY_COMMAND", "echo sk-early; sleep 5 &")
+	if warnings := runKeyCommands(); len(warnings) != 0 || os.Getenv("OPENAI_API_KEY") != "sk-early" {
+		t.Fatalf("got %q, key %q", warnings, os.Getenv("OPENAI_API_KEY"))
+	}
+}
+
+func TestAShellKeyCommandBeatsTheGlobalFile(t *testing.T) {
+	keyCommandsTest(t)
+	_, global := envFilesTest(t)
+	t.Setenv("OPENAI_API_KEY_COMMAND", "echo sk-from-command")
+	os.WriteFile(global, []byte("OPENAI_API_KEY=sk-from-file\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
+		t.Fatal(err)
+	}
+	runKeyCommands()
+	if os.Getenv("OPENAI_API_KEY") != "sk-from-command" {
+		t.Errorf("the shell's command should win, got %q", os.Getenv("OPENAI_API_KEY"))
+	}
+}

@@ -216,10 +216,10 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	}
 
 	startConversation(cfg, conversationState{})
-	if provider.Available(saved.Conversation.Provider) {
+	if err := provider.Unavailable(saved.Conversation.Provider); err == nil {
 		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation does not carry over to %s; it was kept, and /resume restores it.", saved.Model, cfg.model)))
 	} else {
-		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s.", saved.Model, provider.MissingCredentialsError(saved.Conversation.Provider))))
+		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s can be used (%v).", saved.Model, saved.Conversation.Provider, err)))
 	}
 }
 

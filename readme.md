@@ -54,7 +54,8 @@ point a provider's base URL at a server that would receive your key.
 To keep a key out of files altogether, give goat a command that prints it: the
 credential's name plus `_COMMAND`, in the shell or the global `.env`. goat runs it at
 startup with `sh` (`cmd.exe` on Windows), on the terminal, so a password manager can ask
-for a fingerprint or a passphrase, and uses the one line it prints. For example, in
+for a fingerprint or a passphrase, and uses the one line it prints. Input piped to goat,
+such as a prompt for `goat -p`, is not passed on to it. For example, in
 `~/.config/goat/.env`:
 
 ```sh
@@ -63,9 +64,12 @@ ANTHROPIC_API_KEY_COMMAND="security find-generic-password -w -s anthropic-api-ke
 DEEPSEEK_API_KEY_COMMAND="pass show api/deepseek"                               # pass
 ```
 
-A key that is already set wins, and the command is not run. A command that fails, prints
-nothing or prints more than one line within 30 seconds leaves the provider unavailable
-with a warning that never repeats its output. `/status` shows where
+The shell still wins: a key or a key command set there beats anything in the global file.
+Within one place, a key that is set beats a command, which is then not run. A command
+that fails, prints nothing, prints more than one line or takes over 30 seconds leaves its
+key unset, with a warning that never repeats its output; for Anthropic the other
+credential's command is tried next. On a timeout only the shell is stopped, so a command
+that runs several programs should `exec` the last one. `/status` shows where
 each provider's key came from, and goat warns if the global file can be read by other
 users. If the file cannot be parsed, goat names it (and the line, where it can tell)
 without printing its contents. Only providers with a key are offered. Run
@@ -345,15 +349,18 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   http(s) or that carries a user name or password. For any other host it says at startup,
   and in `/status`, where the requests go and which file set the URL, flagging plain http
   to another machine as unencrypted (http to `localhost` is fine). It shows only the
-  scheme and host, since some proxies take a token in the path.
+  scheme and host, since some proxies take a token in the path, and shortens the URL the
+  same way in error messages and the history. Requests that carry a key never follow a
+  redirect, which could otherwise take the key to a host goat never checked.
 - `run_bash` commands do not inherit goat's API keys, anything loaded from
   `~/.config/goat/.env`, or other variables named like credentials (`*_API_KEY`, `*_SECRET`,
   `*_AUTH_TOKEN`, `*_PASSWORD` and similar). `~/.config/goat/.env` is outside the
   workspace, so file tools cannot reach it, but a command can read it like any other file
   you can read: approving commands is what guards it. goat always asks before a command
-  that names its config directory (`config/goat`, `XDG_CONFIG_HOME`), even when commands
-  otherwise run without asking; a glob or a path built at run time still gets past that
-  check.
+  that names its config directory (`config/goat`, `XDG_CONFIG_HOME`, its full path, or a
+  relative path from a directory above it) or runs inside it, even when commands
+  otherwise run without asking. The check matches text, so quoting, globs, variables or
+  a `cd` earlier in the command get past it.
 - Every change made by a file tool is snapshotted first, so `/undo` can restore it,
   including removing directories the change created. The last 100 operations stay
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can

@@ -33,14 +33,28 @@ func goatConfigDir() string {
 }
 
 // mentionsConfigDir reports a run_bash command that names goat's config directory, which
-// holds the global .env. Such commands are always confirmed, even when commands run
-// without asking. It is a tripwire, not a boundary: a glob or a path built at run time
-// gets past it.
-func mentionsConfigDir(command string) bool {
+// holds the global .env: by config/goat, XDG_CONFIG_HOME or its full path, or by a
+// relative path from a workdir above it, or by running inside it. Such commands are
+// always confirmed, even when commands run without asking. It is a tripwire, not a
+// boundary: it matches text, so quoting, globs, variables or a cd earlier in the
+// command get past it.
+func mentionsConfigDir(command, workdir string) bool {
 	lower := strings.ToLower(command)
+	for strings.Contains(lower, "//") || strings.Contains(lower, "/./") {
+		lower = strings.ReplaceAll(strings.ReplaceAll(lower, "//", "/"), "/./", "/")
+	}
 	needles := []string{"config/goat", `config\goat`, "xdg_config_home"}
 	if dir := goatConfigDir(); dir != "" {
 		needles = append(needles, strings.ToLower(dir))
+		if abs, err := filepath.Abs(workdir); err == nil {
+			if within(abs, dir) {
+				return true
+			}
+			if within(dir, abs) {
+				rel, _ := filepath.Rel(abs, dir)
+				needles = append(needles, strings.ToLower(filepath.ToSlash(rel)), strings.ToLower(rel))
+			}
+		}
 	}
 	for _, needle := range needles {
 		if strings.Contains(lower, needle) {
@@ -48,6 +62,12 @@ func mentionsConfigDir(command string) bool {
 		}
 	}
 	return false
+}
+
+// within reports whether path is dir or inside it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // globalEnvPath is the .env file goat reads in every workspace, or "" when there is no
@@ -101,9 +121,15 @@ func loadGlobalEnv() (warnings []string, err error) {
 		warnings = append(warnings, warning)
 	}
 
+	// A credential the shell gives, directly or as a key command, settles the provider.
 	fromShell := map[string]bool{}
 	for _, name := range provider.Names {
 		fromShell[name] = provider.CredentialSource(name) != ""
+		for _, variable := range provider.CredentialVars[name] {
+			if strings.TrimSpace(os.Getenv(variable+"_COMMAND")) != "" {
+				fromShell[name] = true
+			}
+		}
 	}
 	credentialOf := map[string]string{}
 	for name, vars := range provider.CredentialVars {

@@ -37,6 +37,10 @@ func HideFromCommands(names ...string) {
 // goat's providers use, and anything named like a key, token or secret.
 func isCredentialVar(name string) bool {
 	upper := strings.ToUpper(name)
+	// A command that prints a key, such as OPENAI_API_KEY_COMMAND, is the recipe for it.
+	if base, ok := strings.CutSuffix(upper, "_COMMAND"); ok && isCredentialVar(base) {
+		return true
+	}
 	for _, vars := range provider.CredentialVars {
 		for _, credential := range vars {
 			if upper == credential {

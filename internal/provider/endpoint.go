@@ -3,9 +3,11 @@ package provider
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // BaseURLVars name the variable that moves each provider's endpoint, for a proxy or a
@@ -59,7 +61,7 @@ func ResolveEndpoint(provider string) (Endpoint, error) {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "https" && scheme != "http" {
-		return Endpoint{}, fmt.Errorf("%s must start with https://", name)
+		return Endpoint{}, fmt.Errorf("%s must start with https:// (or http://)", name)
 	}
 	if u.User != nil {
 		return Endpoint{}, fmt.Errorf("%s must not contain a user name or password", name)
@@ -83,11 +85,62 @@ func endpointOrOfficial(provider string) Endpoint {
 	return endpoint
 }
 
+// isLoopback reports the hosts Go's HTTP_PROXY handling never sends through a proxy:
+// localhost and loopback addresses. A name such as llm.localhost may still go through
+// one, in plain text, so it does not count.
 func isLoopback(host string) bool {
-	host = strings.ToLower(host)
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// keyClient is the HTTP client for requests that carry a key. It never follows a
+// redirect: the SDKs send the key in headers such as x-api-key, which Go copies to
+// whatever host a redirect names, so a redirect could carry it somewhere goat never
+// checked. The redirect comes back as an error response instead.
+func keyClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// As the Anthropic SDK's own client does, for a server that never answers.
+	transport.ResponseHeaderTimeout = 10 * time.Minute
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// HideEndpointPaths shortens every custom base URL in text to its scheme and host, so a
+// token in its path or query does not reach the screen, the history or a compaction
+// summary through an error that quotes the request URL.
+func HideEndpointPaths(text string) string {
+	for _, name := range Names {
+		endpoint, err := ResolveEndpoint(name)
+		if err != nil || !endpoint.Custom {
+			continue
+		}
+		if origin := endpoint.Origin(); len(endpoint.URL) > len(origin) {
+			text = replaceFold(text, endpoint.URL, origin+"/…")
+		}
+	}
+	return text
+}
+
+// replaceFold replaces every match of old in s, ignoring case, since a URL's scheme and
+// host may be written in any case.
+func replaceFold(s, old, replacement string) string {
+	var b strings.Builder
+	lower, oldLower := strings.ToLower(s), strings.ToLower(old)
+	for {
+		i := strings.Index(lower, oldLower)
+		if i < 0 || len(lower) != len(s) {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		b.WriteString(replacement)
+		s, lower = s[i+len(old):], lower[i+len(old):]
+	}
 }

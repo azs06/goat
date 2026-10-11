@@ -43,7 +43,7 @@ func NewDeepSeekFor(baseURL, apiKey string) Provider {
 }
 
 func newDeepSeek(baseURL, apiKey string) *anthropicProvider {
-	httpClient := &http.Client{}
+	httpClient := keyClient()
 	return &anthropicProvider{
 		name: DeepSeek,
 		// Without environment defaults the client never sends ANTHROPIC_* credentials

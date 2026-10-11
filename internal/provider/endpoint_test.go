@@ -22,6 +22,8 @@ func TestResolveEndpoint(t *testing.T) {
 		{raw: "http://localhost:11434/v1", url: "http://localhost:11434/v1", custom: true},
 		{raw: "http://[::1]:8080", url: "http://[::1]:8080", custom: true},
 		{raw: "http://192.168.1.5:11434", url: "http://192.168.1.5:11434", custom: true, unencrypted: true},
+		// Go sends only localhost and loopback addresses around HTTP_PROXY.
+		{raw: "http://llm.localhost:4000", url: "http://llm.localhost:4000", custom: true, unencrypted: true},
 		{raw: "https://user:secret-pass@secret.example", err: "must not contain a user name or password"},
 		{raw: "ftp://secret.example", err: "must start with https://"},
 		{raw: "secret.example/v1", err: "is not a URL"},
@@ -77,5 +79,18 @@ func TestAnthropicTreatsOnlyOtherHostsAsCustom(t *testing.T) {
 		if p := NewAnthropic().(*anthropicProvider); p.customBaseURL != custom {
 			t.Errorf("%q: customBaseURL = %v, want %v", raw, p.customBaseURL, custom)
 		}
+	}
+}
+
+func TestHideEndpointPaths(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/TOKEN-PATH/v1/")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("DEEPSEEK_BASE_URL", "HTTPS://Proxy.example/t/ds-token/anthropic")
+	got := HideEndpointPaths(`Post "http://127.0.0.1:9/TOKEN-PATH/v1/responses": refused; Post "https://proxy.example/t/ds-token/anthropic/v1/messages": 502; https://api.anthropic.com/v1/messages`)
+	if strings.Contains(got, "TOKEN-PATH") || strings.Contains(got, "ds-token") {
+		t.Errorf("a path survived: %s", got)
+	}
+	if !strings.Contains(got, "http://127.0.0.1:9/…/responses") || !strings.Contains(got, "https://api.anthropic.com/v1/messages") {
+		t.Errorf("got %s", got)
 	}
 }

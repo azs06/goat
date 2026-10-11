@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -66,11 +67,16 @@ func runKeyCommand(command string) (string, error) {
 		cmd.Stdin = os.Stdin
 	}
 	cmd.Stdout, cmd.Stderr = &stdout, os.Stderr
-	// A helper the command leaves running must not hold goat's startup.
+	// A helper the command leaves running must not hold goat's startup; what it prints
+	// later is ignored. On a timeout only the shell is stopped, so a command that runs
+	// others should exec the last one.
 	cmd.WaitDelay = time.Second
 	err := cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "", fmt.Errorf("gave no key within %s", keyCommandTimeout)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		err = nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed: %v", err)

@@ -137,7 +137,7 @@ type bashApprover struct {
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
 	touchesState := workspace.MentionsStateDir(command)
-	touchesKeys := mentionsConfigDir(command)
+	touchesKeys := mentionsConfigDir(command, workdir)
 	if a.autoApprove && !touchesState && !touchesKeys {
 		return nil
 	}

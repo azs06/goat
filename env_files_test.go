@@ -1,11 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/azs06/goat/internal/workspace"
@@ -381,5 +384,32 @@ func TestEnvFilesCompareNamesWithoutCaseWhereTheSystemDoes(t *testing.T) {
 	}
 	if slices.Contains(workspace.CommandEnvironment([]string{"GOAT_T_LOWER=1"}), "GOAT_T_LOWER=1") {
 		t.Error("a variable from the file must stay hidden whatever case the system reports")
+	}
+}
+
+func TestProcessDoesNotFollowRedirectsWithTheKey(t *testing.T) {
+	var elsewhere atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	t.Cleanup(target.Close)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(proxy.Close)
+
+	for _, run := range []struct{ model, keyVar, urlVar, path string }{
+		{"claude-opus-5-5", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", ""},
+		{"gpt-6-luna", "OPENAI_API_KEY", "OPENAI_BASE_URL", "/v1"},
+		{"deepseek-v4-pro", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "/anthropic"},
+	} {
+		env := []string{run.keyVar + "=sk-test", run.urlVar + "=" + proxy.URL + run.path}
+		if _, _, code := runGoat(t, t.TempDir(), "hi", env, "-p", "-m", run.model); code == 0 {
+			t.Errorf("%s: expected the redirect to fail the request", run.model)
+		}
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the redirect target got %d requests", n)
 	}
 }

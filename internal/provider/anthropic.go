@@ -70,7 +70,7 @@ func NewAnthropic() Provider {
 	// where ResolveEndpoint has checked. Later options win over the SDK's environment
 	// defaults, and the API key comes before the token, as in the SDK.
 	endpoint := endpointOrOfficial(Anthropic)
-	opts := []option.RequestOption{option.WithBaseURL(endpoint.URL)}
+	opts := []option.RequestOption{option.WithHTTPClient(keyClient()), option.WithBaseURL(endpoint.URL)}
 	if key := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); key != "" {
 		opts = append(opts, option.WithAPIKey(key))
 	} else if token := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN")); token != "" {

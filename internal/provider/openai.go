@@ -50,6 +50,7 @@ func NewOpenAI() Provider {
 	// ResolveEndpoint has checked; later options win over the SDK's environment defaults.
 	endpoint := endpointOrOfficial(OpenAI)
 	client := openai.NewClient(
+		option.WithHTTPClient(keyClient()),
 		option.WithBaseURL(endpoint.URL),
 		option.WithAPIKey(strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))),
 	)
