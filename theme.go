@@ -69,14 +69,14 @@ func commandTheme(ctx context.Context, c *config, args []string) error {
 			return fmt.Errorf("there is no built-in theme %q; the built-in themes are %s", args[0], strings.Join(style.BuiltinNames(), ", "))
 		}
 		style.Use(theme)
-		fmt.Println(formatSuccess("Switched to the "+name+" theme for this session.") + style.Muted.Render(" To keep it, set GOAT_THEME="+name+" in "+displayPath(globalEnvPath())+"."))
+		fmt.Println(formatSuccess("Switched to the "+name+" theme for this session.") + style.Muted.Render(fmt.Sprintf(` To keep it, set "theme": %q in %s.`, name, displayPath(configPath()))))
 		return nil
 	}
 	using := applyTheme()
 	switch {
 	case using == "":
 		wanted, _ := themePath()
-		fmt.Println("Using the default theme. " + style.Muted.Render(fmt.Sprintf("Put a theme in %s or set GOAT_THEME to use your own.", wanted)))
+		fmt.Println("Using the default theme. " + style.Muted.Render(fmt.Sprintf(`Set "theme" in %s, or put your own in %s.`, displayPath(configPath()), wanted)))
 	case strings.HasPrefix(using, "the built-in "):
 		fmt.Println("Using " + using + ".")
 	default:

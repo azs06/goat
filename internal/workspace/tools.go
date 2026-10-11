@@ -73,6 +73,42 @@ func isSecretFileName(name string) bool {
 	return true
 }
 
+// protectedDirs are directories file tools never open or search, such as goat's config
+// directory with the user's keys, which a workspace such as the home directory contains.
+var protectedDirs []string
+
+// ProtectDir keeps file tools out of dir and everything in it, including through a
+// symlink or another path to it.
+func ProtectDir(dir string) {
+	if dir == "" {
+		return
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		protectedDirs = append(protectedDirs, abs)
+	}
+}
+
+// ResetProtectedDirs forgets every protected directory, for tests.
+func ResetProtectedDirs() { protectedDirs = nil }
+
+// inProtectedDir reports a path inside a protected directory, by name or as the same
+// file.
+func inProtectedDir(path string) bool {
+	for _, dir := range protectedDirs {
+		if rel, err := filepath.Rel(dir, path); err == nil && !escapesRoot(rel) {
+			return true
+		}
+		if isInsideExistingDir(path, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+func errProtectedDir(relPath string) error {
+	return fmt.Errorf("%s is in goat's config directory, which holds the user's keys, so file tools do not open it", filepath.ToSlash(relPath))
+}
+
 func isStatePath(relPath string) bool {
 	first, _, _ := strings.Cut(filepath.ToSlash(relPath), "/")
 	return IsStateDirName(first)
@@ -165,6 +201,9 @@ func ResolvePath(path string) (string, string, error) {
 	}
 	if isSecretFileName(filepath.Base(realRelPath)) {
 		return "", "", errSecretFile(relPath)
+	}
+	if inProtectedDir(resolvedPath) {
+		return "", "", errProtectedDir(relPath)
 	}
 
 	return resolvedPath, relPath, nil
@@ -778,7 +817,7 @@ func FindFiles(rootPath, pattern string, limit int, includeIgnored bool) ([]stri
 			return err
 		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) {
+			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) || inProtectedDir(path) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -855,7 +894,7 @@ func GrepFiles(rootPath string, opts GrepOptions) ([]string, bool, error) {
 			return err
 		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) {
+			if shouldSkipDir(d.Name()) || (path != resolvedRoot && ignore.ignored(relPath, true)) || inProtectedDir(path) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -33,7 +33,7 @@ type deepSeekSettings struct {
 }
 
 func NewDeepSeek() Provider {
-	apiKey := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY"))
+	_, apiKey, _ := Credential(DeepSeek)
 	return NewDeepSeekFor(endpointOrOfficial(DeepSeek).URL, apiKey)
 }
 

@@ -124,12 +124,7 @@ func loadGlobalEnv() (warnings []string, err error) {
 	// A credential the shell gives, directly or as a key command, settles the provider.
 	fromShell := map[string]bool{}
 	for _, name := range provider.Names {
-		fromShell[name] = provider.CredentialSource(name) != ""
-		for _, variable := range provider.CredentialVars[name] {
-			if strings.TrimSpace(os.Getenv(variable+"_COMMAND")) != "" {
-				fromShell[name] = true
-			}
-		}
+		fromShell[name] = shellSettles(name)
 	}
 	// A key command belongs to its provider like the key: a shell credential keeps the
 	// file's commands out too. A variable can belong to several providers when an
@@ -149,7 +144,11 @@ func loadGlobalEnv() (warnings []string, err error) {
 		if fixedByEnvironment[canonical] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 			continue
 		}
-		if slices.ContainsFunc(credentialOf[canonical], func(owner string) bool { return fromShell[owner] }) {
+		// The shell settling any owner keeps the variable out, and so does auth.json
+		// settling every owner. auth.json settling only some leaves it for the others;
+		// Credential gives the settled ones their auth.json key first.
+		if owners := credentialOf[canonical]; slices.ContainsFunc(owners, func(owner string) bool { return fromShell[owner] }) ||
+			len(owners) > 0 && !slices.ContainsFunc(owners, func(owner string) bool { return !authSettled[owner] }) {
 			continue
 		}
 		if err := os.Setenv(name, values[name]); err != nil {
@@ -269,8 +268,11 @@ func credentialOrigin(name string) string {
 	if source == "" {
 		return ""
 	}
-	if provider.KeyCommands[source] != "" && envSources[source] != "" {
-		return "key from " + envSources[source] + " in " + displayPath(providerEntriesPath())
+	if entry, ok := provider.LookupEntry(name); ok && provider.KeyCommands[source] != "" && envSources[source] != "" {
+		return "key from " + envSources[source] + " in " + entry.Source
+	}
+	if source == provider.StoredSource {
+		return "key from " + authOrigins[name]
 	}
 	return variableOrigin(source)
 }
@@ -336,7 +338,7 @@ func noAPIKeyMessage() string {
 	if len(refused) > 0 {
 		return "no provider can be used; " + strings.Join(refused, "; ")
 	}
-	// Entries from providers.json say what each one is missing.
+	// Entries from config.json say what each one is missing.
 	var entries []string
 	for _, name := range provider.Names {
 		if _, ok := provider.LookupEntry(name); ok {
@@ -349,8 +351,8 @@ func noAPIKeyMessage() string {
 		return "no provider can be used; " + strings.Join(entries, "; ")
 	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
-	if global := globalEnvPath(); global != "" {
-		message += " or in " + global
+	if auth := authPath(); auth != "" {
+		message = "no API key found; add one to " + auth + `, such as {"openai": {"key": "sk-..."}}, or set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment`
 	}
 	if info, err := os.Stat(".env"); err == nil && !info.IsDir() {
 		message += " (goat does not read the .env in this folder: it belongs to the project)"

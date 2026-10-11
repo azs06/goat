@@ -45,41 +45,50 @@ go install .` (or `go run .` to try it without installing).
 
 ### 2. Add an API key
 
-goat needs a key for at least one provider: `OPENAI_API_KEY` for OpenAI models,
-`ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) for Claude models, `DEEPSEEK_API_KEY` for
-DeepSeek models. Only providers with a key are offered (and the keyless local servers
-you add in [`providers.json`](#optional-add-other-providers)).
+goat needs a key for at least one provider: OpenAI for OpenAI models, Anthropic for
+Claude models, DeepSeek for DeepSeek models. Only providers with a key are offered (and
+the keyless local servers you [add yourself](#optional-add-other-providers)).
 
-Put the keys in goat's global file, `~/.config/goat/.env`
-(`$XDG_CONFIG_HOME/goat/.env` when `XDG_CONFIG_HOME` is set). goat reads it whichever
-folder it starts in:
+Put the keys in `~/.config/goat/auth.json` (`$XDG_CONFIG_HOME/goat/auth.json` when
+`XDG_CONFIG_HOME` is set). goat reads it whichever folder it starts in, and keeps the
+keys in its own memory, out of the environment of every command it runs:
 
 ```sh
 mkdir -p ~/.config/goat
-(umask 077 && touch ~/.config/goat/.env)   # readable only by you
-${EDITOR:-vi} ~/.config/goat/.env
+(umask 077 && touch ~/.config/goat/auth.json)   # readable only by you
+${EDITOR:-vi} ~/.config/goat/auth.json
 ```
 
-```sh
-# ~/.config/goat/.env
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-DEEPSEEK_API_KEY=sk-...
+```json
+{
+  "openai": {"key": "sk-..."},
+  "anthropic": {"key": "sk-ant-..."},
+  "deepseek": {"key": "sk-..."}
+}
 ```
 
-Typing the key in an editor keeps it out of your shell history. goat warns at startup if
-other users can read the file (fix it with `chmod 600 ~/.config/goat/.env`).
+`"openai": "sk-..."` is short for `"openai": {"key": "sk-..."}`. For Anthropic,
+`{"auth_token": "..."}` sends a bearer token instead of an API key. Typing the key in an
+editor keeps it out of your shell history. goat warns at startup if other users can read
+the file (fix it with `chmod 600 ~/.config/goat/auth.json`), and its errors name a line
+of the file but never print what is on it.
 
-Keys exported in the shell work too, and win over the file:
+Keys exported in the shell work too (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN`, `DEEPSEEK_API_KEY`), and win over the file:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+Keys stay in `auth.json`, apart from goat's settings in
+[`config.json`](#configuration), so the settings can be shared or kept in a dotfiles
+repository without them. `~/.config/goat/.env`, the older home for both, still works
+below the JSON files.
+
 goat does **not** read the `.env` in the project it works on. That file belongs to the
 project (its own keys, database URLs and so on), and a cloned repository could otherwise
 point a provider's base URL at a server that would receive your key. Keys you kept in a
-project's `.env` need to move to the global file.
+project's `.env` need to move to `auth.json`.
 
 ### 3. Run it
 
@@ -96,7 +105,7 @@ Type `/status` to check that the keys were found and where each came from:
 ```
 Provider:  openai    unavailable (OPENAI_API_KEY not set)
 Provider:  anthropic unavailable (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set)
-Provider:  deepseek  available (DEEPSEEK_API_KEY from ~/.config/goat/.env)
+Provider:  deepseek  available (key from ~/.config/goat/auth.json)
 ```
 
 `/model` picks a model, and `/help` lists the commands. See [Using goat](#using-goat) for
@@ -104,16 +113,20 @@ the rest.
 
 ### Optional: keep keys out of files
 
-Instead of the key, give goat a command that prints it: the key's name plus `_COMMAND`,
-in the global file or the shell. goat runs it at startup with `sh` (`cmd.exe` on
-Windows) and uses the one line it prints:
+Instead of the key, give goat a command that prints it. goat runs it at startup with
+`sh` (`cmd.exe` on Windows) and uses the one line it prints:
 
-```sh
-# ~/.config/goat/.env
-OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential"                     # 1Password
-ANTHROPIC_API_KEY_COMMAND="security find-generic-password -w -s anthropic-api-key"  # macOS Keychain
-DEEPSEEK_API_KEY_COMMAND="pass show api/deepseek"                                   # pass
+```json
+{
+  "openai": {"key_command": "op read op://Private/OpenAI/credential"},
+  "anthropic": {"key_command": "security find-generic-password -w -s anthropic-api-key"},
+  "deepseek": {"key_command": "pass show api/deepseek"}
+}
 ```
+
+That is 1Password, the macOS Keychain and `pass`. In the shell, the key's name plus
+`_COMMAND` does the same, e.g.
+`OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential"`.
 
 The command runs on the terminal, so a password manager can ask for a fingerprint or a
 passphrase. Input piped to goat, such as a prompt for `goat -p`, is not passed on to it,
@@ -122,46 +135,54 @@ redirected to.
 
 ### Optional: use a proxy or compatible API
 
-`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` and `DEEPSEEK_BASE_URL` send a provider's
-requests, and its key, somewhere other than its own API, such as a company proxy. Set
-them in the shell or the global file. goat says at startup where the requests go; see
-[Safety](#safety) for the checks it makes.
+`base_urls` in `config.json` sends a provider's requests, and its key, somewhere other
+than its own API, such as a company proxy:
+
+```json
+{"base_urls": {"anthropic": "https://llm-proxy.example.com"}}
+```
+
+`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` and `DEEPSEEK_BASE_URL` in the shell do the same.
+goat says at startup where the requests go; see [Safety](#safety) for the checks it makes.
 
 ### Optional: add other providers
 
-Local servers and other services go in `~/.config/goat/providers.json`, each under a
-name of your choosing:
+Local servers and other services go under `providers` in `~/.config/goat/config.json`,
+each under a name of your choosing:
 
 ```json
 {
-  "ollama": {
-    "api": "openai",
-    "base_url": "http://localhost:11434/v1",
-    "models": ["qwen3-coder"]
-  },
-  "openrouter": {
-    "api": "openai",
-    "base_url": "https://openrouter.ai/api/v1",
-    "key_env": "OPENROUTER_API_KEY",
-    "models": ["moonshotai/kimi-k2"]
-  },
-  "work-proxy": {
-    "api": "anthropic",
-    "base_url": "https://llm.example.com",
-    "key_command": "op read op://Work/llm-proxy/credential"
+  "providers": {
+    "ollama": {
+      "api": "openai",
+      "base_url": "http://localhost:11434/v1",
+      "models": ["qwen3-coder"]
+    },
+    "openrouter": {
+      "api": "openai",
+      "base_url": "https://openrouter.ai/api/v1",
+      "models": ["moonshotai/kimi-k2"]
+    },
+    "work-proxy": {
+      "api": "anthropic",
+      "base_url": "https://llm.example.com",
+      "key_env": "WORK_LLM_KEY"
+    }
   }
 }
 ```
+
+with the keys in `auth.json` under the same names, e.g. `{"openrouter": {"key": "sk-or-..."}}`.
 
 - `api` is the API the server speaks: `"openai"` for OpenAI-compatible Chat
   Completions (Ollama, LM Studio, vLLM, llama.cpp, LiteLLM, OpenRouter and most hosted
   services), or `"anthropic"` for the Anthropic Messages API.
 - `base_url` is where requests go, checked like the `*_BASE_URL` variables.
-- `key_env` names the variable that holds the key (a name in capitals, such as
-  `OPENROUTER_API_KEY`), set in the shell or the global `.env`;
-  `key_command` is a command that prints it, like the `_COMMAND` variables. An entry with
-  neither sends no key, as a local server needs. The file never holds a key itself, and
-  an entry never gets a built-in provider's key unless `key_env` names it.
+- The key comes from `auth.json`, under the entry's name. Or `key_env` names a variable
+  that holds it (a name in capitals, such as `WORK_LLM_KEY`), or `key_command` is a
+  command that prints it. An entry with none of these sends no key, as a local server
+  needs. `config.json` never holds a key itself, and an entry never gets a built-in
+  provider's key unless `key_env` names it.
 - `models` are offered by `/model`. Without it, `/model` offers whatever the server lists.
 - Pick a model as `name:model`, e.g. `/model ollama:qwen3-coder` or
   `goat -m ollama:qwen3-coder`; a model only one entry lists needs no prefix.
@@ -171,15 +192,21 @@ Anthropic-compatible entries get Claude's thinking and effort settings only for 
 named `claude-…`. Local servers often start with a small context window; if a long
 conversation loses track, raise it in the server's settings. goat checks the file at
 startup and stops with the line of a mistake, without printing the file. Entries show
-up in `/status`.
+up in `/status`. Entries can also go in `~/.config/goat/providers.json`, the older file
+for them, as an object of the same shape; a name in both files is a mistake.
 
 ### Which value wins
 
-- The shell wins: a variable it sets to a non-empty value keeps that value, and a key or
-  key command set there beats anything in the global file.
-- A provider's key is settled as a whole: if the shell supplies `ANTHROPIC_AUTH_TOKEN`, a
-  global `ANTHROPIC_API_KEY` is not used.
+- Settings come from the shell, then `config.json`, then the global `.env`. A setting
+  the shell sets to a non-empty value keeps it.
+- A provider's key is settled as a whole, in the same order: if the shell sets any of
+  its key variables (or their `_COMMAND`), `auth.json` and `.env` are not used for it;
+  otherwise if `auth.json` names it, `.env` is not. So if the shell supplies
+  `ANTHROPIC_AUTH_TOKEN`, an `ANTHROPIC_API_KEY` elsewhere is not used.
 - Within one place, a key that is set beats a command, which is then not run.
+- `model` and `effort` in `config.json` are where goat starts when there is no saved
+  conversation; `/model` and `/effort` choices still carry over. `GOAT_MODEL` and
+  `GOAT_EFFORT` override the saved ones.
 - A command that fails, prints nothing, prints more than one line or takes over 30
   seconds leaves its key unset, with a warning that never repeats its output; for
   Anthropic the other credential's command is tried next. On a timeout only the shell is
@@ -189,17 +216,19 @@ up in `/status`.
 
 - **`goat: command not found`**: the Go bin directory is not on your `PATH`; see
   [Install](#1-install).
-- **`no API key found; set OPENAI_API_KEY, ...`**: goat found no key in the shell or the
-  global file. The message names the file it looked for; check the path, and that each
-  line looks like `NAME=value`. If it adds that goat does not read the `.env` in this
-  folder, your keys are in the project's `.env`: move them to the global file.
-- **`... is not a valid .env file: check line N`**: a line in the global file is not
-  `NAME=value`, or a quote is not closed. goat never prints the file's contents, so open
-  it and look at that line.
+- **`no API key found; add one to ...`**: goat found no key in the shell, `auth.json` or
+  the global `.env`. The message names the file it looked for; check the path. If it
+  adds that goat does not read the `.env` in this folder, your keys are in the project's
+  `.env`: move them to `auth.json`.
+- **`.../config.json: line N: ...`** (or `auth.json`, `providers.json`): the line of a
+  mistake, such as a missing comma or an unknown field. goat never prints the file's
+  contents, so open it and look at that line.
+- **`... is not a valid .env file: check line N`**: a line in the global `.env` is not
+  `NAME=value`, or a quote is not closed.
 - **A provider shows as unavailable in `/status`**: the reason follows it, such as a key
   that is not set or a base URL goat refuses.
 - **Keys work in one folder but not another**: they are probably exported in one shell
-  session or a project's `.env`; put them in the global file.
+  session or a project's `.env`; put them in `auth.json`.
 
 ## Using goat
 
@@ -474,10 +503,10 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
-- A provider's key goes to its own API unless its `*_BASE_URL` says otherwise, and only
-  your shell or `~/.config/goat/.env` can say so. Likewise only
-  `~/.config/goat/providers.json` adds providers, never a file in the workspace, and an
-  entry's key goes only to its own `base_url`. goat refuses a base URL that is not
+- A provider's key goes to its own API unless its base URL says otherwise, and only your
+  shell or goat's own config directory (`base_urls` in `config.json`, or `.env`) can say
+  so. Likewise only `config.json` (or `providers.json`) there adds providers, never a
+  file in the workspace, and an entry's key goes only to its own `base_url`. goat refuses a base URL that is not
   http(s) or that carries a user name or password. For any other host it says at startup,
   and in `/status`, where the requests go and which file set the URL, flagging plain http
   to another machine as unencrypted (http to `localhost` is fine); an entry is
@@ -487,13 +516,15 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   redirect, which could otherwise take the key to a host goat never checked, and never
   send plain http through `HTTP_PROXY`, where the proxy would read the key (https goes
   through it as a tunnel the proxy cannot read).
-- `run_bash` commands do not inherit goat's API keys (including the variables entries
-  name in `key_env`), anything loaded from
-  `~/.config/goat/.env`, the providers' `*_BASE_URL` (a proxy may take a token in it), or
-  other variables named like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`,
-  `*_PASSWORD`, a key command's `*_COMMAND` and similar). `~/.config/goat/.env` is outside the
-  workspace, so file tools cannot reach it, but a command can read it like any other file
-  you can read: approving commands is what guards it. goat always asks before a command
+- Keys from `auth.json` never enter goat's environment, so no command it runs can
+  inherit them. `run_bash` commands also do not inherit the shell's API keys (including
+  the variables entries name in `key_env`), anything loaded from `~/.config/goat/.env`,
+  the providers' `*_BASE_URL` (a proxy may take a token in it), or other variables named
+  like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`, `*_PASSWORD`, a key
+  command's `*_COMMAND` and similar). File tools never open or search goat's config
+  directory, even when the workspace contains it (goat started in your home directory),
+  but a command can read `auth.json` like any other file you can read: approving
+  commands is what guards it. goat always asks before a command
   that names its config directory (`config/goat`, `XDG_CONFIG_HOME`, its full path, or a
   relative path from a directory above it) or runs inside it, even when commands
   otherwise run without asking. The check matches text, so quoting, globs, variables or
@@ -522,7 +553,7 @@ errors and diffs, yellow for warnings and approvals.
 
 ```sh
 /theme one-dark        # switch for this session; /theme default switches back
-GOAT_THEME=one-dark    # in the shell or ~/.config/goat/.env, to start with it
+"theme": "one-dark"    # in ~/.config/goat/config.json, to start with it
 ```
 
 All styling goes through a small style engine
@@ -574,41 +605,62 @@ styling on where it is off: piped output, `NO_COLOR` and `TERM=dumb` stay plain.
 
 ## Configuration
 
-Any of these can also be set in `~/.config/goat/.env`, so it doubles as
-goat's global settings file (e.g. `GOAT_CODEMODE=1`). `HOME` and `XDG_CONFIG_HOME` are
-the exception: they locate the global file, so they come only from the environment.
+goat's settings go in `~/.config/goat/config.json` (`$XDG_CONFIG_HOME/goat/config.json`
+when that is set), which never holds keys:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | | Enables OpenAI models |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | | Enables Claude models |
-| `DEEPSEEK_API_KEY` | | Enables DeepSeek models |
-| `OPENAI_API_KEY_COMMAND`, `ANTHROPIC_API_KEY_COMMAND`, `ANTHROPIC_AUTH_TOKEN_COMMAND`, `DEEPSEEK_API_KEY_COMMAND` | | A command that prints the key, run at startup when the key itself is not set (see [Setup](#optional-keep-keys-out-of-files)) |
-| `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or a compatible API (see [Safety](#safety) for the checks) |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek's Anthropic-compatible endpoint |
-| `GOAT_MODEL` | | Model to start with, overriding the saved one (e.g. `claude-opus-5-5`) |
-| `OPENAI_MODEL` | `gpt-6-luna` | OpenAI model when there is no saved session |
-| `GOAT_EFFORT` | | Effort to start with, overriding the saved one |
-| `OPENAI_REASONING_EFFORT` | `medium` | Effort when there is no saved session |
-| `GOAT_AUTO_COMPACT_TOKENS` | `80000` (OpenAI), `150000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits |
-| `GOAT_AUTO_APPROVE_BASH` | `false` | Run `run_bash` commands without asking |
-| `GOAT_CODEMODE` | `false` | Start in code mode |
-| `GOAT_ANTHROPIC_FALLBACKS` | `on` | Server-side refusal fallbacks for Claude models |
-| `GOAT_ANTHROPIC_CACHE_TTL` | `5m` | Lifetime of Claude prompt cache entries, `5m` or `1h` |
-| `GOAT_THEME` | `~/.config/goat/theme.json` | A built-in theme (`default`, `one-dark`) or a theme file |
-| `GOAT_REDUCED_MOTION` | | Keep the spinner still (it updates once a second) |
-| `NO_COLOR` | | Turn styling off |
-| `GOAT_FORCE_COLOR` | | Style output even when stdout is not a terminal, for example when piping through a pager that understands colors |
+```json
+{
+  "theme": "one-dark",
+  "model": "anthropic:claude-opus-5-5",
+  "effort": "high",
+  "auto_approve_bash": false,
+  "code_mode": false,
+  "auto_compact_tokens": 120000,
+  "base_urls": {"anthropic": "https://llm-proxy.example.com"},
+  "providers": {"ollama": {"api": "openai", "base_url": "http://localhost:11434/v1"}}
+}
+```
+
+| Field | Default | Purpose | Variable |
+| --- | --- | --- | --- |
+| `theme` | `default` | A built-in theme (`default`, `one-dark`) or the full path of a theme file (`~/` works) | `GOAT_THEME` |
+| `model` | the first provider with a key | Model to start with when there is no saved conversation | `GOAT_MODEL` overrides the saved one |
+| `effort` | `medium` | Effort to start with when there is no saved conversation | `GOAT_EFFORT` overrides the saved one |
+| `auto_approve_bash` | `false` | Run `run_bash` commands without asking | `GOAT_AUTO_APPROVE_BASH` |
+| `code_mode` | `false` | Start in code mode | `GOAT_CODEMODE` |
+| `auto_compact_tokens` | `80000` (OpenAI), `150000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits | `GOAT_AUTO_COMPACT_TOKENS` |
+| `anthropic_fallbacks` | `true` | Server-side refusal fallbacks for Claude models | `GOAT_ANTHROPIC_FALLBACKS` (`on`/`off`) |
+| `anthropic_cache_ttl` | `"5m"` | Lifetime of Claude prompt cache entries, `"5m"` or `"1h"` | `GOAT_ANTHROPIC_CACHE_TTL` |
+| `reduced_motion` | `false` | Keep the spinner still (it updates once a second) | `GOAT_REDUCED_MOTION` |
+| `base_urls` | | `openai`, `anthropic` or `deepseek` at a proxy or a compatible API (see [Safety](#safety) for the checks) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `DEEPSEEK_BASE_URL` |
+| `providers` | | Other providers (see [Setup](#optional-add-other-providers)) | |
+
+Each variable, set in the shell, wins over its field. goat refuses a field it does not
+know, and a field named like a key points to `auth.json`. A few variables have no field:
+`OPENAI_MODEL` and `OPENAI_REASONING_EFFORT` (older startup defaults), `NO_COLOR` (turn
+styling off) and `GOAT_FORCE_COLOR` (style output even when stdout is not a terminal,
+for example when piping through a pager that understands colors).
+
+The keys go in `~/.config/goat/auth.json`, by provider, as a `key`, an Anthropic
+`auth_token`, or a `key_command` (see [Setup](#2-add-an-api-key)). The shell's
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` and `DEEPSEEK_API_KEY`,
+and their `_COMMAND` forms, win over it.
+
+`~/.config/goat/.env`, the older way to set both, is still read below the JSON files:
+any variable above as `NAME=value`. `HOME` and `XDG_CONFIG_HOME` come only from the
+environment, since they locate the files.
 
 goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` when set):
 
 | File | |
 | --- | --- |
-| `~/.config/goat/.env` | API keys and other variables, loaded at startup in every folder; the shell wins. The workspace's `.env` is never read |
-| `~/.config/goat/providers.json` | Other providers: local servers, proxies and compatible APIs (see [Setup](#optional-add-other-providers)) |
+| `~/.config/goat/config.json` | Settings and providers; never keys |
+| `~/.config/goat/auth.json` | API keys or commands that print them; readable only by you |
+| `~/.config/goat/.env` | Older home for keys and settings, below the JSON files. The workspace's `.env` is never read |
+| `~/.config/goat/providers.json` | Older home for providers |
 | `AGENTS.md` (or `GOAT.md`, `CLAUDE.md`) in the workspace | Project instructions |
 | `~/.config/goat/AGENTS.md` | Your own instructions for every project |
-| `~/.config/goat/theme.json` | Theme |
+| `~/.config/goat/theme.json` | Your own theme |
 | `~/.config/goat/prices.json` | Model prices for cost reporting |
 
 ## Project layout

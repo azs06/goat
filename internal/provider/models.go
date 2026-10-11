@@ -21,7 +21,7 @@ const (
 	DefaultDeepSeekModel  = "deepseek-v4-pro"
 )
 
-// Names are the providers: the built-in ones, then the entries from providers.json.
+// Names are the providers: the built-in ones, then the entries from config.json.
 var Names = []string{OpenAI, Anthropic, DeepSeek}
 
 // Model is a model together with the provider that serves it.
@@ -52,27 +52,23 @@ var CredentialVars = map[string][]string{
 }
 
 // CredentialSource returns the variable that holds the provider's credentials,
-// or "" when none is set.
+// StoredSource for a key from auth.json, or "" when there is none.
 func CredentialSource(provider string) string {
-	for _, name := range CredentialVars[provider] {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return name
-		}
-	}
-	return ""
+	source, _, _ := Credential(provider)
+	return source
 }
 
 // Unavailable says why a provider cannot be used: it has no credentials, or its base URL
 // is invalid, or there is no such provider. It is nil for a usable provider.
 func Unavailable(provider string) error {
 	if entry, ok := entries[provider]; ok {
-		if !entry.Keyless() && CredentialSource(provider) == "" {
+		if (!entry.Keyless() || namedInAuth[provider]) && CredentialSource(provider) == "" {
 			return MissingCredentialsError(provider)
 		}
 		return nil
 	}
 	if !isBuiltIn(provider) {
-		return fmt.Errorf("there is no provider named %s; providers.json does not define it", provider)
+		return unknownProviderError(provider)
 	}
 	if CredentialSource(provider) == "" {
 		return MissingCredentialsError(provider)
@@ -98,8 +94,12 @@ func AvailableNames() []string {
 }
 
 func MissingCredentialsError(provider string) error {
+	if namedInAuth[provider] {
+		// Only a key_command can leave a provider auth.json names without a key.
+		return fmt.Errorf("%s models need a key, and its key_command in auth.json gave none", provider)
+	}
 	if entry, ok := entries[provider]; ok && entry.KeyCommand != "" {
-		return fmt.Errorf("%s models need a key, and its key_command in providers.json gave none", provider)
+		return fmt.Errorf("%s models need a key, and its key_command in %s gave none", provider, entry.sourceName())
 	}
 	if entry, ok := entries[provider]; ok {
 		return fmt.Errorf("%s models need %s, the variable its key_env names, to be set", provider, entry.KeyEnv)
@@ -179,7 +179,7 @@ func ResolveModel(raw string) (Model, error) {
 	}
 	if prefix := entryNamePrefix.FindString(raw); prefix != "" {
 		// qwen3:8b may be an Ollama model rather than a provider named qwen3.
-		message := fmt.Sprintf("there is no provider named %s", strings.TrimSuffix(prefix, ":"))
+		message := unknownProviderError(strings.TrimSuffix(prefix, ":")).Error()
 		if names := entryNames(); len(names) > 0 {
 			message += fmt.Sprintf("; if %s is a model, prefix it with the provider that serves it, e.g. %s:%s", raw, names[0], raw)
 		}

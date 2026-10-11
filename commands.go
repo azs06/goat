@@ -161,7 +161,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
 	if !previous.Conversation.Fits(model.Provider) {
-		return fmt.Errorf("the previous conversation cannot continue on %s: its api in providers.json has changed since", model.Provider)
+		return fmt.Errorf("the previous conversation cannot continue on %s: its api in config.json has changed since", model.Provider)
 	}
 	if err := provider.Unavailable(model.Provider); err != nil {
 		return fmt.Errorf("the previous conversation used %s: %w", model, err)
@@ -358,9 +358,11 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	}
 	for _, name := range provider.Names {
 		origin := credentialOrigin(name)
-		entry, isEntry := provider.LookupEntry(name)
+		_, isEntry := provider.LookupEntry(name)
 		switch err := provider.Unavailable(name); {
 		case err != nil && isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
+		case origin == "" && !isEntry && provider.NamedInAuth(name):
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
 		case origin == "" && !isEntry:
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
@@ -368,12 +370,14 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
 		default:
 			endpoint, _ := provider.ResolveEndpoint(name)
-			if isEntry && entry.Keyless() {
+			// An entry without key_env or key_command may still have a key in auth.json.
+			keyless := origin == ""
+			if keyless {
 				origin = "no key"
 			}
 			if endpoint.Custom {
 				origin += "; requests go to " + endpoint.Origin()
-				if !isEntry || !entry.Keyless() {
+				if !keyless {
 					origin += unencryptedNote(endpoint)
 				}
 			}

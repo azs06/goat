@@ -47,7 +47,7 @@ func (e Endpoint) Origin() string {
 
 // ResolveEndpoint reads the provider's base URL variable and checks it. A URL must use
 // http or https and must not carry a user name or password. Errors name the variable but
-// not its value. An entry's URL was checked when providers.json was read.
+// not its value. An entry's URL was checked when its file was read.
 func ResolveEndpoint(provider string) (Endpoint, error) {
 	if entry, ok := entries[provider]; ok {
 		return entry.endpoint, nil
@@ -181,4 +181,11 @@ func replaceFold(s, old, replacement string) string {
 		b.WriteString(replacement)
 		s, lower = s[i+len(old):], lower[i+len(old):]
 	}
+}
+
+// CheckBaseURL checks a base URL the way ResolveEndpoint does, naming it by label in
+// errors and never repeating it.
+func CheckBaseURL(label, raw string) error {
+	_, err := checkBaseURL(label, strings.TrimSpace(raw), "")
+	return err
 }
