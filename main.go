@@ -518,10 +518,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Before the terminal is set up, so a password manager can prompt on it.
+	envWarnings = append(envWarnings, runKeyCommands()...)
 	// Read at package initialization, before the files loaded.
 	style.Detect()
 	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
 	if len(provider.AvailableNames()) == 0 {
+		// A failed key command or an unreadable global file may be why.
+		for _, warning := range envWarnings {
+			fmt.Fprintln(os.Stderr, "[warn] "+warning)
+		}
 		log.Fatal(noAPIKeyMessage())
 	}
 

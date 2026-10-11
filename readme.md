@@ -49,7 +49,23 @@ variable it sets to a non-empty value keeps that value. A provider's key is sett
 whole: if the shell supplies `ANTHROPIC_AUTH_TOKEN`, a global `ANTHROPIC_API_KEY` is not
 used. goat does not read the `.env` in the project it works on: that file belongs to the
 project (its own keys, database URLs and so on), and a cloned repository could otherwise
-point a provider's base URL at a server that would receive your key. `/status` shows where
+point a provider's base URL at a server that would receive your key.
+
+To keep a key out of files altogether, give goat a command that prints it: the
+credential's name plus `_COMMAND`, in the shell or the global `.env`. goat runs it at
+startup with `sh` (`cmd.exe` on Windows), on the terminal, so a password manager can ask
+for a fingerprint or a passphrase, and uses the one line it prints. For example, in
+`~/.config/goat/.env`:
+
+```sh
+OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential"                 # 1Password
+ANTHROPIC_API_KEY_COMMAND="security find-generic-password -w -s anthropic-api-key"  # macOS Keychain
+DEEPSEEK_API_KEY_COMMAND="pass show api/deepseek"                               # pass
+```
+
+A key that is already set wins, and the command is not run. A command that fails, prints
+nothing or prints more than one line within 30 seconds leaves the provider unavailable
+with a warning that never repeats its output. `/status` shows where
 each provider's key came from, and goat warns if the global file can be read by other
 users. If the file cannot be parsed, goat names it (and the line, where it can tell)
 without printing its contents. Only providers with a key are offered. Run
@@ -407,6 +423,7 @@ the exception: they locate the global file, so they come only from the environme
 | `OPENAI_API_KEY` | | Enables OpenAI models |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | | Enables Claude models |
 | `DEEPSEEK_API_KEY` | | Enables DeepSeek models |
+| `OPENAI_API_KEY_COMMAND`, `ANTHROPIC_API_KEY_COMMAND`, `ANTHROPIC_AUTH_TOKEN_COMMAND`, `DEEPSEEK_API_KEY_COMMAND` | | A command that prints the key, run at startup when the key itself is not set (see [Quick start](#quick-start)) |
 | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or a compatible API (see [Safety](#safety) for the checks) |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek's Anthropic-compatible endpoint |
 | `GOAT_MODEL` | | Model to start with, overriding the saved one (e.g. `claude-opus-5-5`) |

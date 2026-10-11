@@ -17,7 +17,7 @@ Deferred enhancements to implement later:
 
 - Global .env follow-ups:
   - On Windows environment names are case-insensitive, but the loader's checks (HOME/XDG_CONFIG_HOME not settable, credential grouping) compare names case-sensitively, so `xdg_config_home=` or `anthropic_auth_token=` in ~/.config/goat/.env slips past them. Only the user's own file is read, so this is about mistakes, not attacks. Untested; needs a Windows run.
-  - A per-provider key command (`op read …`, `security find-generic-password -w …`) read only from the shell or the global file, so keys need not sit on disk.
+  - Key commands run once at startup. A short-lived token that expires mid-session is not fetched again; re-running the command after a 401 would cover it.
   - Provider entries in user config that bind a base URL to its own key (Codex-style), for proxies and OpenAI-compatible endpoints; a custom entry never inherits a built-in key.
 
 Notes:
