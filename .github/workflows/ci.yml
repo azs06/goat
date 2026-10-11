@@ -38,7 +38,9 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
 
       - name: Test (race detector, coverage)
-        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./...
+        # -count=1: a cached result keeps the coverage profile of the commit it came from,
+        # whose stale blocks for packages that changed since pull the total down.
+        run: go test -count=1 -race -coverprofile=coverage.out -coverpkg=./... ./...
 
       - name: Coverage floor
         run: |
