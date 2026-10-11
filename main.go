@@ -462,6 +462,9 @@ func footerParts(cfg *config) []string {
 	if cfg.codeMode {
 		parts = append(parts, "code mode")
 	}
+	if running := backgroundFooterPart(); running != "" {
+		parts = append(parts, running)
+	}
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())
 	}
@@ -622,12 +625,15 @@ func main() {
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
+	stopBackgroundOnSignal()
 
 	if opts.print {
 		// A one-shot run never asks anything: stdin may hold the prompt itself.
 		cfg.interactive = false
 		cfg.approver.interactive = false
-		os.Exit(runOneShot(cfg, opts))
+		code := runOneShot(cfg, opts)
+		stopBackgroundOnExit(os.Stderr)
+		os.Exit(code)
 	}
 	if opts.newConversation && !cfg.conversation.conversation.IsEmpty() {
 		replaceConversation(cfg, conversationState{})
@@ -643,6 +649,12 @@ func main() {
 		fmt.Println(formatWarning(keylessNotice()))
 	}
 	runInteractive(cfg)
+}
+
+// sayGoodbye stops what goat left running in the background and says goodbye.
+func sayGoodbye() {
+	stopBackgroundOnExit(os.Stdout)
+	fmt.Println("Closing the Goat... Goodbye!")
 }
 
 // runInteractive is the prompt loop: it reads a prompt or command, runs it, and
@@ -662,7 +674,7 @@ func runInteractive(cfg *config) {
 		gap = true
 		if errors.Is(err, context.Canceled) {
 			if time.Since(lastInterrupt) < exitConfirmWindow {
-				fmt.Println("Closing the Goat... Goodbye!")
+				sayGoodbye()
 				return
 			}
 			lastInterrupt = time.Now()
@@ -673,7 +685,7 @@ func runInteractive(cfg *config) {
 			if !errors.Is(err, io.EOF) {
 				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
 			}
-			fmt.Println("Closing the Goat... Goodbye!")
+			sayGoodbye()
 			return
 		}
 		if strings.TrimSpace(text) == "" {
@@ -691,7 +703,7 @@ func runInteractive(cfg *config) {
 		switch {
 		case err == nil:
 		case errors.Is(err, errExitRequested):
-			fmt.Println("Closing the Goat... Goodbye!")
+			sayGoodbye()
 			return
 		case errors.Is(err, context.Canceled):
 			if style.Enabled() {

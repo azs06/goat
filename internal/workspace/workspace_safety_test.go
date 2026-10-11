@@ -285,7 +285,7 @@ func TestRunBashReturnsWhileBackgroundProcessRuns(t *testing.T) {
 
 	start := time.Now()
 	output, err := RunBash(context.Background(), "sleep 20 & echo $! > bg.pid; echo started", ".")
-	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
+	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")); BackgroundGroups() })
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
@@ -322,6 +322,9 @@ func TestRunBashTimeoutKillsProcessGroup(t *testing.T) {
 			t.Fatal("expected the background child to be killed with the shell")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if groups := BackgroundGroups(); len(groups) != 0 {
+		t.Fatalf("expected a killed group not to be recorded, got %+v", groups)
 	}
 }
 
@@ -523,7 +526,7 @@ func TestRunBashCommandFinishingBeforeDeadlineIsNotReportedAsTimeout(t *testing.
 	t.Cleanup(func() { bashToolTimeout = previousTimeout })
 
 	output, err := RunBash(context.Background(), "echo done; sleep 20 & echo $! > bg.pid", ".")
-	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
+	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")); BackgroundGroups() })
 	if err != nil {
 		t.Fatalf("expected a clean exit to succeed, got %v", err)
 	}
@@ -1222,5 +1225,121 @@ func TestUndoReplacesAFileThatGainedHardLinks(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "outside.txt")); string(data) != "edited" {
 		t.Fatalf("expected the outside link to be left alone, got %q", data)
+	}
+}
+
+func TestRunBashKeepsTrackOfWhatItLeavesRunning(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 500 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	// A server started the way the tool description asks: in the background, with its
+	// output redirected.
+	output, err := RunBash(context.Background(), "sleep 30 >/dev/null 2>&1 & echo $! > bg.pid; echo started", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := readPIDFile(t, filepath.Join(workspace, "bg.pid"))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if strings.Contains(output, "background") {
+		t.Fatalf("expected the tool output to stay as it was, got %q", output)
+	}
+	groups := settledBackgroundGroups(t, 1)
+	if !strings.Contains(groups[0].Command, "sleep 30") || groups[0].Dir != "." {
+		t.Fatalf("got %+v", groups)
+	}
+	processes, err := GroupProcesses(groups[0].PGID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, process := range processes {
+		found = found || process.PID == pid && strings.Contains(process.Command, "sleep 30")
+	}
+	if !found {
+		t.Fatalf("expected pid %d in %+v", pid, processes)
+	}
+
+	// A command that leaves nothing behind is not listed (once whatever the login
+	// profile started has exited).
+	if _, err := RunBash(context.Background(), "echo quick", "."); err != nil {
+		t.Fatal(err)
+	}
+	settledBackgroundGroups(t, 1)
+
+	if err := StopBackgroundGroup(groups[0].PGID); err != nil {
+		t.Fatal(err)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatal("expected the background process to be stopped")
+	}
+	if len(BackgroundGroups()) != 0 {
+		t.Fatalf("expected the stopped group to be forgotten, got %+v", BackgroundGroups())
+	}
+	if err := StopBackgroundGroup(groups[0].PGID); err == nil {
+		t.Fatal("expected a forgotten group not to be signalled again")
+	}
+}
+
+func TestStopBackgroundGroupKillsWhatIgnoresSIGTERM(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 300 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	if _, err := RunBash(context.Background(), "(trap '' TERM; sleep 30) >/dev/null 2>&1 & echo $! > bg.pid", "."); err != nil {
+		t.Fatal(err)
+	}
+	pid := readPIDFile(t, filepath.Join(workspace, "bg.pid"))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	settledBackgroundGroups(t, 1)
+	stopped := StopAllBackground()
+	if len(stopped) != 1 || syscall.Kill(pid, 0) == nil {
+		t.Fatalf("expected the group to be killed, stopped %+v", stopped)
+	}
+}
+
+func TestBackgroundGroupsForgetsGroupsThatExited(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+
+	if _, err := RunBash(context.Background(), "sleep 2 >/dev/null 2>&1 &", "."); err != nil {
+		t.Fatal(err)
+	}
+	if len(BackgroundGroups()) != 1 {
+		t.Fatalf("expected the sleep to be recorded, got %+v", BackgroundGroups())
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	for len(BackgroundGroups()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected the finished group to be forgotten")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := stopGroup(1); err == nil || groupAlive(0) || groupAlive(1) {
+		t.Fatal("expected process groups 0 and 1 to be refused")
+	}
+}
+
+// settledBackgroundGroups waits up to two seconds for the recorded groups to come down
+// to want, since a login profile can leave a short-lived helper behind each command.
+func settledBackgroundGroups(t *testing.T, want int) []BackgroundGroup {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		groups := BackgroundGroups()
+		if len(groups) == want {
+			return groups
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d background groups, got %+v", want, groups)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

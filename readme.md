@@ -335,6 +335,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
+| `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2`, `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
 | `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
 | `/tools` | List the agent's tools. |
@@ -600,6 +601,12 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   model sees. Commands time out after 30 seconds, and everything a command started is
   killed with it. Changes made through `run_bash` are not snapshotted. A command that
   mentions `.goat` is always confirmed, even when commands otherwise run without asking.
+- What a command leaves running in the background, such as a server started with `&`
+  (with its output redirected to a file, or it stops at its next write), keeps running
+  after the command returns. goat keeps track of it by process group: `/ps` lists and
+  stops it, and goat stops it when it exits (also when its terminal closes or it gets
+  SIGTERM), saying what it stopped. A process that starts a session of its own, such as a
+  daemon, leaves the group and is not tracked. On Windows nothing is tracked.
 
 ## Themes
 

@@ -1225,6 +1225,16 @@ func RunBash(ctx context.Context, command, workdir string) (string, error) {
 
 	result := fmt.Sprintf("Bash output for %q in %s:\n%s", command, relDir, trimmedOutput)
 
+	// A shell that exited on its own may leave processes it started running in its group,
+	// such as a server started with "&". goat keeps track of them so the user can see and
+	// stop them (/ps). An interrupted or timed-out command's group was killed instead.
+	// Login profiles can start helpers that linger a moment after the shell exits, so
+	// what is recorded here is checked again whenever the list is read.
+	killed := err != nil && !errors.Is(err, exec.ErrWaitDelay) && (ctx.Err() != nil || errors.Is(runCtx.Err(), context.DeadlineExceeded))
+	if !killed && cmd.Process != nil {
+		rememberIfAlive(cmd.Process.Pid, command, relDir)
+	}
+
 	// Check the exit result first: a command that exited cleanly was not killed, even if
 	// the deadline passed while waiting for a background process to release the output.
 	switch {

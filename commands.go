@@ -39,6 +39,7 @@ func init() {
 	list := []*cliCommand{
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
+		{name: "ps", usage: "/ps [stop n|all]", description: "List the commands goat left running in the background, such as a dev server, and stop them", aliases: []string{"jobs"}, callback: commandProcesses},
 		{name: "plan", usage: "/plan [on|off]", description: "Toggle plan mode: goat reads and plans but changes nothing", callback: commandPlan},
 		{name: "codemode", usage: "/codemode [on|off]", description: "Toggle code mode: goat can batch tool calls in one run_code script", callback: commandCodeMode},
 		{name: "diff", usage: "/diff [staged]", description: "Show the uncommitted changes in the workspace's git repository", callback: commandDiff},
