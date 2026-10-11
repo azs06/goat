@@ -18,6 +18,7 @@ Deferred enhancements to implement later:
 - Global .env follow-ups:
   - Key commands run once at startup. A short-lived token that expires mid-session is not fetched again; re-running the command after a 401 would cover it.
   - Provider entries in user config that bind a base URL to its own key (Codex-style), for proxies and OpenAI-compatible endpoints; a custom entry never inherits a built-in key.
+  - Considered and rejected: hiding plain `*_TOKEN` variables such as `GH_TOKEN` from run_bash. `gh` and similar tools read them, so the agent's `gh` commands would stop working.
 
 Notes:
 - Session compaction runs automatically once a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS` and is also available manually via `compact`.

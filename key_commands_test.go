@@ -128,3 +128,17 @@ func TestProcessExplainsAFailedKeyCommand(t *testing.T) {
 		t.Fatalf("got %q (exit %d)", errOut, code)
 	}
 }
+
+func TestProcessKeepsPipedInputFromAKeyCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the test command is sh")
+	}
+	workDir := t.TempDir()
+	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""))
+	// cat would swallow the piped prompt if the command shared goat's input.
+	env := []string{"ANTHROPIC_API_KEY_COMMAND=cat >/dev/null; echo sk-test", "ANTHROPIC_BASE_URL=" + fake.server.URL}
+	out, errOut, code := runGoat(t, workDir, "what is 2+2", env, "-p", "-m", "claude-opus-5-5")
+	if code != 0 || strings.TrimSpace(out) != "ok" || !strings.Contains(fake.request(0).raw, "what is 2+2") {
+		t.Fatalf("stdout %q stderr %q exit %d", out, errOut, code)
+	}
+}

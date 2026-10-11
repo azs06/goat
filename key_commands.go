@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/terminal"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -54,13 +55,17 @@ func runKeyCommands() (warnings []string) {
 
 // runKeyCommand runs command in the user's shell and returns the one line it prints.
 // The command shares goat's terminal, so a password manager can prompt on it; only its
-// standard output is captured.
+// standard output is captured. Piped input is not passed on: it may be the prompt for
+// goat -p.
 func runKeyCommand(command string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keyCommandTimeout)
 	defer cancel()
 	cmd := shellCommand(ctx, command)
 	var stdout bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &stdout, os.Stderr
+	if terminal.StdinIsTerminal() {
+		cmd.Stdin = os.Stdin
+	}
+	cmd.Stdout, cmd.Stderr = &stdout, os.Stderr
 	// A helper the command leaves running must not hold goat's startup.
 	cmd.WaitDelay = time.Second
 	err := cmd.Run()
