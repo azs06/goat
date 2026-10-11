@@ -46,10 +46,23 @@ go install .` (or `go run .` to try it without installing).
 ### 2. Add an API key
 
 goat needs a key for at least one provider: OpenAI for OpenAI models, Anthropic for
-Claude models, DeepSeek for DeepSeek models. Only providers with a key are offered (and
-the keyless local servers you [add yourself](#optional-add-other-providers)).
+Claude models, DeepSeek for DeepSeek models, or one of the
+[other providers](#other-providers) it knows, such as OpenRouter or Gemini. Only
+providers with a key are offered (and the keyless local servers you
+[add yourself](#optional-add-other-providers)).
 
-Put the keys in `~/.config/goat/auth.json` (`$XDG_CONFIG_HOME/goat/auth.json` when
+The quickest way is to start goat and type `/login`: pick the provider and paste the
+key. OpenAI, Anthropic, OpenRouter, xAI and Meta also list signing in with your account
+(ChatGPT Plus/Pro, Claude Pro/Max, OpenRouter, Grok or X, Meta Muse), which is not
+available yet,
+so choose **API key** there; the other providers take only a key. goat
+does not show the key as you type it, saves it to `~/.config/goat/auth.json` (readable
+only by you), checks it by listing the provider's models, and starts using it at once.
+`/login openai` skips the list. Without a key goat still starts at a terminal, so
+`/login` is there on the first run; a saved conversation waits, untouched, until a key
+gives goat a model to continue it on.
+
+Or put the keys in `~/.config/goat/auth.json` (`$XDG_CONFIG_HOME/goat/auth.json` when
 `XDG_CONFIG_HOME` is set). goat reads it whichever folder it starts in, and keeps the
 keys in its own memory, out of the environment of every command it runs:
 
@@ -158,9 +171,9 @@ each under a name of your choosing:
       "base_url": "http://localhost:11434/v1",
       "models": ["qwen3-coder"]
     },
-    "openrouter": {
+    "my-router": {
       "api": "openai",
-      "base_url": "https://openrouter.ai/api/v1",
+      "base_url": "https://router.example.com/v1",
       "models": ["moonshotai/kimi-k2"]
     },
     "work-proxy": {
@@ -172,7 +185,9 @@ each under a name of your choosing:
 }
 ```
 
-with the keys in `auth.json` under the same names, e.g. `{"openrouter": {"key": "sk-or-..."}}`.
+with the keys in `auth.json` under the same names, e.g. `{"my-router": {"key": "sk-..."}}`
+(or `/login my-router`). The [providers goat already knows](#other-providers), such as
+OpenRouter, need no entry, only a key; an entry with the same name replaces goat's.
 
 - `api` is the API the server speaks: `"openai"` for OpenAI-compatible Chat
   Completions (Ollama, LM Studio, vLLM, llama.cpp, LiteLLM, OpenRouter and most hosted
@@ -216,8 +231,9 @@ for them, as an object of the same shape; a name in both files is a mistake.
 
 - **`goat: command not found`**: the Go bin directory is not on your `PATH`; see
   [Install](#1-install).
-- **`no API key found; add one to ...`**: goat found no key in the shell, `auth.json` or
-  the global `.env`. The message names the file it looked for; check the path. If it
+- **`no API key found; ...`**: goat found no key in the shell, `auth.json` or the global
+  `.env`, and it was not started at a terminal (with `-p`, or with piped input), where it
+  would have offered `/login`. The message names the file it looked for; check the path. If it
   adds that goat does not read the `.env` in this folder, your keys are in the project's
   `.env`: move them to `auth.json`.
 - **`.../config.json: line N: ...`** (or `auth.json`, `providers.json`): the line of a
@@ -306,6 +322,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | --- | --- |
 | `/model [name]` | Pick a model with the arrow keys (type to filter), or `/model <name or number>`. The last entry, and `/model list`, ask each provider for every model. Only providers with an API key are listed. |
 | `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
+| `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter, xAI and Meta, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
 | `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
@@ -325,7 +342,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/help` | List the commands and keys. |
 | `/exit` (`/quit`) | Exit. |
 
-The pickers (`/model`, `/effort`, `/output`) take Up/Down to move, typing to filter,
+The pickers (`/model`, `/effort`, `/output`, `/login`) take Up/Down to move, typing to filter,
 Enter to choose and Esc to cancel.
 
 The older commands (`help`, `exit`, `quit`, `status`, `compact`, `undo`, `tools`, `history`,
@@ -480,6 +497,39 @@ prompt, so the cached prompt prefix stays the same and editing them costs no cac
   turns thinking off; other levels map to DeepSeek's `low`, `high` and `max`. Anthropic
   credentials are never sent to DeepSeek.
 
+### Other providers
+
+Beyond the three above, goat knows these OpenAI-compatible APIs. Each needs only a key,
+from `/login`, `auth.json` under the name below, or the variable; `/status` lists the
+ones that have one. They list no models of their own: `/model` asks the provider
+(the picker's last entry, or `/model list`), and any model can be picked by name, e.g.
+`/model openrouter:moonshotai/kimi-k2`.
+
+| Name | Provider | Variable | Base URL |
+| --- | --- | --- | --- |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
+| `gemini` | Google Gemini | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `xai` | xAI (Grok) | `XAI_API_KEY` | `https://api.x.ai/v1` |
+| `meta` | Meta (Muse) | `META_API_KEY` | `https://api.meta.ai/v1` |
+| `mistral` | Mistral | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1` |
+| `groq` | Groq | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` |
+| `together` | Together AI | `TOGETHER_API_KEY` | `https://api.together.ai/v1` |
+| `fireworks` | Fireworks AI | `FIREWORKS_API_KEY` | `https://api.fireworks.ai/inference/v1` |
+| `cerebras` | Cerebras | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` |
+| `moonshot` | Moonshot (Kimi) | `MOONSHOT_API_KEY` | `https://api.moonshot.ai/v1` |
+| `zai` | Z.ai (GLM) | `ZAI_API_KEY` | `https://api.z.ai/api/paas/v4` |
+| `qwen` | Qwen (Alibaba Model Studio, international) | `DASHSCOPE_API_KEY` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| `minimax` | MiniMax | `MINIMAX_API_KEY` | `https://api.minimax.io/v1` |
+
+Like the built-in keys, these variables are kept from `run_bash` commands once goat
+knows them. A key for another region, such as Moonshot's or Qwen's mainland China API,
+needs an entry of the same name in `config.json` with that region's `base_url`, e.g.
+`"moonshot": {"api": "openai", "base_url": "https://api.moonshot.cn/v1", "key_env":
+"MOONSHOT_API_KEY"}`. The entry replaces goat's, so it needs `key_env` when the key is in
+the environment; a key saved with `/login` or in `auth.json` works without it. A model
+an entry lists keeps its name: with an Ollama entry listing `mistral:7b`, that model is
+Ollama's, not Mistral's.
+
 ## Conversations and state
 
 goat keeps its state in `.goat/` inside the workspace:
@@ -516,6 +566,9 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   redirect, which could otherwise take the key to a host goat never checked, and never
   send plain http through `HTTP_PROXY`, where the proxy would read the key (https goes
   through it as a tunnel the proxy cannot read).
+- `/login` never shows the key as it is typed or pasted, only how many characters it
+  has; it writes `auth.json` in one step, readable only by you, keeping what else the
+  file holds; and an error from checking the key has the key cut out of it.
 - Keys from `auth.json` never enter goat's environment, so no command it runs can
   inherit them. `run_bash` commands also do not inherit the shell's API keys (including
   the variables entries name in `key_env`), anything loaded from `~/.config/goat/.env`,

@@ -22,7 +22,8 @@ func providerEntriesPath() string {
 }
 
 // loadProviderEntries registers the providers config.json adds (fromConfig) and those
-// in providers.json, the older file for them. A file goat cannot open is skipped with a
+// in providers.json, the older file for them, then goat's presets, such as openrouter,
+// that neither file replaces. A file goat cannot open is skipped with a
 // warning; one it cannot parse stops goat, naming the file and line without quoting it.
 // A provider both files define is a mistake too.
 func loadProviderEntries(fromConfig []provider.Entry) (warnings []string, err error) {
@@ -49,6 +50,9 @@ func loadProviderEntries(fromConfig []provider.Entry) (warnings []string, err er
 			entries = append(entries, more...)
 		}
 	}
+	entries = append(entries, provider.PresetEntries(func(name string) bool {
+		return slices.ContainsFunc(entries, func(e provider.Entry) bool { return e.Name == name })
+	})...)
 	provider.RegisterEntries(entries)
 	return warnings, nil
 }

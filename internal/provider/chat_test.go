@@ -386,3 +386,20 @@ func TestChatProviderGivesEachResponseItsOwnID(t *testing.T) {
 		seen[resp.ID] = true
 	}
 }
+
+func TestChatProviderListsModelsFromABareArray(t *testing.T) {
+	for body, want := range map[string]string{
+		`[{"id":"meta-llama/Llama-4","object":"model"},{"id":"qwen/Qwen3"}]`: "meta-llama/Llama-4 qwen/Qwen3",
+		`{"object":"list","data":[{"id":"a"},{"id":""}]}`:                    "a",
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, body)
+		}))
+		models, err := newChatProvider("together", server.URL+"/v1", "k").ListModels(context.Background())
+		server.Close()
+		if err != nil || strings.Join(models, " ") != want {
+			t.Fatalf("%s: got %v, %v", body, models, err)
+		}
+	}
+}

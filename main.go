@@ -55,6 +55,9 @@ type config struct {
 	// lets the agent run run_code scripts that call the tools from JavaScript. Like
 	// plan mode it is told to the model in each prompt; the tool list stays the same.
 	codeMode bool
+	// pendingSaved is the saved session goat started without a model to continue it
+	// on. It is left on disk untouched, and restored once /login or /model picks a model.
+	pendingSaved *savedSession
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -211,6 +214,12 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
+	if cfg.model.IsZero() {
+		// Without a key there is no model yet; the session files wait for one.
+		activeConversationID = newConversationID()
+		cfg.pendingSaved = saved
+		return
+	}
 	if saved.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, saved)
 		return
@@ -510,6 +519,12 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 	return text, nil
 }
 
+// keylessStartFails reports a start that cannot go on without a key: a one-shot run, or
+// input that is not a terminal, where nobody can type /login.
+func keylessStartFails(keyless, print, stdinTerminal bool) bool {
+	return keyless && (print || !stdinTerminal)
+}
+
 // exitConfirmWindow is how soon a second Ctrl-C at the prompt has to follow the first
 // to exit.
 const exitConfirmWindow = 2 * time.Second
@@ -569,7 +584,9 @@ func main() {
 	// Read at package initialization, before the files loaded.
 	style.Detect()
 	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
-	if len(provider.AvailableNames()) == 0 {
+	// Without a key, an interactive session still starts, so /login can add one.
+	keyless := len(provider.AvailableNames()) == 0
+	if keylessStartFails(keyless, opts.print, terminal.StdinIsTerminal()) {
 		// A failed key command or an unreadable global file may be why.
 		for _, warning := range envWarnings {
 			fmt.Fprintln(os.Stderr, "[warn] "+warning)
@@ -608,6 +625,9 @@ func main() {
 	}
 
 	printWelcome(cfg)
+	if keyless {
+		fmt.Println(formatWarning(keylessNotice()))
+	}
 	runInteractive(cfg)
 }
 

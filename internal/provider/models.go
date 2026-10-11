@@ -98,6 +98,9 @@ func MissingCredentialsError(provider string) error {
 		// Only a key_command can leave a provider auth.json names without a key.
 		return fmt.Errorf("%s models need a key, and its key_command in auth.json gave none", provider)
 	}
+	if entry, ok := entries[provider]; ok && entry.Preset {
+		return fmt.Errorf("%s models need a key; add one with /login, or set %s", provider, entry.KeyEnv)
+	}
 	if entry, ok := entries[provider]; ok && entry.KeyCommand != "" {
 		return fmt.Errorf("%s models need a key, and its key_command in %s gave none", provider, entry.sourceName())
 	}
@@ -111,11 +114,11 @@ func isKnown(name string) bool {
 	return slices.Contains(Names, name)
 }
 
-// entryNames are the registered entries' names, in order.
+// entryNames are the names of the entries from the user's files, in order.
 func entryNames() []string {
 	var names []string
 	for _, name := range Names {
-		if _, ok := entries[name]; ok {
+		if entry, ok := entries[name]; ok && !entry.Preset {
 			names = append(names, name)
 		}
 	}
@@ -152,14 +155,6 @@ func ResolveModel(raw string) (Model, error) {
 		return Model{}, fmt.Errorf("model name is empty")
 	}
 
-	if provider, id, ok := strings.Cut(raw, ":"); ok && isKnown(strings.ToLower(provider)) {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return Model{}, fmt.Errorf("model name is empty")
-		}
-		return Model{Provider: strings.ToLower(provider), ID: id}, nil
-	}
-
 	// A model that exactly one entry lists needs no prefix, even when its name looks
 	// like a built-in provider's: an Ollama entry's gpt-oss:20b is meant for Ollama.
 	var listedBy []string
@@ -167,6 +162,15 @@ func ResolveModel(raw string) (Model, error) {
 		if entry, ok := entries[name]; ok && slices.Contains(entry.Models, raw) {
 			listedBy = append(listedBy, name)
 		}
+	}
+
+	// A preset's name does not take a model an entry lists: mistral:7b is Ollama's.
+	if provider, id, ok := strings.Cut(raw, ":"); ok && isKnown(strings.ToLower(provider)) && !(IsPreset(strings.ToLower(provider)) && len(listedBy) > 0) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return Model{}, fmt.Errorf("model name is empty")
+		}
+		return Model{Provider: strings.ToLower(provider), ID: id}, nil
 	}
 	if len(listedBy) == 1 {
 		return Model{Provider: listedBy[0], ID: raw}, nil

@@ -85,7 +85,8 @@ Flags:
   -v, --version        print the version and exit
   -h, --help           show this help
 
-API keys go in ~/.config/goat/auth.json, e.g. {"openai": {"key": "sk-..."}}, or
+Type /login in goat to save an API key, or put keys in
+~/.config/goat/auth.json, e.g. {"openai": {"key": "sk-..."}}, or
 {"openai": {"key_command": "op read op://Private/OpenAI/credential"}}; the shell's
 OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and DEEPSEEK_API_KEY win
 over it. Settings go in ~/.config/goat/config.json, e.g. {"theme": "one-dark"}.

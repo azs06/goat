@@ -20,6 +20,8 @@ type selectOption struct {
 	group string
 	// current marks the value in use now.
 	current bool
+	// disabled options are listed but cannot be picked; the cursor passes over them.
+	disabled bool
 }
 
 // labelText is the label as listed, with the marker of the value in use.
@@ -61,39 +63,48 @@ func (s *selector) handleKey(key string) (done bool, chosen int) {
 	shown := s.visible()
 	switch key {
 	case "\r", "\n":
-		if len(shown) == 0 {
+		if len(shown) == 0 || s.options[shown[s.selected]].disabled {
 			return false, -1
 		}
 		return true, shown[s.selected]
 	case "\x1b", "\x03", "\x04":
 		return true, -1
 	case "\x10", "\x1b[A", "\x1bOA":
-		if len(shown) > 0 {
-			s.selected = (s.selected - 1 + len(shown)) % len(shown)
-		}
+		s.move(shown, s.selected, -1)
 	case "\x0e", "\x1b[B", "\x1bOB", "\t":
-		if len(shown) > 0 {
-			s.selected = (s.selected + 1) % len(shown)
-		}
+		s.move(shown, s.selected, 1)
 	case "\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[5~": // Home, Page Up
-		s.selected = 0
+		s.move(shown, -1, 1)
 	case "\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[6~": // End, Page Down
-		s.selected = max(len(shown)-1, 0)
+		s.move(shown, len(shown), -1)
 	case "\x7f", "\x08":
 		if len(s.filter) > 0 {
 			s.filter = s.filter[:len(s.filter)-1]
-			s.selected = 0
+			s.move(s.visible(), -1, 1)
 		}
 	case "\x15":
 		s.filter = nil
-		s.selected = 0
+		s.move(s.visible(), -1, 1)
 	default:
 		if runes := []rune(key); len(runes) == 1 && !unicode.IsControl(runes[0]) {
 			s.filter = append(s.filter, runes[0])
-			s.selected = 0
+			s.move(s.visible(), -1, 1)
 		}
 	}
 	return false, -1
+}
+
+// move selects the next option that can be picked from position from, a step at a time
+// in direction step, wrapping around. With none that can be picked it selects the first.
+func (s *selector) move(shown []int, from, step int) {
+	for i := 1; i <= len(shown); i++ {
+		next := ((from+step*i)%len(shown) + len(shown)) % len(shown)
+		if !s.options[shown[next]].disabled {
+			s.selected = next
+			return
+		}
+	}
+	s.selected = 0
 }
 
 // render draws the list, replacing the previous drawing. The cursor ends on the last
@@ -143,6 +154,10 @@ func (s *selector) render(width int) string {
 			hint = style.TruncateToWidth("  "+option.hint, available-style.VisibleWidth(head))
 		}
 		head = style.TruncateToWidth(head, available)
+		if option.disabled {
+			lines = append(lines, style.Subtle.Render(head+hint))
+			continue
+		}
 		if i == s.selected {
 			lines = append(lines, style.Selected.Render(head)+style.Muted.Render(hint))
 		} else {
@@ -187,8 +202,9 @@ func selectOptionInteractive(ctx context.Context, c *config, title string, optio
 	defer restore()
 
 	s := &selector{title: title, options: options}
+	s.move(s.visible(), -1, 1)
 	for i, option := range options {
-		if option.current {
+		if option.current && !option.disabled {
 			s.selected = i
 		}
 	}
