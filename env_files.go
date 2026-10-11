@@ -32,6 +32,24 @@ func goatConfigDir() string {
 	return filepath.Join(home, ".config", "goat")
 }
 
+// mentionsConfigDir reports a run_bash command that names goat's config directory, which
+// holds the global .env. Such commands are always confirmed, even when commands run
+// without asking. It is a tripwire, not a boundary: a glob or a path built at run time
+// gets past it.
+func mentionsConfigDir(command string) bool {
+	lower := strings.ToLower(command)
+	needles := []string{"config/goat", `config\goat`, "xdg_config_home"}
+	if dir := goatConfigDir(); dir != "" {
+		needles = append(needles, strings.ToLower(dir))
+	}
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // globalEnvPath is the .env file goat reads in every workspace, or "" when there is no
 // config directory.
 func globalEnvPath() string {

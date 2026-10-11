@@ -350,7 +350,10 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   `~/.config/goat/.env`, or other variables named like credentials (`*_API_KEY`, `*_SECRET`,
   `*_AUTH_TOKEN`, `*_PASSWORD` and similar). `~/.config/goat/.env` is outside the
   workspace, so file tools cannot reach it, but a command can read it like any other file
-  you can read: approving commands is what guards it.
+  you can read: approving commands is what guards it. goat always asks before a command
+  that names its config directory (`config/goat`, `XDG_CONFIG_HOME`), even when commands
+  otherwise run without asking; a glob or a path built at run time still gets past that
+  check.
 - Every change made by a file tool is snapshotted first, so `/undo` can restore it,
   including removing directories the change created. The last 100 operations stay
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
