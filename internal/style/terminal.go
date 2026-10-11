@@ -40,6 +40,13 @@ func detectTrueColor() bool {
 	return false
 }
 
+// Detect reads the environment again, for settings that only became known after
+// startup, such as ones loaded from a .env file.
+func Detect() {
+	enabled = detectEnabled()
+	trueColor = detectTrueColor()
+}
+
 // Enabled reports whether output is styled at all.
 func Enabled() bool { return enabled }
 

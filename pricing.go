@@ -35,14 +35,10 @@ var userPrices struct {
 }
 
 func userPricesPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "goat", "prices.json")
+	if dir := goatConfigDir(); dir != "" {
+		return filepath.Join(dir, "prices.json")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "goat", "prices.json")
+	return ""
 }
 
 // priceFor returns the price of model, or false when it is unknown. Prices in the

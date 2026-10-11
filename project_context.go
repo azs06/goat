@@ -22,14 +22,10 @@ var projectInstructionFiles = []string{"AGENTS.md", "GOAT.md", "CLAUDE.md"}
 const maxInstructionBytes = 32 * 1024
 
 func userInstructionsPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "goat", "AGENTS.md")
+	if dir := goatConfigDir(); dir != "" {
+		return filepath.Join(dir, "AGENTS.md")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "goat", "AGENTS.md")
+	return ""
 }
 
 type instructionFile struct {

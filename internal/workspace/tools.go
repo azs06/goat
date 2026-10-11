@@ -54,8 +54,8 @@ func IsStateDirName(name string) bool {
 	return strings.EqualFold(strings.TrimRight(name, ". "), StateDirName)
 }
 
-// isSecretFileName reports files that conventionally hold credentials, such as the
-// .env goat itself loads API keys from. File tools refuse them, so their contents never
+// isSecretFileName reports files that conventionally hold credentials, such as a
+// project's .env. File tools refuse them, so their contents never
 // reach the model without the user running a command for it. Templates meant to be
 // shared (.env.example and the like) stay readable.
 func isSecretFileName(name string) bool {

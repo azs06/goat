@@ -19,15 +19,11 @@ func themePath() (path string, explicit bool) {
 	if path := strings.TrimSpace(os.Getenv("GOAT_THEME")); path != "" {
 		return path, true
 	}
-	dir := os.Getenv("XDG_CONFIG_HOME")
+	dir := goatConfigDir()
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", false
-		}
-		dir = filepath.Join(home, ".config")
+		return "", false
 	}
-	return filepath.Join(dir, "goat", "theme.json"), false
+	return filepath.Join(dir, "theme.json"), false
 }
 
 // applyTheme loads the theme file, if there is one, over the built-in theme and makes
