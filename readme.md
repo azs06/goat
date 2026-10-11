@@ -521,9 +521,10 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   the variables entries name in `key_env`), anything loaded from `~/.config/goat/.env`,
   the providers' `*_BASE_URL` (a proxy may take a token in it), or other variables named
   like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`, `*_PASSWORD`, a key
-  command's `*_COMMAND` and similar). goat's config directory is outside the workspace,
-  so file tools cannot reach `auth.json`, but a command can read it like any other file
-  you can read: approving commands is what guards it. goat always asks before a command
+  command's `*_COMMAND` and similar). File tools never open or search goat's config
+  directory, even when the workspace contains it (goat started in your home directory),
+  but a command can read `auth.json` like any other file you can read: approving
+  commands is what guards it. goat always asks before a command
   that names its config directory (`config/goat`, `XDG_CONFIG_HOME`, its full path, or a
   relative path from a directory above it) or runs inside it, even when commands
   otherwise run without asking. The check matches text, so quoting, globs, variables or

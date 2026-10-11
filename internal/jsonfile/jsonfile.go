@@ -26,8 +26,8 @@ func (e *Error) Error() string {
 	return e.Message
 }
 
-// Shift moves an error found in a part of a file that starts on line start to the
-// file's own numbering. Other errors are returned as they are.
+// Shift moves an error found in a part of a file that starts on line start (a Field's
+// ValueLine) to the file's own numbering. Other errors are returned as they are.
 func Shift(err error, start int) error {
 	var fileErr *Error
 	if errors.As(err, &fileErr) && fileErr.Line > 0 {
@@ -36,19 +36,25 @@ func Shift(err error, start int) error {
 	return err
 }
 
-// Field is one member of a JSON object: its name, its raw value and the line the name
-// is on.
+// Field is one member of a JSON object: its name, its raw value, the line the name is
+// on, and the line the value starts on, from which lines inside Value count.
 type Field struct {
-	Name  string
-	Value json.RawMessage
-	Line  int
+	Name      string
+	Value     json.RawMessage
+	Line      int
+	ValueLine int
 }
 
 // Object reads the JSON object data holds, member by member in file order. A member
 // named twice is refused: the decoder would quietly keep the last one. what describes
 // the object for the error when data is not one, e.g. "the file must be a JSON object".
+// Data with nothing but white space in it, such as a file just created, is an empty
+// object.
 func Object(data []byte, what string) ([]Field, error) {
 	data = bytes.TrimPrefix(data, []byte("\ufeff"))
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return nil, syntaxError(data, err, what)
@@ -62,6 +68,7 @@ func Object(data []byte, what string) ([]Field, error) {
 			return nil, syntaxError(data, err, "")
 		}
 		name, _ := token.(string)
+		valueLine := LineAt(data, decoder.InputOffset())
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return nil, syntaxError(data, err, "")
@@ -70,7 +77,7 @@ func Object(data []byte, what string) ([]Field, error) {
 			return nil, &Error{Line: line, Message: Quote(name, "a name") + " appears twice"}
 		}
 		seen[name] = true
-		fields = append(fields, Field{Name: name, Value: value, Line: line})
+		fields = append(fields, Field{Name: name, Value: value, Line: line, ValueLine: valueLine})
 	}
 	if _, err := decoder.Token(); err != nil {
 		return nil, syntaxError(data, err, "")

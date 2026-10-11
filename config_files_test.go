@@ -305,3 +305,141 @@ func TestProcessUsesTheJSONFiles(t *testing.T) {
 		t.Fatalf("expected the model from config.json and the key from auth.json:\n%s", out)
 	}
 }
+
+func TestConfigFileModelErrorsNeverRepeatIt(t *testing.T) {
+	workDir := t.TempDir()
+	config := filepath.Join(workDir, "config", "goat")
+	os.MkdirAll(config, 0o700)
+	os.WriteFile(filepath.Join(config, "config.json"), []byte(`{"model": "sk-proj-SECRET"}`), 0o600)
+	_, errOut, _ := runGoat(t, workDir, "/exit\n", []string{"OPENAI_API_KEY=test"})
+	if !strings.Contains(errOut, "ignoring the model in config.json") || strings.Contains(errOut, "SECRET") {
+		t.Fatalf("got %q", errOut)
+	}
+
+	os.WriteFile(filepath.Join(config, "config.json"), []byte(`{"model": "anthropic:claude-opus-5-5"}`), 0o600)
+	_, errOut, _ = runGoat(t, workDir, "/exit\n", []string{"OPENAI_API_KEY=test"})
+	if !strings.Contains(errOut, "ignoring the model in config.json: anthropic models need") {
+		t.Fatalf("a configured model without a key should be mentioned, got %q", errOut)
+	}
+}
+
+func TestAuthFileCommandBeatsAnEntrysOwnCommand(t *testing.T) {
+	keyCommandsTest(t)
+	dir := configTest(t)
+	marker := filepath.Join(t.TempDir(), "entry-ran")
+	writeConfigFile(t, dir, "config.json", `{"providers": {"proxy": {"api": "openai", "base_url": "https://p.example/v1", "key_command": "touch `+marker+`; echo entry-key"}}}`)
+	writeConfigFile(t, dir, "auth.json", `{"proxy": {"key_command": "echo auth-key"}}`)
+	loadAll(t)
+	if _, value, _ := provider.Credential("proxy"); value != "auth-key" {
+		t.Fatalf("got %q", value)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the entry's own command should not run when auth.json supplies the entry")
+	}
+}
+
+func TestAFailedAuthCommandLeavesTheProviderUnavailable(t *testing.T) {
+	keyCommandsTest(t)
+	dir := configTest(t)
+	writeConfigFile(t, dir, "config.json", `{"providers": {"router": {"api": "openai", "base_url": "https://r.example/v1", "models": ["m"]}}}`)
+	writeConfigFile(t, dir, "auth.json", `{"router": {"key_command": "exit 1"}, "openai": {"key_command": "exit 1"}}`)
+	writeConfigFile(t, dir, ".env", "OPENAI_API_KEY=sk-env\n")
+	if warnings := loadAll(t); len(warnings) != 2 {
+		t.Fatalf("expected a warning per failed command, got %q", warnings)
+	}
+	for _, name := range []string{"router", provider.OpenAI} {
+		if err := provider.Unavailable(name); err == nil || !strings.Contains(err.Error(), "its key_command in auth.json gave none") {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+	if provider.DefaultModel().Provider == "router" {
+		t.Fatal("a keyless default must not be picked once its key command failed")
+	}
+}
+
+func TestEntriesSharingABuiltInKeyFollowAuthFile(t *testing.T) {
+	t.Run("the built-in's key in auth.json reaches the entry", func(t *testing.T) {
+		dir := configTest(t)
+		writeConfigFile(t, dir, "config.json", `{"providers": {"work": {"api": "openai", "base_url": "https://w.example/v1", "key_env": "OPENAI_API_KEY"}}}`)
+		writeConfigFile(t, dir, "auth.json", `{"openai": {"key": "sk-auth"}}`)
+		writeConfigFile(t, dir, ".env", "OPENAI_API_KEY=sk-env\n")
+		loadAll(t)
+		for _, name := range []string{provider.OpenAI, "work"} {
+			if _, value, _ := provider.Credential(name); value != "sk-auth" {
+				t.Errorf("%s: got %q", name, value)
+			}
+		}
+	})
+	t.Run("the entry's key in auth.json leaves the built-in its .env key", func(t *testing.T) {
+		dir := configTest(t)
+		writeConfigFile(t, dir, "config.json", `{"providers": {"work": {"api": "openai", "base_url": "https://w.example/v1", "key_env": "OPENAI_API_KEY"}}}`)
+		writeConfigFile(t, dir, "auth.json", `{"work": {"key": "sk-work"}}`)
+		writeConfigFile(t, dir, ".env", "OPENAI_API_KEY=sk-env\n")
+		loadAll(t)
+		if _, value, _ := provider.Credential(provider.OpenAI); value != "sk-env" {
+			t.Errorf("openai: got %q", value)
+		}
+		if _, value, _ := provider.Credential("work"); value != "sk-work" {
+			t.Errorf("work: got %q", value)
+		}
+	})
+}
+
+func TestEntryMessagesNameTheirFile(t *testing.T) {
+	dir := configTest(t)
+	writeConfigFile(t, dir, "config.json", `{"providers": {"broken": {"api": "openai", "base_url": "https://b.example/v1", "key_command": "exit 1"}}}`)
+	keyCommandsTest(t)
+	loadAll(t)
+	if err := provider.Unavailable("broken"); err == nil || !strings.Contains(err.Error(), "key_command in config.json gave none") {
+		t.Fatalf("got %v", err)
+	}
+	if err := provider.Unavailable("nope"); err == nil || strings.Contains(err.Error(), "providers.json") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestJSONFilesMayBeEmptyAndRefuseNull(t *testing.T) {
+	dir := configTest(t)
+	writeConfigFile(t, dir, "config.json", "  \n")
+	writeConfigFile(t, dir, "auth.json", "")
+	if warnings := loadAll(t); len(warnings) != 0 {
+		t.Fatalf("got %q", warnings)
+	}
+	writeConfigFile(t, dir, "config.json", `{"auto_approve_bash": null}`)
+	if _, _, err := loadConfigFile(); err == nil || !strings.Contains(err.Error(), "auto_approve_bash must be true or false") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestNestedConfigErrorsNameTheFilesLine(t *testing.T) {
+	for _, test := range []struct{ content, want string }{
+		{"{\n  \"theme\": \"one-dark\",\n  \"base_urls\": {\n    \"anthropic\": \"https://a.example\",\n    \"mistral\": \"https://m.example\"\n  }\n}", "line 5: base_urls has a provider"},
+		{"{\n  \"providers\":\n  {\n    \"x\": {\"api\": \"openai\", \"base_url\": \"https://x.example\"},\n    \"x\": {\"api\": \"openai\", \"base_url\": \"https://y.example\"}\n  }\n}", `line 5: a name "x" appears twice`},
+	} {
+		dir := configTest(t)
+		writeConfigFile(t, dir, "config.json", test.content)
+		if _, _, err := loadConfigFile(); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("expected %q, got %v", test.want, err)
+		}
+	}
+}
+
+func TestAStoredAnthropicKeyIgnoresTheSDKsEnvironment(t *testing.T) {
+	configTest(t)
+	var header http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":[],"has_more":false}`)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
+	t.Setenv("ANTHROPIC_CUSTOM_HEADERS", "Authorization: Bearer other-token")
+	provider.StoreKey(provider.Anthropic, "sk-ant-stored", false)
+	if _, err := provider.NewAnthropic().ListModels(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if header.Get("X-Api-Key") != "sk-ant-stored" || header.Get("Authorization") != "" {
+		t.Fatalf("expected only the stored key, got %v", header)
+	}
+}

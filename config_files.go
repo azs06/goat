@@ -127,26 +127,31 @@ func applyConfig(data []byte, source string) ([]provider.Entry, error) {
 		case "base_urls":
 			urls, err := jsonfile.Object(field.Value, `base_urls must be an object such as {"anthropic": "https://proxy.example"}`)
 			if err != nil {
-				return nil, jsonfile.Shift(err, field.Line)
+				return nil, jsonfile.Shift(err, field.ValueLine)
 			}
 			for _, url := range urls {
+				// Lines inside base_urls count from its own first line.
+				line := url.Line + field.ValueLine - 1
 				variable := provider.BaseURLVars[url.Name]
 				if variable == "" {
-					return nil, &jsonfile.Error{Line: url.Line, Message: fmt.Sprintf("base_urls has %s; it takes openai, anthropic and deepseek (other providers go in providers)", jsonfile.Quote(url.Name, "a provider"))}
+					return nil, &jsonfile.Error{Line: line, Message: fmt.Sprintf("base_urls has %s; it takes openai, anthropic and deepseek (other providers go in providers)", jsonfile.Quote(url.Name, "a provider"))}
 				}
 				var value string
 				if json.Unmarshal(url.Value, &value) != nil {
-					return nil, &jsonfile.Error{Line: url.Line, Message: "base_urls." + url.Name + " must be a URL string"}
+					return nil, &jsonfile.Error{Line: line, Message: "base_urls." + url.Name + " must be a URL string"}
 				}
 				if err := provider.CheckBaseURL("base_urls."+url.Name, value); err != nil {
-					return nil, &jsonfile.Error{Line: url.Line, Message: err.Error()}
+					return nil, &jsonfile.Error{Line: line, Message: err.Error()}
 				}
 				values[variable] = strings.TrimSpace(value)
 			}
 		case "providers":
 			parsed, err := provider.ParseEntries(field.Value)
 			if err != nil {
-				return nil, jsonfile.Shift(err, field.Line)
+				return nil, jsonfile.Shift(err, field.ValueLine)
+			}
+			for i := range parsed {
+				parsed[i].Source = source
 			}
 			entries = parsed
 		default:
@@ -183,11 +188,11 @@ func applyConfig(data []byte, source string) ([]provider.Entry, error) {
 
 func parseBoolSetting(on, off string) func(json.RawMessage) (string, error) {
 	return func(raw json.RawMessage) (string, error) {
-		var value bool
-		if json.Unmarshal(raw, &value) != nil {
+		var value *bool
+		if json.Unmarshal(raw, &value) != nil || value == nil {
 			return "", errors.New("must be true or false")
 		}
-		if value {
+		if *value {
 			return on, nil
 		}
 		return off, nil
@@ -281,6 +286,9 @@ func applyAuth(data []byte, source string) (warnings []string, err error) {
 	for _, field := range fields {
 		fail := func(message string) error { return &jsonfile.Error{Line: field.Line, Message: message} }
 		name := field.Name
+		if strings.HasPrefix(name, "$") {
+			continue
+		}
 		if !slices.Contains(provider.Names, name) {
 			// An entry may have been removed from config.json; its key does no harm.
 			warnings = append(warnings, fmt.Sprintf("%s line %d: %s is not a provider; it is ignored", source, field.Line, jsonfile.Quote(name, "the name")))
@@ -326,6 +334,7 @@ func applyAuth(data []byte, source string) (warnings []string, err error) {
 				continue
 			}
 			authSettled[name] = true
+			provider.NameInAuth(name)
 			switch kind {
 			case "key_command":
 				authCommands[name] = value

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -28,6 +29,9 @@ type Entry struct {
 	// Models are offered in the picker; with none, the picker offers what the server
 	// lists.
 	Models []string
+	// Source is the file the entry came from, for messages, such as
+	// "~/.config/goat/config.json".
+	Source string
 
 	endpoint Endpoint
 }
@@ -43,7 +47,7 @@ func (e Entry) Keyless() bool {
 	return e.KeyEnv == "" && e.KeyCommand == ""
 }
 
-// builtIns are the providers goat has without providers.json; their names are reserved.
+// builtIns are the providers goat has without config.json; their names are reserved.
 var builtIns = []string{OpenAI, Anthropic, DeepSeek}
 
 // entries are the registered entries, by name.
@@ -91,7 +95,7 @@ func RegisterEntries(list []Entry) {
 func NewEntry(name string) (Provider, error) {
 	entry, ok := entries[name]
 	if !ok {
-		return nil, fmt.Errorf("there is no provider named %s; providers.json does not define it", name)
+		return nil, unknownProviderError(name)
 	}
 	_, key, _ := Credential(name)
 	if entry.API == APIOpenAI {
@@ -107,6 +111,19 @@ func SpeaksAnthropic(name string) bool {
 		return entry.API == APIAnthropic
 	}
 	return name == Anthropic || name == DeepSeek
+}
+
+// unknownProviderError is the error for a provider goat has never heard of.
+func unknownProviderError(name string) error {
+	return fmt.Errorf("there is no provider named %s; add it under providers in config.json", name)
+}
+
+// sourceName is the file an entry came from, by name alone.
+func (e Entry) sourceName() string {
+	if e.Source == "" {
+		return "config.json"
+	}
+	return filepath.Base(e.Source)
 }
 
 // ResetEntries removes every registered entry, for tests.

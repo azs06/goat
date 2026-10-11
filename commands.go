@@ -161,7 +161,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
 	if !previous.Conversation.Fits(model.Provider) {
-		return fmt.Errorf("the previous conversation cannot continue on %s: its api in providers.json has changed since", model.Provider)
+		return fmt.Errorf("the previous conversation cannot continue on %s: its api in config.json has changed since", model.Provider)
 	}
 	if err := provider.Unavailable(model.Provider); err != nil {
 		return fmt.Errorf("the previous conversation used %s: %w", model, err)
@@ -361,6 +361,8 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		_, isEntry := provider.LookupEntry(name)
 		switch err := provider.Unavailable(name); {
 		case err != nil && isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
+		case origin == "" && !isEntry && provider.NamedInAuth(name):
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
 		case origin == "" && !isEntry:
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})

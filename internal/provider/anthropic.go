@@ -45,7 +45,7 @@ type anthropicProvider struct {
 	cacheTTL anthropic.BetaCacheControlEphemeralTTL
 	// deepseek is set when the adapter talks to DeepSeek's Anthropic-compatible API.
 	deepseek *deepSeekSettings
-	// entry is set for an Anthropic-compatible entry from providers.json.
+	// entry is set for an Anthropic-compatible entry from config.json.
 	entry bool
 
 	mu           sync.Mutex
@@ -73,10 +73,12 @@ func NewAnthropicWith(official bool, opts ...option.RequestOption) Provider {
 
 func NewAnthropic() Provider {
 	// goat names the endpoint and credential itself, so the client sends the key only
-	// where ResolveEndpoint has checked. Later options win over the SDK's environment
-	// defaults, and the API key comes before the token, as in the SDK.
+	// where ResolveEndpoint has checked. The SDK's own environment defaults are left out:
+	// with the key in auth.json rather than the environment, they would go on to add an
+	// `ant auth login` profile's workspace, ANTHROPIC_CUSTOM_HEADERS and a warning. The
+	// API key comes before the token, as in the SDK.
 	endpoint := endpointOrOfficial(Anthropic)
-	opts := []option.RequestOption{option.WithHTTPClient(keyClient(anthropicHeaderTimeout)), option.WithBaseURL(endpoint.URL)}
+	opts := []option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithHTTPClient(keyClient(anthropicHeaderTimeout)), option.WithBaseURL(endpoint.URL)}
 	if _, credential, authToken := Credential(Anthropic); credential != "" && authToken {
 		opts = append(opts, option.WithAuthToken(credential))
 	} else if credential != "" {

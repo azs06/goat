@@ -47,7 +47,7 @@ func (e Endpoint) Origin() string {
 
 // ResolveEndpoint reads the provider's base URL variable and checks it. A URL must use
 // http or https and must not carry a user name or password. Errors name the variable but
-// not its value. An entry's URL was checked when providers.json was read.
+// not its value. An entry's URL was checked when its file was read.
 func ResolveEndpoint(provider string) (Endpoint, error) {
 	if entry, ok := entries[provider]; ok {
 		return entry.endpoint, nil

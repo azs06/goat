@@ -121,7 +121,12 @@ func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 	for _, c := range candidates {
 		ref, err := provider.ResolveModel(c.raw)
 		if err != nil {
-			warnf("ignoring the model from %s: %v", c.source, err)
+			if c.source == "config.json" {
+				// Its errors repeat the name, and a key may have been pasted there.
+				warnf("ignoring the model in config.json: goat does not know which provider serves it; write it as provider:model")
+			} else {
+				warnf("ignoring the model from %s: %v", c.source, err)
+			}
 			continue
 		}
 		if unavailable := provider.Unavailable(ref.Provider); unavailable != nil {
@@ -130,6 +135,8 @@ func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, unavailable)
 			case "--model":
 				warnf("ignoring --model %s: %v", c.raw, unavailable)
+			case "config.json":
+				warnf("ignoring the model in config.json: %v", unavailable)
 			}
 			continue
 		}
@@ -543,6 +550,9 @@ func main() {
 
 	// Keys from auth.json before the global .env, which is then not used for the
 	// providers auth.json supplies.
+	// File tools stay out of the config directory, which a workspace such as the home
+	// directory contains.
+	workspace.ProtectDir(goatConfigDir())
 	authWarnings, err := loadAuthFile()
 	if err != nil {
 		log.Fatal(err)

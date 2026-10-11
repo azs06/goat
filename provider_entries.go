@@ -38,6 +38,9 @@ func loadProviderEntries(fromConfig []provider.Entry) (warnings []string, err er
 			if err != nil {
 				return warnings, fmt.Errorf("%s: %w", displayPath(path), err)
 			}
+			for i := range more {
+				more[i].Source = displayPath(path)
+			}
 			for _, entry := range more {
 				if slices.ContainsFunc(entries, func(e provider.Entry) bool { return e.Name == entry.Name }) {
 					return warnings, fmt.Errorf("%s defines %s, which config.json's providers define too; keep one", displayPath(path), entry.Name)
