@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -47,6 +48,10 @@ func newChatProvider(name, baseURL, apiKey string) *chatProvider {
 func (p *chatProvider) Name() string {
 	return p.name
 }
+
+// responseCount numbers this run's responses, so response IDs differ even when the
+// clock does not move between two of them.
+var responseCount atomic.Int64
 
 // chatMessage is one message of the stored transcript, in the API's wire format.
 type chatMessage struct {
@@ -247,7 +252,7 @@ func (p *chatProvider) Send(ctx context.Context, req Request, onText func(string
 
 	// Servers reuse response IDs (Ollama picks one of 999) or send none, and the history
 	// tells responses apart by ID, so each gets its own.
-	out := &Response{ID: fmt.Sprintf("%s#%d", cmp.Or(streamed.id, "chat"), time.Now().UnixNano()), Text: streamed.text.String(), Usage: chatUsage(streamed.usage)}
+	out := &Response{ID: fmt.Sprintf("%s#%d-%d", cmp.Or(streamed.id, "chat"), time.Now().UnixNano(), responseCount.Add(1)), Text: streamed.text.String(), Usage: chatUsage(streamed.usage)}
 	switch {
 	case streamed.finish == "content_filter":
 		out.Stop, out.RefusalDetail = StopRefusal, "content filter"

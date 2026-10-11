@@ -47,7 +47,8 @@ go install .` (or `go run .` to try it without installing).
 
 goat needs a key for at least one provider: `OPENAI_API_KEY` for OpenAI models,
 `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) for Claude models, `DEEPSEEK_API_KEY` for
-DeepSeek models. Only providers with a key are offered.
+DeepSeek models. Only providers with a key are offered (and the keyless local servers
+you add in [`providers.json`](#optional-add-other-providers)).
 
 Put the keys in goat's global file, `~/.config/goat/.env`
 (`$XDG_CONFIG_HOME/goat/.env` when `XDG_CONFIG_HOME` is set). goat reads it whichever
@@ -421,7 +422,10 @@ prompt, so the cached prompt prefix stays the same and editing them costs no cac
   `o1`/`o3`/`o4`, `codex`, `chatgpt-` and `ft:` use OpenAI. Any other name needs a provider
   prefix, such as `openai:my-fine-tune` or `anthropic:claude-custom`. Providers added in
   [`providers.json`](#optional-add-other-providers) are picked the same way, as
-  `name:model`.
+  `name:model`. A model that one entry lists goes to that entry even when its name looks
+  like a built-in one: if an Ollama entry lists `gpt-oss:20b`, or a proxy entry lists
+  `claude-opus-5-5`, the bare name means the entry; `openai:` or `anthropic:` picks
+  the built-in provider.
 - The `/model` picker, including `/model list`, offers only OpenAI's GPT-5.6 and GPT-6
   models, Claude's 5.5 models and Claude Fable 5.1, and DeepSeek's newest pro and flash
   models. The model in use is always listed, and any other model can still be picked by
