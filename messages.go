@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/style"
 	"github.com/azs06/goat/internal/terminal"
 )
@@ -69,6 +70,7 @@ func formatWarning(message string) string {
 }
 
 func formatError(message string) string {
+	message = provider.HideEndpointPaths(message)
 	g := style.Glyphs()
 	if !style.Enabled() {
 		return "Error: " + message

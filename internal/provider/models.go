@@ -54,8 +54,20 @@ func CredentialSource(provider string) string {
 	return ""
 }
 
+// Unavailable says why a provider cannot be used: it has no credentials, or its base URL
+// is invalid. It is nil for a usable provider.
+func Unavailable(provider string) error {
+	if CredentialSource(provider) == "" {
+		return MissingCredentialsError(provider)
+	}
+	if _, err := ResolveEndpoint(provider); err != nil {
+		return err
+	}
+	return nil
+}
+
 func Available(provider string) bool {
-	return CredentialSource(provider) != ""
+	return Unavailable(provider) == nil
 }
 
 func AvailableNames() []string {

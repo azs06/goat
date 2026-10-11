@@ -1,11 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/azs06/goat/internal/workspace"
@@ -325,5 +328,93 @@ func TestGoatConfigDirIgnoresARelativeXDGConfigHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	if dir := goatConfigDir(); dir != filepath.Join(home, ".config", "goat") {
 		t.Errorf("got %q", dir)
+	}
+}
+
+func TestProcessRefusesABaseURLWithAPassword(t *testing.T) {
+	workDir := t.TempDir()
+	env := []string{"ANTHROPIC_API_KEY=test", "ANTHROPIC_BASE_URL=https://user:hunter2@proxy.example"}
+	_, errOut, code := runGoat(t, workDir, "", env)
+	if code == 0 || !strings.Contains(errOut, "no provider can be used; ANTHROPIC_BASE_URL must not contain a user name or password") || strings.Contains(errOut, "hunter2") {
+		t.Fatalf("got %q (exit %d)", errOut, code)
+	}
+}
+
+func TestProcessShowsWhereACustomEndpointSendsTheKey(t *testing.T) {
+	workDir := t.TempDir()
+	config := filepath.Join(workDir, "config", "goat")
+	os.MkdirAll(config, 0o700)
+	os.WriteFile(filepath.Join(config, ".env"), []byte("DEEPSEEK_API_KEY=test\nDEEPSEEK_BASE_URL=http://10.0.0.7:4000/t/sk-in-path/anthropic\n"), 0o600)
+	out, errOut, code := runGoat(t, workDir, "/status\n/exit\n", nil)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	want := "deepseek requests go to http://10.0.0.7:4000 (DEEPSEEK_BASE_URL from " + filepath.Join("~", "config", "goat", ".env") + "), unencrypted"
+	if !strings.Contains(errOut, want) {
+		t.Errorf("startup should say where the key goes, want %q in:\n%s", want, errOut)
+	}
+	if !strings.Contains(out, "requests go to http://10.0.0.7:4000, unencrypted") {
+		t.Errorf("/status should show the endpoint:\n%s", out)
+	}
+	if strings.Contains(out+errOut, "sk-in-path") {
+		t.Error("the endpoint's path must not be shown")
+	}
+}
+
+// Windows names ignore case. The cross-build is the only Windows check, so this flips the
+// switch to test the comparisons on other systems. On Windows itself, clearing the
+// lower-case names would clear the fixture's XDG_CONFIG_HOME and point the test at the
+// real config directory.
+func TestEnvFilesCompareNamesWithoutCaseWhereTheSystemDoes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("simulates Windows names on other systems")
+	}
+	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "xdg_config_home", "home", "anthropic_api_key", "goat_t_lower")
+	previous := workspace.CaseInsensitiveEnv
+	workspace.CaseInsensitiveEnv = true
+	t.Cleanup(func() { workspace.CaseInsensitiveEnv = previous })
+
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
+	os.WriteFile(global, []byte("xdg_config_home=/elsewhere\nhome=/elsewhere\nanthropic_api_key=global-key\ngoat_t_lower=1\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"xdg_config_home", "home", "anthropic_api_key"} {
+		if os.Getenv(name) != "" {
+			t.Errorf("%s should have been refused as its upper-case name", name)
+		}
+	}
+	if os.Getenv("goat_t_lower") != "1" || envSources["GOAT_T_LOWER"] == "" {
+		t.Fatalf("other variables still load: %q %v", os.Getenv("goat_t_lower"), envSources)
+	}
+	if slices.Contains(workspace.CommandEnvironment([]string{"GOAT_T_LOWER=1"}), "GOAT_T_LOWER=1") {
+		t.Error("a variable from the file must stay hidden whatever case the system reports")
+	}
+}
+
+func TestProcessDoesNotFollowRedirectsWithTheKey(t *testing.T) {
+	var elsewhere atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	t.Cleanup(target.Close)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(proxy.Close)
+
+	for _, run := range []struct{ model, keyVar, urlVar, path string }{
+		{"claude-opus-5-5", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", ""},
+		{"gpt-6-luna", "OPENAI_API_KEY", "OPENAI_BASE_URL", "/v1"},
+		{"deepseek-v4-pro", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "/anthropic"},
+	} {
+		env := []string{run.keyVar + "=sk-test", run.urlVar + "=" + proxy.URL + run.path}
+		if _, _, code := runGoat(t, t.TempDir(), "hi", env, "-p", "-m", run.model); code == 0 {
+			t.Errorf("%s: expected the redirect to fail the request", run.model)
+		}
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the redirect target got %d requests", n)
 	}
 }

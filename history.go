@@ -215,7 +215,7 @@ func recordHistory(entry historyEntry) {
 	if entry.ConversationID == "" {
 		entry.ConversationID = activeConversationID
 	}
-	entry.Content = truncateToolOutputCharsForModel(entry.Content, maxHistoryFieldChars)
+	entry.Content = truncateToolOutputCharsForModel(provider.HideEndpointPaths(entry.Content), maxHistoryFieldChars)
 	entry.Arguments = truncateToolOutputCharsForModel(entry.Arguments, maxHistoryFieldChars)
 	if err := historyEntryAppender(entry); err != nil {
 		warnf("failed to save history: %v", err)

@@ -160,8 +160,8 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	if previous.Conversation.Provider != "" && previous.Conversation.Provider != model.Provider {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
-	if !provider.Available(model.Provider) {
-		return fmt.Errorf("the previous conversation used %s: %w", model, provider.MissingCredentialsError(model.Provider))
+	if err := provider.Unavailable(model.Provider); err != nil {
+		return fmt.Errorf("the previous conversation used %s: %w", model, err)
 	}
 
 	if err := sessionSaver(previousSessionPath, sessionFromConfig(c)); err != nil {
@@ -350,10 +350,17 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		{"Effort:", effortStatusText(c)},
 	}
 	for _, name := range provider.Names {
-		if origin := credentialOrigin(name); origin != "" {
-			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
-		} else {
+		origin := credentialOrigin(name)
+		switch err := provider.Unavailable(name); {
+		case origin == "":
 			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
+		case err != nil:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + err.Error() + ")")})
+		default:
+			if endpoint, _ := provider.ResolveEndpoint(name); endpoint.Custom {
+				origin += "; requests go to " + endpoint.Origin() + unencryptedNote(endpoint)
+			}
+			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
 		}
 	}
 
@@ -447,7 +454,7 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
 	if len(choices) == 0 {
-		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(noAPIKeyMessage(), "no API key found; ") + "."))
+		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(strings.TrimPrefix(noAPIKeyMessage(), "no API key found; "), "no provider can be used; ") + "."))
 		return
 	}
 	fmt.Println(style.Strong.Render("Models") + style.Muted.Render(" (only providers with an API key are listed):"))
@@ -466,8 +473,8 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		fmt.Println(formatNotice(fmt.Sprintf("Already using %s.", target)))
 		return nil
 	}
-	if !provider.Available(target.Provider) {
-		return provider.MissingCredentialsError(target.Provider)
+	if err := provider.Unavailable(target.Provider); err != nil {
+		return err
 	}
 	p, err := c.provider(target.Provider)
 	if err != nil {

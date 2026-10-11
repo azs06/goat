@@ -16,11 +16,10 @@ Deferred enhancements to implement later:
   - Smoke-test Claude models writing scripts (only OpenAI gpt-6-luna and DeepSeek v4 pro were tried against the real APIs).
 
 - Global .env follow-ups:
-  - On Windows environment names are case-insensitive, but the loader's checks (HOME/XDG_CONFIG_HOME not settable, credential grouping) compare names case-sensitively, so `xdg_config_home=` or `anthropic_auth_token=` in ~/.config/goat/.env slips past them. Only the user's own file is read, so this is about mistakes, not attacks. Untested; needs a Windows run.
-  - Build the Anthropic and OpenAI clients without the SDKs' environment defaults (as deepseek.go does), passing base URL and key explicitly, so goat alone decides where a key is sent.
-  - Validate base URLs (https unless loopback, no userinfo) and show a non-official host and where it came from at startup and in /status.
-  - A per-provider key command (`op read …`, `security find-generic-password -w …`) read only from the shell or the global file, so keys need not sit on disk.
+  - Key commands run once at startup. A short-lived token that expires mid-session is not fetched again; re-running the command after a 401 would cover it.
   - Provider entries in user config that bind a base URL to its own key (Codex-style), for proxies and OpenAI-compatible endpoints; a custom entry never inherits a built-in key.
+  - Run on Windows: the case-insensitive variable names and key commands through cmd.exe (including quoted arguments) have only been cross-built, never run. Or add windows-latest to the CI matrix.
+  - Considered and rejected: hiding plain `*_TOKEN` variables such as `GH_TOKEN` from run_bash. `gh` and similar tools read them, so the agent's `gh` commands would stop working.
 
 Notes:
 - Session compaction runs automatically once a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS` and is also available manually via `compact`.

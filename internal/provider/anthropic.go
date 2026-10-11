@@ -18,6 +18,10 @@ import (
 )
 
 const (
+	// anthropicHeaderTimeout is the Anthropic SDK's own bound on waiting for a response
+	// to start, kept now that goat gives the SDK its client.
+	anthropicHeaderTimeout = 10 * time.Minute
+
 	anthropicMaxTokens       = 64000
 	anthropicLegacyMaxTokens = 32000
 )
@@ -66,9 +70,19 @@ func NewAnthropicWith(official bool, opts ...option.RequestOption) Provider {
 }
 
 func NewAnthropic() Provider {
+	// goat names the endpoint and credential itself, so the client sends the key only
+	// where ResolveEndpoint has checked. Later options win over the SDK's environment
+	// defaults, and the API key comes before the token, as in the SDK.
+	endpoint := endpointOrOfficial(Anthropic)
+	opts := []option.RequestOption{option.WithHTTPClient(keyClient(anthropicHeaderTimeout)), option.WithBaseURL(endpoint.URL)}
+	if key := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); key != "" {
+		opts = append(opts, option.WithAPIKey(key))
+	} else if token := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN")); token != "" {
+		opts = append(opts, option.WithAuthToken(token))
+	}
 	return &anthropicProvider{
-		client:        anthropic.NewClient(),
-		customBaseURL: strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")) != "",
+		client:        anthropic.NewClient(opts...),
+		customBaseURL: endpoint.Custom,
 		fallbacks:     !envFlagOff("GOAT_ANTHROPIC_FALLBACKS"),
 		cacheTTL:      anthropicCacheTTL(os.Getenv("GOAT_ANTHROPIC_CACHE_TTL")),
 		capabilities:  map[string]anthropicModelCapabilities{},
