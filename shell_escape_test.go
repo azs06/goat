@@ -16,6 +16,7 @@ func TestShellEscapeRunsAndGoesWithTheNextMessage(t *testing.T) {
 		newSSE("msg_2").text("Again.").stop("end_turn", ""),
 	)
 	cfg := seamConfig(t, fake.provider(true))
+	withColor(t, false)
 	cfg.interactive = true
 	sessionSaver = func(string, savedSession) error { return nil }
 	t.Cleanup(func() { sessionSaver = writeSessionFile })
@@ -96,6 +97,7 @@ func TestOneShotPromptIsNeverAShellCommand(t *testing.T) {
 
 func TestShellEscapeStopsOnCtrlC(t *testing.T) {
 	cfg := seamConfig(t, newFakeAnthropic(t).provider(true))
+	withColor(t, false)
 	cfg.interactive = true
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -120,5 +122,29 @@ func TestPromptEditorShowsTheShellHint(t *testing.T) {
 	}
 	if w := style.VisibleWidth(renderShellHint(30)); w > 29 {
 		t.Fatalf("hint is %d wide", w)
+	}
+}
+
+func TestShellOutputIsNotSentTwiceAfterAStoppedReply(t *testing.T) {
+	fake := newFakeAnthropic(t,
+		newSSE("msg_1").text("Cut off").stop("max_tokens", ""),
+		newSSE("msg_2").text("ok").stop("end_turn", ""),
+	)
+	cfg := seamConfig(t, fake.provider(true))
+	withColor(t, false)
+	cfg.interactive = true
+	sessionSaver = func(string, savedSession) error { return nil }
+	t.Cleanup(func() { sessionSaver = writeSessionFile })
+	captureStdout(t, func() {
+		if err := handleInput(cfg, "!echo marker-77"); err != nil {
+			t.Fatal(err)
+		}
+		handleInput(cfg, "first")
+		if err := handleInput(cfg, "second"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if n := strings.Count(fake.request(1).raw, "ran these shell commands"); n != 1 {
+		t.Fatalf("expected the note once, in the replayed first message; found %d", n)
 	}
 }

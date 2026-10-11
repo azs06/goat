@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -1268,11 +1269,24 @@ func RunBashFor(ctx context.Context, command, workdir string, timeout time.Durat
 	cmd.Env = CommandEnvironment(os.Environ())
 	configureProcessGroup(cmd)
 	cmd.WaitDelay = bashPipeWaitDelay
+	// Whether the command was killed for a timeout or Ctrl-C, rather than exiting on its
+	// own as the deadline passed.
+	var killed atomic.Bool
+	if kill := cmd.Cancel; kill != nil {
+		cmd.Cancel = func() error {
+			killed.Store(true)
+			return kill()
+		}
+	}
 
 	output := &cappedOutput{limit: maxBashOutput}
 	cmd.Stdout = output
 	cmd.Stderr = output
-	err = cmd.Run()
+	if err = cmd.Start(); err == nil {
+		trackRunning(cmd.Process.Pid)
+		err = cmd.Wait()
+		untrackRunning(cmd.Process.Pid)
+	}
 	trimmedOutput := strings.TrimRight(output.String(), "\n")
 	if trimmedOutput == "" {
 		trimmedOutput = "(no output)"
@@ -1284,8 +1298,7 @@ func RunBashFor(ctx context.Context, command, workdir string, timeout time.Durat
 	// such as a server started with "&". goat keeps track of them so the user can see and
 	// stop them (/ps). An interrupted or timed-out command's group was killed instead.
 	// What is recorded here is checked again whenever the list is read.
-	killed := err != nil && !errors.Is(err, exec.ErrWaitDelay) && (ctx.Err() != nil || errors.Is(runCtx.Err(), context.DeadlineExceeded))
-	if !killed && cmd.Process != nil {
+	if !killed.Load() && cmd.Process != nil {
 		rememberIfAlive(cmd.Process.Pid, command, relDir)
 	}
 
@@ -1298,9 +1311,9 @@ func RunBashFor(ctx context.Context, command, workdir string, timeout time.Durat
 		// The shell finished but something it started in the background still holds the
 		// output open; that process keeps running and its later output is not captured.
 		return result + "\n(a background process is still running; redirect its output to a file to keep it)", nil
-	case ctx.Err() != nil:
+	case killed.Load() && ctx.Err() != nil:
 		return "", fmt.Errorf("command interrupted by the user\n%s", result)
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+	case killed.Load():
 		return "", fmt.Errorf("command timed out after %s and was killed\n%s", timeout, result)
 	default:
 		return "", fmt.Errorf("%w\n%s", err, result)

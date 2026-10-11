@@ -14,7 +14,8 @@ import (
 // goat waits on the model or a tool. It only draws on a color terminal; elsewhere it
 // does nothing, so piped output never contains carriage returns or cursor movement.
 // There is at most one active spinner, kept in activeSpinner, so code that needs the
-// terminal (an approval prompt, the first streamed token) can stop it from anywhere.
+// terminal (an approval prompt) can stop it from anywhere. Streamed reply lines are
+// printed above it with printAboveSpinner instead.
 type spinner struct {
 	mu      sync.Mutex
 	label   string
@@ -203,7 +204,7 @@ func (s *spinner) render() string {
 	// never wraps, which would leave stale copies behind.
 	width := terminalWidth()
 	if style.VisibleWidth(line) >= width {
-		line = style.Accent.Render(glyph + " " + s.label + style.Glyphs().Ellipsis)
+		line = style.Accent.Render(style.TruncateToWidth(glyph+" "+s.label+style.Glyphs().Ellipsis, width-1))
 	}
 	// The block, status line included, has to fit on the screen to be erased in place.
 	below, inputRow, cursor := turnFrameLines(width, terminalRows()-2)

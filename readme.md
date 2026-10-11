@@ -285,7 +285,7 @@ without the API keys in its environment and without a terminal to read from), bu
 not confirmed, since you typed it, and has no time limit: Ctrl-C stops it. Up to 40 lines of
 its output are shown and `/output` shows the rest. The output also goes to the model with
 your next message, so `!npm test` then `fix the failures` works; the footer says when
-some is waiting. `/clear` drops it. A command started with `&` keeps running and is
+some is waiting. `/clear` and `/resume` drop it. A command started with `&` keeps running and is
 listed by `/ps`.
 
 Lines piped into goat run `!` commands only with `-y`, and a `-p` prompt is never one: it
@@ -295,12 +295,12 @@ goes to the model as it is.
 
 While a turn runs the prompt stays at the bottom of the screen, in the same frame as
 between turns, under the spinner and above the footer; the reply streams in above it. It
-takes a message, and Enter queues it. Queued
-text goes to the model with the next tool results, so it can change course mid-turn;
-anything still queued when the turn ends is sent as the next prompt. Slash commands and
-`!` commands wait until the turn is over. Up on an empty line takes the last queued message back to edit.
-After Ctrl-C or a failed turn nothing queued is sent; it is put back in the prompt
-instead. Queueing needs an interactive color terminal.
+takes a message, and Enter queues it. Queued text goes to the model with the next tool
+results, so it can change course mid-turn; anything still queued when the turn ends is
+sent as the next prompt. Slash commands and `!` commands wait until the turn is over. Up
+on an empty line takes the last queued message back to edit. After Ctrl-C or a failed
+turn nothing queued is sent; it is put back in the prompt instead, one message per line.
+Queueing needs an interactive color terminal.
 
 ### Command line
 
@@ -350,7 +350,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
-| `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2`, `/ps stop all`. The footer shows how many are running. |
+| `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2` (by number, or by the group ID it lists), `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
 | `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
 | `/tools` | List the agent's tools. |
@@ -619,8 +619,9 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 - What a command leaves running in the background, such as a server started with `&`
   (with its output redirected to a file, or it stops at its next write), keeps running
   after the command returns. goat keeps track of it by process group: `/ps` lists and
-  stops it, and goat stops it when it exits (also when its terminal closes or it gets
-  SIGTERM), saying what it stopped. A process that starts a session of its own, such as a
+  stops it, and goat stops it, saying so, when it exits, when its terminal closes or when
+  it gets SIGTERM (a command still running then is stopped too; under `nohup` a hangup
+  stays ignored). A process that starts a session of its own, such as a
   daemon, leaves the group and is not tracked. On Windows nothing is tracked.
 
 ## Themes

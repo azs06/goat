@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -120,7 +121,9 @@ func returnQueueToPrompt(input *lineReader) {
 			kept = append(kept, part)
 		}
 	}
-	input.partial = strings.Join(kept, " ")
+	// One line each, so a queued ! command does not run the messages after it as its
+	// arguments.
+	input.partial = strings.Join(kept, "\n")
 }
 
 // queuedInputLines is the part of the live block under the spinner: the queued
@@ -183,13 +186,36 @@ func turnFrameLines(width, maxRows int) (lines []string, cursorRow, cursor int) 
 	turnQueue.mu.Lock()
 	footer := turnQueue.footer
 	turnQueue.mu.Unlock()
-	if footer == nil || len(lines)+3 > maxRows {
+	frame := 3
+	if footer == nil || maxRows < 1+frame+1 {
+		frame = 0
+	}
+	lines = capQueuedLines(lines, max(maxRows-frame, 1), width)
+	if frame == 0 {
 		return lines, len(lines) - 1, cursor
 	}
 	queued, input := lines[:len(lines)-1], lines[len(lines)-1]
 	rule := renderRule(width - 1)
 	framed := append(append([]string{}, queued...), rule, input, rule, renderFooter(footer, width))
 	return framed, len(queued) + 1, cursor
+}
+
+// capQueuedLines keeps the queued messages and the input line within rows lines, so the
+// block always fits on the screen: the latest messages stay, under a line counting the
+// ones left out.
+func capQueuedLines(lines []string, rows, width int) []string {
+	if len(lines) <= rows {
+		return lines
+	}
+	input := lines[len(lines)-1]
+	keep := rows - 2 // the count line and the input line
+	if keep < 0 {
+		return []string{input}
+	}
+	queued := lines[:len(lines)-1]
+	hidden := len(queued) - keep
+	more := style.Subtle.Render(style.TruncateToWidth(fmt.Sprintf("  +%d more queued", hidden), max(width-1, 1)))
+	return append(append([]string{more}, queued[hidden:]...), input)
 }
 
 // flattenBreaks shows a message with line breaks on a single line, one cell per break so

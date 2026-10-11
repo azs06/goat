@@ -89,8 +89,10 @@ func TestProcessesCommandListsAndStopsWhatGoatLeftRunning(t *testing.T) {
 		}
 	}
 
+	// By its group ID, which does not shift when another command exits.
+	secondGroup := strconv.Itoa(workspace.BackgroundGroups()[1].PGID)
 	out = captureStdout(t, func() {
-		if err := commandProcesses(context.Background(), cfg, []string{"stop", "2"}); err != nil {
+		if err := commandProcesses(context.Background(), cfg, []string{"stop", secondGroup}); err != nil {
 			t.Fatal(err)
 		}
 	})

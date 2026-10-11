@@ -357,6 +357,11 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 			cfg.conversation = state
 			cfg.pendingShell = nil
 			saveSession(cfg)
+			// The footer under the input catches up with the turn: context used, commands
+			// left running.
+			if cfg.interactive && style.Enabled() {
+				setTurnFooter(turnFooterParts(cfg))
+			}
 		},
 	}
 	defer saveSession(cfg)
@@ -368,10 +373,12 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		opts.takeSteering = takeQueuedText
 	}
 
+	sent := cfg.conversation.conversation
 	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
-	if err == nil {
-		// The ! output went with this message. After a failure it waits for /retry.
+	if err == nil || conversationMoved(sent, next.conversation) {
+		// The ! output went with this message, which the model has now seen. A request
+		// that failed outright keeps it for /retry.
 		cfg.pendingShell = nil
 	}
 	if err == nil || !provider.IsThinkingBindingError(err) {
@@ -386,12 +393,19 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
+	sent = cfg.conversation.conversation
 	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
-	if err == nil {
+	if err == nil || conversationMoved(sent, next.conversation) {
 		cfg.pendingShell = nil
 	}
 	return err
+}
+
+// conversationMoved reports whether a response was added to the conversation, so the
+// request before it reached the model.
+func conversationMoved(before, after provider.Conversation) bool {
+	return after.ResponseID != before.ResponseID || len(after.Messages) != len(before.Messages)
 }
 
 // handleInput runs one command or prompt. Ctrl-C cancels it instead of killing the goat.
@@ -502,14 +516,23 @@ func footerParts(cfg *config) []string {
 	if cfg.approver != nil && cfg.approver.autoApprove {
 		parts = append(parts, "auto-approve on")
 	}
-	return append(parts, "? for shortcuts")
+	return append(parts, shortcutsFooterPart)
 }
 
+const shortcutsFooterPart = "? for shortcuts"
+
 // turnFooterParts is the footer under the input while a turn runs: the prompt's,
-// without the shortcuts hint, since "?" is just text there.
+// without the shortcuts hint, since "?" is just text there, and without the ! output
+// waiting, which this turn is about to send or has sent.
 func turnFooterParts(cfg *config) []string {
-	parts := footerParts(cfg)
-	return parts[:len(parts)-1]
+	pending := pendingShellFooterPart(cfg)
+	var parts []string
+	for _, part := range footerParts(cfg) {
+		if part != pending && part != shortcutsFooterPart {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 // readPrompt shows the prompt and reads one line. On an interactive color terminal the

@@ -1322,8 +1322,57 @@ func TestBackgroundGroupsForgetsGroupsThatExited(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err := stopGroup(1); err == nil || groupAlive(0) || groupAlive(1) {
-		t.Fatal("expected process groups 0 and 1 to be refused")
+	if left := stopGroups([]int{0, 1}); len(left) != 0 || groupAlive(0) || groupAlive(1) {
+		t.Fatal("expected process groups 0 and 1 to be left alone")
+	}
+	if err := StopBackgroundGroup(12345678); err == nil {
+		t.Fatal("expected a group goat did not record to be refused")
+	}
+}
+
+func TestReusedGroupIDIsNotGoats(t *testing.T) {
+	// A process leading its own group with a recorded group's ID means the ID was
+	// reused: goat's shell, which led the recorded group, has exited.
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	if groupAlive(cmd.Process.Pid) {
+		t.Fatal("expected a group led by a live process not to count as goat's")
+	}
+}
+
+func TestStopAllBackgroundStopsACommandStillRunning(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 500 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := RunBashFor(context.Background(), "echo $$ > shell.pid; sleep 30", ".", 0)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat("shell.pid"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the command did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	StopAllBackground()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the stopped command to fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected the running command to be stopped")
 	}
 }
 

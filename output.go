@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -221,11 +222,13 @@ func transcriptMarkdown(entries []historyEntry, model string) string {
 				fmt.Fprintf(&b, "\n## goat\n\n%s\n", text)
 			}
 		case "tool_call":
-			summary, _ := toolArgSummary(entry.ToolName, entry.Arguments)
 			if entry.Status == "user" {
-				fmt.Fprintf(&b, "\n**You ran** `%s`\n", summary)
+				var args struct{ Command string }
+				json.Unmarshal([]byte(entry.Arguments), &args)
+				fmt.Fprintf(&b, "\n**You ran**\n\n%s\n", fence(args.Command))
 				break
 			}
+			summary, _ := toolArgSummary(entry.ToolName, entry.Arguments)
 			fmt.Fprintf(&b, "\n**%s**\n", toolDisplayName(entry.ToolName)+"("+summary+")")
 		case "tool_output":
 			status := ""

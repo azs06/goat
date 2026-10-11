@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -93,7 +94,9 @@ func TestInterruptReturnsTheQueueToThePrompt(t *testing.T) {
 	input.partial = "half typed"
 
 	returnQueueToPrompt(input)
-	if input.partial != "one /compact half typed" || len(turnQueue.items) != 0 {
+	// One line each: a queued ! command must not take the messages after it as its
+	// arguments.
+	if input.partial != "one\n/compact\nhalf typed" || len(turnQueue.items) != 0 {
 		t.Fatalf("expected everything back in the prompt, got %q and %v", input.partial, turnQueue.items)
 	}
 }
@@ -237,3 +240,28 @@ func TestTurnFrameLinesFrameTheInputLikeThePrompt(t *testing.T) {
 		t.Fatalf("got %q, row %d", lines, row)
 	}
 }
+
+func TestTurnFrameLinesFitTheScreenWithALongQueue(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	turnQueue.capturing = true
+	setTurnFooter([]string{"FOOTER"})
+	for i := range 30 {
+		turnQueue.items = append(turnQueue.items, fmt.Sprintf("q%d", i+1))
+	}
+	for _, maxRows := range []int{3, 5, 12} {
+		lines, row, _ := turnFrameLines(60, maxRows)
+		if len(lines) > maxRows || len(lines) == 0 {
+			t.Fatalf("maxRows %d: %d lines", maxRows, len(lines))
+		}
+		plain := style.StripANSI(strings.Join(lines, "\n"))
+		if maxRows >= 12 && (!strings.Contains(plain, "more queued") || !strings.Contains(plain, "q30") || strings.Contains(plain, "q1\n")) {
+			t.Fatalf("maxRows %d: expected the latest messages under a count:\n%s", maxRows, plain)
+		}
+		if !strings.Contains(style.StripANSI(lines[row]), promptPrefixText()) {
+			t.Fatalf("maxRows %d: row %d is not the input: %q", maxRows, row, plain)
+		}
+	}
+}
+
+func promptPrefixText() string { return style.StripANSI(promptPrefix()) }

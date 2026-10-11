@@ -23,7 +23,7 @@ func commandProcesses(ctx context.Context, c *config, args []string) error {
 	groups := workspace.BackgroundGroups()
 	if len(args) > 0 {
 		if args[0] != "stop" || len(args) != 2 {
-			return errors.New("usage: /ps, /ps stop <n> or /ps stop all")
+			return errors.New("usage: /ps, /ps stop <n|group> or /ps stop all")
 		}
 		if len(groups) == 0 {
 			return errors.New("nothing goat started is running in the background")
@@ -32,8 +32,18 @@ func commandProcesses(ctx context.Context, c *config, args []string) error {
 			return stopProcessGroups(groups)
 		}
 		n, err := strconv.Atoi(args[1])
-		if err != nil || n < 1 || n > len(groups) {
-			return fmt.Errorf("choose a number between 1 and %d, or all", len(groups))
+		if err != nil {
+			return fmt.Errorf("choose a number between 1 and %d, a group, or all", len(groups))
+		}
+		// A group ID always means that group, so the number does not have to match a
+		// list printed before something else exited.
+		for _, group := range groups {
+			if group.PGID == n {
+				return stopProcessGroups([]workspace.BackgroundGroup{group})
+			}
+		}
+		if n < 1 || n > len(groups) {
+			return fmt.Errorf("choose a number between 1 and %d, a group, or all", len(groups))
 		}
 		return stopProcessGroups(groups[n-1 : n])
 	}
@@ -80,7 +90,7 @@ func printProcessGroups(groups []workspace.BackgroundGroup) {
 			fmt.Println(style.Muted.Render(fmt.Sprintf("   %d  %s  %s", process.PID, process.Elapsed, escapeControlChars(truncateForLog(process.Command, 100)))))
 		}
 	}
-	fmt.Println(style.Muted.Render("/ps stop <n> stops one; /ps stop all stops them all."))
+	fmt.Println(style.Muted.Render("/ps stop <n> or /ps stop <group> stops one; /ps stop all stops them all."))
 }
 
 func processLabel(group workspace.BackgroundGroup) string {
@@ -120,29 +130,39 @@ func backgroundFooterPart() string {
 }
 
 // stopBackgroundOnExit stops what run_bash commands left running, as goat exits, and
-// says what it stopped. Left behind, a dev server would keep its port with nothing
-// listing it.
+// says what it is stopping first, since that can take a few seconds. Left behind, a dev
+// server would keep its port with nothing listing it.
 func stopBackgroundOnExit(out io.Writer) {
-	stopped := workspace.StopAllBackground()
-	if len(stopped) == 0 {
-		return
+	groups := workspace.BackgroundGroups()
+	if len(groups) > 0 {
+		labels := make([]string, len(groups))
+		for i, group := range groups {
+			labels[i] = processLabel(group)
+		}
+		fmt.Fprintln(out, formatNotice("Stopping what goat left running: "+strings.Join(labels, ", ")))
 	}
-	labels := make([]string, len(stopped))
-	for i, group := range stopped {
-		labels[i] = processLabel(group)
-	}
-	fmt.Fprintln(out, formatNotice("Stopped what goat left running: "+strings.Join(labels, ", ")))
+	workspace.StopAllBackground()
 }
 
-// stopBackgroundOnSignal stops the background commands when goat is closed by a hangup,
-// such as its terminal window closing, or by SIGTERM; their sessions are detached from
-// the terminal, so nothing else would.
+// stopBackgroundOnSignal stops the background commands, and a command still running,
+// when goat is closed by a hangup, such as its terminal window closing, or by SIGTERM:
+// they run in sessions of their own, away from the terminal, so nothing else would. A
+// signal goat started with ignored, as under nohup, stays ignored.
 func stopBackgroundOnSignal() {
+	var watched []os.Signal
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGTERM} {
+		if !signal.Ignored(sig) {
+			watched = append(watched, sig)
+		}
+	}
+	if len(watched) == 0 {
+		return
+	}
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGHUP, syscall.SIGTERM)
+	signal.Notify(signals, watched...)
 	go func() {
 		received := <-signals
-		workspace.StopAllBackground()
+		stopBackgroundOnExit(os.Stderr)
 		code := 128 + 1
 		if received == syscall.SIGTERM {
 			code = 128 + 15

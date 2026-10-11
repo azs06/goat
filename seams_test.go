@@ -223,3 +223,12 @@ func TestModelAndEffortChangesRestateTheBannerRow(t *testing.T) {
 		t.Fatalf("plain output changed:\n%q", out)
 	}
 }
+
+func TestSpinnerStatusLineFitsANarrowTerminal(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	s := &spinner{label: "Running " + strings.Repeat("a", 60), started: time.Now()}
+	if line, _, _ := strings.Cut(style.StripANSI(s.render()), "\n"); style.VisibleWidth(strings.TrimPrefix(line, "\r\x1b[2K")) >= terminalWidth() {
+		t.Fatalf("status line wider than the terminal: %q", line)
+	}
+}
