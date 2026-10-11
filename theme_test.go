@@ -54,9 +54,18 @@ func TestGoatThemeNamesABuiltinTheme(t *testing.T) {
 	}
 }
 
-func TestThemeCommandSwitchesAndSaves(t *testing.T) {
-	t.Cleanup(func() { style.Use(style.Default()); delete(envSources, "GOAT_THEME") })
+// isolateThemeSettings keeps a test's theme switches and config.json reads to itself.
+func isolateThemeSettings(t *testing.T) {
+	t.Helper()
+	previous := envSources
+	envSources = map[string]string{}
+	t.Cleanup(func() { envSources = previous; style.Use(style.Default()) })
 	t.Setenv("GOAT_THEME", "")
+	t.Setenv("GOAT_CODEMODE", "")
+}
+
+func TestThemeCommandSwitchesAndSaves(t *testing.T) {
+	isolateThemeSettings(t)
 	configDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configDir)
 	configFile := filepath.Join(configDir, "goat", "config.json")
@@ -112,7 +121,7 @@ func TestThemeCommandSwitchesAndSaves(t *testing.T) {
 }
 
 func TestThemeFromTheShellIsNotSaved(t *testing.T) {
-	t.Cleanup(func() { style.Use(style.Default()) })
+	isolateThemeSettings(t)
 	t.Setenv("GOAT_THEME", "default")
 	configDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configDir)
@@ -130,6 +139,7 @@ func TestThemeFromTheShellIsNotSaved(t *testing.T) {
 }
 
 func TestThemeOptionsMarkTheThemeInUse(t *testing.T) {
+	isolateThemeSettings(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GOAT_THEME", "one-dark")
 	options, values := themeOptions()
@@ -152,5 +162,66 @@ func TestProcessStaysPlainWithAColorTheme(t *testing.T) {
 	out, _, code := runGoat(t, t.TempDir(), "/theme one-dark\n/status\n/exit\n", []string{"OPENAI_API_KEY=test", "GOAT_THEME=one-dark"})
 	if code != 0 || strings.Contains(out, "\x1b") {
 		t.Fatalf("piped output must stay plain (exit %d):\n%q", code, out)
+	}
+}
+
+func TestThemeFileStaysOfferedAndBrokenOnesAreNotSaved(t *testing.T) {
+	isolateThemeSettings(t)
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	file := filepath.Join(configDir, "goat", "theme.json")
+	os.MkdirAll(filepath.Dir(file), 0o700)
+	os.WriteFile(file, []byte(`{"styles": {"accent": "color: red"}}`), 0o600)
+
+	captureStdout(t, func() {
+		if err := commandTheme(context.Background(), &config{}, []string{"one-dark"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// With a built-in theme chosen, the file is still there to go back to.
+	if _, values := themeOptions(); len(values) != 3 || values[2] != file {
+		t.Fatalf("expected the theme file offered, got %v", values)
+	}
+	captureStdout(t, func() {
+		if err := switchTheme(file); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if currentThemeSetting() != file {
+		t.Fatalf("expected the file in use, got %q", currentThemeSetting())
+	}
+
+	// A file that does not load is not switched to or saved.
+	os.WriteFile(file, []byte(`{"styles":`), 0o600)
+	before, _ := os.ReadFile(filepath.Join(configDir, "goat", "config.json"))
+	if err := switchTheme(file); err == nil {
+		t.Fatal("expected a broken theme file to be refused")
+	}
+	after, _ := os.ReadFile(filepath.Join(configDir, "goat", "config.json"))
+	if string(before) != string(after) {
+		t.Fatalf("config.json changed:\n%s", after)
+	}
+}
+
+func TestThemeSavedAfterAFailedSave(t *testing.T) {
+	isolateThemeSettings(t)
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	configFile := filepath.Join(configDir, "goat", "config.json")
+	os.MkdirAll(filepath.Dir(configFile), 0o700)
+	os.WriteFile(configFile, []byte(`{"theme":`), 0o600)
+	if err := switchTheme("one-dark"); err == nil || !strings.Contains(err.Error(), "saving it failed") {
+		t.Fatalf("got %v", err)
+	}
+	// Once config.json is fixed, the next switch saves: goat's own GOAT_THEME is not
+	// mistaken for the shell's.
+	os.WriteFile(configFile, []byte(`{}`), 0o600)
+	out := captureStdout(t, func() {
+		if err := switchTheme("default"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if data, _ := os.ReadFile(configFile); !strings.Contains(out, "Saved in") || !strings.Contains(string(data), `"theme": "default"`) {
+		t.Fatalf("got %q, %s", out, data)
 	}
 }

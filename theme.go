@@ -100,13 +100,30 @@ func themeOptions() (options []selectOption, values []string) {
 		options = append(options, selectOption{label: name, hint: themeHints[name], current: currentIsBuiltin && name == currentName})
 		values = append(values, name)
 	}
-	if path, _ := themePath(); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			options = append(options, selectOption{label: displayPath(path), hint: "your theme file", current: !currentIsBuiltin})
-			values = append(values, path)
-		}
+	if path := themeFileCandidate(); path != "" {
+		options = append(options, selectOption{label: displayPath(path), hint: "your theme file", current: !currentIsBuiltin})
+		values = append(values, path)
 	}
 	return options, values
+}
+
+// themeFileCandidate is the theme file /theme offers: the one GOAT_THEME names, or else
+// theme.json in the config directory, also while a built-in theme is chosen. "" when
+// there is none.
+func themeFileCandidate() string {
+	path := strings.TrimSpace(os.Getenv("GOAT_THEME"))
+	if _, builtin := style.BuiltinName(path); builtin || path == "" {
+		if dir := goatConfigDir(); dir != "" {
+			path = filepath.Join(dir, "theme.json")
+		}
+	}
+	if info, err := os.Stat(path); path == "" || err != nil || info.IsDir() {
+		return ""
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	return path
 }
 
 // currentThemeSetting is the theme in use: a built-in theme's name or the theme file's
@@ -115,10 +132,8 @@ func currentThemeSetting() string {
 	if name, ok := style.BuiltinName(os.Getenv("GOAT_THEME")); ok {
 		return name
 	}
-	if path, _ := themePath(); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
+	if path := themeFileCandidate(); path != "" {
+		return path
 	}
 	return style.DefaultThemeName
 }
@@ -133,44 +148,49 @@ func themeLabel(setting string) string {
 }
 
 // switchTheme makes setting, a built-in theme's name or a theme file's path, the theme
-// now and at the next start: it is saved as "theme" in config.json.
+// now and at the next start: it is saved as "theme" in config.json. A theme file that
+// cannot be used changes nothing.
 func switchTheme(setting string) error {
-	// The shell's GOAT_THEME wins over config.json at the next start, so it is left
-	// alone and only this session changes.
-	shellSet := strings.TrimSpace(os.Getenv("GOAT_THEME")) != "" && envSources["GOAT_THEME"] == ""
-	if !shellSet {
-		os.Setenv("GOAT_THEME", setting)
-	}
-	if name, ok := style.BuiltinName(setting); ok {
-		theme, _ := style.Builtin(name)
-		style.Use(theme)
-	} else if !shellSet {
-		applyTheme()
+	theme, ok := style.Builtin(setting)
+	if name, builtin := style.BuiltinName(setting); builtin {
+		setting = name
 	} else {
-		theme, problems, err := style.LoadTheme(setting)
+		// config.json takes only full paths.
+		if absolute, err := filepath.Abs(setting); err == nil {
+			setting = absolute
+		}
+		loaded, problems, err := style.LoadTheme(setting)
 		if err != nil {
-			return err
+			return fmt.Errorf("the theme in %s cannot be used: %w", displayPath(setting), err)
 		}
 		for _, problem := range problems {
 			warnf("theme %s: %s", setting, problem)
 		}
-		style.Use(theme)
+		theme, ok = loaded, true
 	}
+	if !ok {
+		return fmt.Errorf("there is no theme %q", setting)
+	}
+	style.Use(theme)
 
+	// The shell's GOAT_THEME wins over config.json at the next start, so it is left
+	// alone and only this session changes. Once goat has set it, it is goat's.
 	message := "Switched to the " + themeLabel(setting) + "."
-	if shellSet {
+	if strings.TrimSpace(os.Getenv("GOAT_THEME")) != "" && envSources["GOAT_THEME"] == "" {
 		fmt.Println(formatSuccess(message) + style.Muted.Render(" GOAT_THEME is set in your shell, so it applies again at the next start."))
 		return nil
 	}
+	os.Setenv("GOAT_THEME", setting)
 	if configPath() == "" {
+		envSources["GOAT_THEME"] = "/theme"
 		fmt.Println(formatSuccess(message) + style.Muted.Render(" There is no config directory to save it in, so it lasts for this session."))
 		return nil
 	}
+	envSources["GOAT_THEME"] = displayPath(configPath())
 	value, _ := json.Marshal(setting)
 	if err := writeJSONField(configPath(), "config.json", "theme", value, configFileMode()); err != nil {
 		return fmt.Errorf("switched for this session, but saving it failed: %w", err)
 	}
-	envSources["GOAT_THEME"] = displayPath(configPath())
 	fmt.Println(formatSuccess(message) + style.Muted.Render(" Saved in "+displayPath(configPath())+"."))
 	return nil
 }
