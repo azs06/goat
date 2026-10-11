@@ -96,16 +96,18 @@ func loadGlobalEnv() (warnings []string, err error) {
 
 	var taken []string
 	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if fixedByEnvironment[name] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
+		// On Windows anthropic_auth_token is ANTHROPIC_AUTH_TOKEN, so checks go by EnvName.
+		canonical := workspace.EnvName(name)
+		if fixedByEnvironment[canonical] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 			continue
 		}
-		if owner := credentialOf[name]; owner != "" && fromShell[owner] {
+		if owner := credentialOf[canonical]; owner != "" && fromShell[owner] {
 			continue
 		}
 		if err := os.Setenv(name, values[name]); err != nil {
 			return warnings, fmt.Errorf("setting %s from %s: %w", name, path, err)
 		}
-		envSources[name] = displayPath(path)
+		envSources[canonical] = displayPath(path)
 		taken = append(taken, name)
 	}
 	workspace.HideFromCommands(taken...)

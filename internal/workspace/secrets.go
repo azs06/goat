@@ -1,20 +1,35 @@
 package workspace
 
 import (
+	"runtime"
 	"strings"
 
 	"github.com/azs06/goat/internal/provider"
 )
 
-// dotenvKeys are the variables goat loaded from its global .env at startup. They are secrets the
-// user gave goat, not the shell, so commands the model runs do not inherit them.
+// dotenvKeys are the variables goat loaded from its global .env or a key command at
+// startup, by EnvName. They are secrets the user gave goat, not the shell, so commands
+// the model runs do not inherit them.
 var dotenvKeys = map[string]bool{}
 
+// CaseInsensitiveEnv is set where environment variable names ignore case, as on
+// Windows: there xdg_config_home and XDG_CONFIG_HOME are one variable.
+var CaseInsensitiveEnv = runtime.GOOS == "windows"
+
+// EnvName is the name to compare an environment variable by: upper case where names
+// ignore case, as written elsewhere.
+func EnvName(name string) string {
+	if CaseInsensitiveEnv {
+		return strings.ToUpper(name)
+	}
+	return name
+}
+
 // HideFromCommands keeps the named variables out of the environment run_bash commands
-// get. Call it at startup with the variables loaded from the global .env.
+// get. Call it at startup with the variables goat set itself.
 func HideFromCommands(names ...string) {
 	for _, name := range names {
-		dotenvKeys[name] = true
+		dotenvKeys[EnvName(name)] = true
 	}
 }
 
@@ -38,13 +53,13 @@ func isCredentialVar(name string) bool {
 }
 
 // CommandEnvironment is the environment run_bash commands get: goat's own, without
-// credentials or anything loaded from the global .env. A command that prints its environment
-// would otherwise put the user's keys in the transcript the model provider receives.
+// credentials or anything goat loaded itself. A command that prints its environment would
+// otherwise put the user's keys in the transcript the model provider receives.
 func CommandEnvironment(environ []string) []string {
 	kept := make([]string, 0, len(environ))
 	for _, entry := range environ {
 		name, _, _ := strings.Cut(entry, "=")
-		if dotenvKeys[name] || isCredentialVar(name) {
+		if dotenvKeys[EnvName(name)] || isCredentialVar(name) {
 			continue
 		}
 		kept = append(kept, entry)

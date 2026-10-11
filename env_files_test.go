@@ -357,3 +357,29 @@ func TestProcessShowsWhereACustomEndpointSendsTheKey(t *testing.T) {
 		t.Error("the endpoint's path must not be shown")
 	}
 }
+
+// Windows names ignore case. The cross-build is the only Windows check, so this flips the
+// switch to test the comparisons here.
+func TestEnvFilesCompareNamesWithoutCaseWhereTheSystemDoes(t *testing.T) {
+	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "xdg_config_home", "home", "anthropic_api_key", "goat_t_lower")
+	previous := workspace.CaseInsensitiveEnv
+	workspace.CaseInsensitiveEnv = true
+	t.Cleanup(func() { workspace.CaseInsensitiveEnv = previous })
+
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
+	os.WriteFile(global, []byte("xdg_config_home=/elsewhere\nhome=/elsewhere\nanthropic_api_key=global-key\ngoat_t_lower=1\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"xdg_config_home", "home", "anthropic_api_key"} {
+		if os.Getenv(name) != "" {
+			t.Errorf("%s should have been refused as its upper-case name", name)
+		}
+	}
+	if os.Getenv("goat_t_lower") != "1" || envSources["GOAT_T_LOWER"] == "" {
+		t.Fatalf("other variables still load: %q %v", os.Getenv("goat_t_lower"), envSources)
+	}
+	if slices.Contains(workspace.CommandEnvironment([]string{"GOAT_T_LOWER=1"}), "GOAT_T_LOWER=1") {
+		t.Error("a variable from the file must stay hidden whatever case the system reports")
+	}
+}
