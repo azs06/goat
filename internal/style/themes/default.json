@@ -23,7 +23,7 @@
     "code-constant": "color: #56b6c2",
     "inline-code": "color: var(--light)",
     "success": "color: var(--white)",
-    "error": "color: var(--gray-dim)",
+    "error": "color: var(--white)",
     "warning": "color: var(--silver)",
     "approval-title": "color: var(--silver); font-weight: bold",
     "diff-added": "color: var(--white)",

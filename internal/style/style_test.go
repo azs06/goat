@@ -297,3 +297,37 @@ func TestThemeFileExtendsABuiltinTheme(t *testing.T) {
 		t.Fatalf("expected the default theme and one problem, got %v %v", problems, err)
 	}
 }
+
+func TestBuiltinThemeNamesAreForgiving(t *testing.T) {
+	for _, name := range []string{"one-dark", "One-Dark", "onedark", "one dark", " ONE_DARK "} {
+		if got, ok := BuiltinName(name); !ok || got != "one-dark" {
+			t.Errorf("BuiltinName(%q) = %q, %v", name, got, ok)
+		}
+		if _, ok := Builtin(name); !ok {
+			t.Errorf("Builtin(%q) found nothing", name)
+		}
+	}
+	for _, name := range []string{"", "solarized", "one-darker-still", "/themes/one-dark.json"} {
+		if got, ok := BuiltinName(name); ok {
+			t.Errorf("BuiltinName(%q) = %q, want none", name, got)
+		}
+	}
+}
+
+func TestSuggestBuiltinCatchesTypos(t *testing.T) {
+	for name, want := range map[string]string{
+		"ondedark": "one-dark",
+		"one-drak": "one-dark",
+		"dark":     "one-dark",
+		"defualt":  "default",
+	} {
+		if got, ok := SuggestBuiltin(name); !ok || got != want {
+			t.Errorf("SuggestBuiltin(%q) = %q, %v, want %q", name, got, ok, want)
+		}
+	}
+	for _, name := range []string{"", "x", "solarized", "gruvbox"} {
+		if got, ok := SuggestBuiltin(name); ok {
+			t.Errorf("SuggestBuiltin(%q) = %q, want none", name, got)
+		}
+	}
+}

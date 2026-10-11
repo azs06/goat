@@ -48,6 +48,10 @@ func TestGoatThemeNamesABuiltinTheme(t *testing.T) {
 	if got := applyTheme(); got != "the built-in one-dark theme" || style.Accent.Style() != oneDark.Style(style.Accent) {
 		t.Fatalf("applyTheme() = %q", got)
 	}
+	t.Setenv("GOAT_THEME", "One Dark")
+	if got := applyTheme(); got != "the built-in one-dark theme" {
+		t.Fatalf("applyTheme() = %q", got)
+	}
 }
 
 func TestThemeCommandSwitchesForTheSession(t *testing.T) {
@@ -63,6 +67,19 @@ func TestThemeCommandSwitchesForTheSession(t *testing.T) {
 	}
 	if err := commandTheme(context.Background(), &config{}, []string{"nope"}); err == nil || !strings.Contains(err.Error(), "default, one-dark") {
 		t.Fatalf("got %v", err)
+	}
+	// A near miss is not applied, but named.
+	style.Use(style.Default())
+	err := commandTheme(context.Background(), &config{}, []string{"ondedark"})
+	if err == nil || !strings.Contains(err.Error(), "did you mean one-dark?") || style.Accent.Style() != style.Default().Style(style.Accent) {
+		t.Fatalf("got %v", err)
+	}
+	// Spelled without the hyphen, or as two words, it is one-dark.
+	for _, args := range [][]string{{"onedark"}, {"One", "Dark"}} {
+		style.Use(style.Default())
+		if err := commandTheme(context.Background(), &config{}, args); err != nil || style.Accent.Style() != oneDark.Style(style.Accent) {
+			t.Fatalf("%v: got %v", args, err)
+		}
 	}
 	// With no argument the configured theme comes back.
 	if err := commandTheme(context.Background(), &config{}, nil); err != nil || style.Accent.Style() != style.Default().Style(style.Accent) {
