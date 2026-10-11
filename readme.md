@@ -52,8 +52,9 @@ providers with a key are offered (and the keyless local servers you
 [add yourself](#optional-add-other-providers)).
 
 The quickest way is to start goat and type `/login`: pick the provider and paste the
-key. OpenAI, Anthropic, OpenRouter and xAI also list signing in with your account
-(ChatGPT Plus/Pro, Claude Pro/Max, OpenRouter, Grok or X), which is not available yet,
+key. OpenAI, Anthropic, OpenRouter, xAI and Meta also list signing in with your account
+(ChatGPT Plus/Pro, Claude Pro/Max, OpenRouter, Grok or X, Meta Muse), which is not
+available yet,
 so choose **API key** there; the other providers take only a key. goat
 does not show the key as you type it, saves it to `~/.config/goat/auth.json` (readable
 only by you), checks it by listing the provider's models, and starts using it at once.
@@ -321,7 +322,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | --- | --- |
 | `/model [name]` | Pick a model with the arrow keys (type to filter), or `/model <name or number>`. The last entry, and `/model list`, ask each provider for every model. Only providers with an API key are listed. |
 | `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
-| `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter and xAI, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
+| `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter, xAI and Meta, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
 | `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
@@ -509,6 +510,7 @@ ones that have one. They list no models of their own: `/model` asks the provider
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
 | `gemini` | Google Gemini | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `xai` | xAI (Grok) | `XAI_API_KEY` | `https://api.x.ai/v1` |
+| `meta` | Meta (Muse) | `META_API_KEY` | `https://api.meta.ai/v1` |
 | `mistral` | Mistral | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1` |
 | `groq` | Groq | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` |
 | `together` | Together AI | `TOGETHER_API_KEY` | `https://api.together.ai/v1` |

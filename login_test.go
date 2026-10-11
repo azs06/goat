@@ -483,7 +483,7 @@ func TestOnlySomeProvidersOfferSigningIn(t *testing.T) {
 	dir := configTest(t)
 	writeConfigFile(t, dir, "config.json", `{"providers": {"xai": {"api": "openai", "base_url": "http://localhost:1/v1"}}}`)
 	loadAll(t)
-	for name, offered := range map[string]bool{provider.OpenAI: true, provider.Anthropic: true, "openrouter": true, provider.DeepSeek: false, "gemini": false, "moonshot": false, "xai": false} {
+	for name, offered := range map[string]bool{provider.OpenAI: true, provider.Anthropic: true, "openrouter": true, provider.DeepSeek: false, "meta": true, "gemini": false, "moonshot": false, "xai": false} {
 		if got := provider.SignIn(name) != ""; got != offered {
 			t.Errorf("%s: sign-in offered %v", name, got)
 		}

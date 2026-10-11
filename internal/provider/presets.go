@@ -15,6 +15,7 @@ var presets = []preset{
 	{"openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"},
 	{"gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"},
 	{"xai", "xAI (Grok)", "https://api.x.ai/v1", "XAI_API_KEY"},
+	{"meta", "Meta (Muse)", "https://api.meta.ai/v1", "META_API_KEY"},
 	{"mistral", "Mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY"},
 	{"groq", "Groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY"},
 	{"together", "Together AI", "https://api.together.ai/v1", "TOGETHER_API_KEY"},
@@ -74,6 +75,7 @@ var signIns = map[string]string{
 	Anthropic:    "Claude Pro/Max subscription",
 	"openrouter": "OpenRouter account",
 	"xai":        "Grok or X subscription",
+	"meta":       "Meta Muse subscription",
 }
 
 // SignIn names the account a provider can be signed in with, or "" when it takes only
