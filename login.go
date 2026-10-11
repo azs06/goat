@@ -63,6 +63,10 @@ func commandLogin(ctx context.Context, c *config, args []string) error {
 		name = picked
 	}
 	label := provider.Label(name)
+	// Where the key will go, before it is typed: a keyless start printed no notices.
+	if notice := endpointNotice(name); notice != "" {
+		fmt.Println(formatWarning(notice))
+	}
 
 	if ok, err := pickLoginMethod(ctx, c, label); err != nil || !ok {
 		if err == nil {
@@ -94,8 +98,8 @@ func commandLogin(ctx context.Context, c *config, args []string) error {
 	if err != nil {
 		return err
 	}
-	if strings.ContainsFunc(key, unicode.IsSpace) {
-		return errors.New("that is not an API key: it has spaces in it; nothing was saved")
+	if err := checkAPIKey(key); err != nil {
+		return err
 	}
 
 	if err := writeAuthKey(path, name, key); err != nil {
@@ -197,7 +201,23 @@ func pickLoginMethod(ctx context.Context, c *config, label string) (bool, error)
 	return chosen == 0, err
 }
 
-var errSecretCancelled = errors.New("cancelled")
+// checkAPIKey refuses what cannot be a key, without repeating it.
+func checkAPIKey(key string) error {
+	if strings.ContainsFunc(key, unicode.IsSpace) {
+		return errors.New("that is not an API key: it has spaces in it; nothing was saved")
+	}
+	return nil
+}
+
+var (
+	errSecretCancelled = errors.New("cancelled")
+	// errSecretLines is a paste of more than one line. The lines after the first would
+	// otherwise be left for the prompt, and sent to the model.
+	errSecretLines = errors.New("the pasted text has more than one line; paste just the key. Nothing was saved")
+)
+
+// secretDrainWait is how long readSecret waits for the rest of a paste after Enter.
+var secretDrainWait = 50 * time.Millisecond
 
 // readSecret reads a line without showing it, such as an API key. It needs a terminal
 // whose echo goat can turn off; elsewhere it refuses rather than show the key.
@@ -210,31 +230,70 @@ func readSecret(ctx context.Context, c *config, prompt string) (string, error) {
 	}
 	defer restore()
 
+	// The prompt gets its own line and only the short count below it is redrawn, so a
+	// prompt wider than the terminal never wraps into the redraw. Plain output gets no
+	// redraws at all.
+	fmt.Println(prompt)
 	show := func(count int) {
-		status := ""
-		if count > 0 {
-			status = style.Muted.Render(fmt.Sprintf("[%d characters]", count))
+		if style.Enabled() {
+			fmt.Print("\r\x1b[K" + style.Muted.Render(fmt.Sprintf("  [%d characters]", count)))
 		}
-		fmt.Print("\r\x1b[K" + prompt + status)
 	}
 	show(0)
 	secret, err := collectSecret(ctx, c.input.readKey, show)
+	if err == nil && drainInput(ctx, c.input.readKey, secretDrainWait) {
+		// More lines came right behind the first: a paste without bracketed paste.
+		err = errSecretLines
+	}
 	fmt.Println()
-	return secret, err
+	if err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+// drainInput discards keys that arrive within wait of each other, as the rest of a
+// paste does, and reports whether there were any.
+func drainInput(ctx context.Context, readKey func(context.Context) (string, error), wait time.Duration) bool {
+	drained := false
+	for {
+		waitCtx, cancel := context.WithTimeout(ctx, wait)
+		_, err := readKey(waitCtx)
+		cancel()
+		if err != nil {
+			return drained
+		}
+		drained = true
+	}
 }
 
 // collectSecret gathers keys up to Enter. Backspace and Ctrl-U edit; Esc and Ctrl-C
-// cancel; escape sequences, such as arrows or the markers of a bracketed paste, and
-// other control keys are ignored. shown is told how many characters there are after
-// each change, never what they are.
+// cancel; escape sequences, such as arrows, and other control keys are ignored. A
+// bracketed paste with a line break in it is read to its end and refused. shown is told
+// how many characters there are after each change, never what they are.
 func collectSecret(ctx context.Context, readKey func(context.Context) (string, error), shown func(count int)) (string, error) {
 	var secret []rune
+	pasting, lines := false, false
 	for {
 		key, err := readKey(ctx)
 		if err != nil {
 			return "", err
 		}
 		switch {
+		case key == pasteStart:
+			pasting = true
+			continue
+		case key == pasteEnd:
+			pasting = false
+			if lines {
+				return "", errSecretLines
+			}
+			continue
+		case pasting && (key == "\r" || key == "\n"):
+			lines = true
+			continue
+		case lines:
+			continue
 		case key == "\r" || key == "\n":
 			return strings.TrimSpace(string(secret)), nil
 		case key == "\x1b" || key == "\x03" || key == "\x04":
@@ -306,8 +365,9 @@ func readAuthFields(path string) ([]jsonfile.Field, error) {
 // file is replaced in one step, readable only by the user; a symbolic link, as from a
 // dotfiles repository, is followed and its target replaced.
 func writeAuthKey(path, name, key string) error {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+	path, err := followLinks(path)
+	if err != nil {
+		return err
 	}
 	fields, err := readAuthFields(path)
 	if err != nil {
@@ -377,6 +437,30 @@ func writeAuthKey(path, name, key string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// followLinks resolves path through symbolic links, including one whose target does not
+// exist yet, as a dotfiles repository may leave for a file kept out of it.
+func followLinks(path string) (string, error) {
+	for range 40 {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			// A missing file, or a real one, possibly in a linked directory.
+			if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+				return filepath.Join(resolved, filepath.Base(path)), nil
+			}
+			return path, nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
+	}
+	return "", fmt.Errorf("%s: too many symbolic links", displayPath(path))
+}
+
 // shellCredential is the provider's credential variable the shell sets, directly or as
 // a _COMMAND, which keeps auth.json from being used for it; "" when there is none. The
 // files goat loaded record the variables they set, so theirs are not the shell's.
@@ -441,8 +525,9 @@ func checkLogin(ctx context.Context, c *config, name, key string) error {
 		return ctx.Err()
 	}
 	if err != nil {
-		// Some errors repeat part of the key.
-		message := strings.ReplaceAll(shortError(err), key, "[key]")
+		// Some errors repeat the key; it is cut out before the message is shortened, which
+		// could leave a piece of it.
+		message := shortError(errors.New(strings.ReplaceAll(err.Error(), key, "[key]")))
 		fmt.Println(formatWarning(fmt.Sprintf("%s did not accept the key when goat listed its models: %s. Run /login again to replace it.", provider.Label(name), message)))
 	} else {
 		fmt.Println(formatNotice(fmt.Sprintf("The key works: %s lists %d models.", provider.Label(name), len(models))))

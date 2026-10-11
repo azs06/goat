@@ -65,7 +65,8 @@ func sessionFromConfig(cfg *config) savedSession {
 var sessionSaver = writeSessionFile
 
 func saveSession(cfg *config) {
-	if cfg.ephemeral {
+	// Without a model, as after a start with no key, the saved session is left as it is.
+	if cfg.ephemeral || cfg.model.IsZero() {
 		return
 	}
 	if err := sessionSaver(sessionPath, sessionFromConfig(cfg)); err != nil {

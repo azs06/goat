@@ -295,24 +295,32 @@ func endpointNotices() []string {
 		if provider.CredentialSource(name) == "" {
 			continue
 		}
-		endpoint, err := provider.ResolveEndpoint(name)
-		if err != nil {
-			notices = append(notices, fmt.Sprintf("%s is unavailable: %v", name, err))
-			continue
-		}
-		if _, isEntry := provider.LookupEntry(name); isEntry {
-			// The user wrote the entry's URL into their own config, so only plain http
-			// to another machine is worth a word at every start.
-			if endpoint.Unencrypted {
-				notices = append(notices, fmt.Sprintf("%s sends its key to %s%s", name, endpoint.Origin(), unencryptedNote(endpoint)))
-			}
-			continue
-		}
-		if endpoint.Custom {
-			notices = append(notices, fmt.Sprintf("%s requests go to %s (%s)%s", name, endpoint.Origin(), variableOrigin(provider.BaseURLVars[name]), unencryptedNote(endpoint)))
+		if notice := endpointNotice(name); notice != "" {
+			notices = append(notices, notice)
 		}
 	}
 	return notices
+}
+
+// endpointNotice is the line about where a provider's requests and key go, or "" when
+// they go to the provider's own API.
+func endpointNotice(name string) string {
+	endpoint, err := provider.ResolveEndpoint(name)
+	if err != nil {
+		return fmt.Sprintf("%s is unavailable: %v", name, err)
+	}
+	if _, isEntry := provider.LookupEntry(name); isEntry {
+		// The user wrote the entry's URL into their own config, so only plain http
+		// to another machine is worth a word at every start.
+		if endpoint.Unencrypted {
+			return fmt.Sprintf("%s sends its key to %s%s", name, endpoint.Origin(), unencryptedNote(endpoint))
+		}
+		return ""
+	}
+	if endpoint.Custom {
+		return fmt.Sprintf("%s requests go to %s (%s)%s", name, endpoint.Origin(), variableOrigin(provider.BaseURLVars[name]), unencryptedNote(endpoint))
+	}
+	return ""
 }
 
 func unencryptedNote(endpoint provider.Endpoint) string {

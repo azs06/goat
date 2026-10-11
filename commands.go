@@ -447,6 +447,10 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 // commandModel lists the models of providers that have an API key and switches to the
 // chosen one. With no argument on a terminal it asks for a choice.
 func commandModel(ctx context.Context, c *config, args []string) error {
+	if len(provider.AvailableNames()) == 0 {
+		fmt.Println(formatWarning(keylessNotice()))
+		return nil
+	}
 	if len(args) == 1 && strings.EqualFold(args[0], "list") {
 		printModelChoices(c, provider.ModelChoices(c.model, liveModels(ctx, c)))
 		return nil
@@ -514,6 +518,19 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	}
 	if err := provider.CheckDeepSeekModel(ctx, p, target.ID); err != nil {
 		return err
+	}
+
+	if c.model.IsZero() {
+		// The first model, after a start without a key: the saved session is restored
+		// as a start with this model would have.
+		c.model = target
+		if saved := c.pendingSaved; saved != nil {
+			c.pendingSaved = nil
+			restoreSavedConversation(c, saved)
+		}
+		saveSession(c)
+		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		return nil
 	}
 
 	if target.Provider == c.model.Provider {

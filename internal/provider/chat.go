@@ -356,10 +356,30 @@ func extraString(fields map[string]respjson.Field, name string) string {
 }
 
 func (p *chatProvider) ListModels(ctx context.Context) ([]string, error) {
-	var models []string
-	pager := p.models.ListAutoPaging(ctx)
-	for pager.Next() {
-		models = append(models, pager.Current().ID)
+	// Most servers answer {"data": [...]}, but some, such as Together AI, send a bare
+	// array, which the SDK's page reads as no models. The list is not paginated.
+	var raw json.RawMessage
+	if _, err := p.models.List(ctx, option.WithResponseBodyInto(&raw)); err != nil {
+		return nil, err
 	}
-	return models, pager.Err()
+	type model struct {
+		ID string `json:"id"`
+	}
+	var list []model
+	if err := json.Unmarshal(raw, &list); err != nil {
+		var page struct {
+			Data []model `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, errors.New("the model list is not JSON goat understands")
+		}
+		list = page.Data
+	}
+	models := make([]string, 0, len(list))
+	for _, m := range list {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	return models, nil
 }

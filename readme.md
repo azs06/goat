@@ -56,7 +56,8 @@ The quickest way is to start goat and type `/login`: pick the provider, choose
 does not show the key as you type it, saves it to `~/.config/goat/auth.json` (readable
 only by you), checks it by listing the provider's models, and starts using it at once.
 `/login openai` skips the list. Without a key goat still starts at a terminal, so
-`/login` is there on the first run.
+`/login` is there on the first run; a saved conversation waits, untouched, until a key
+gives goat a model to continue it on.
 
 Or put the keys in `~/.config/goat/auth.json` (`$XDG_CONFIG_HOME/goat/auth.json` when
 `XDG_CONFIG_HOME` is set). goat reads it whichever folder it starts in, and keeps the
@@ -518,7 +519,10 @@ ones that have one. They list no models of their own: `/model` asks the provider
 
 Like the built-in keys, these variables are kept from `run_bash` commands once goat
 knows them. A key for another region, such as Moonshot's or Qwen's mainland China API,
-needs an entry of the same name in `config.json` with that region's `base_url`. A model
+needs an entry of the same name in `config.json` with that region's `base_url`, e.g.
+`"moonshot": {"api": "openai", "base_url": "https://api.moonshot.cn/v1", "key_env":
+"MOONSHOT_API_KEY"}`. The entry replaces goat's, so it needs `key_env` when the key is in
+the environment; a key saved with `/login` or in `auth.json` works without it. A model
 an entry lists keeps its name: with an Ollama entry listing `mistral:7b`, that model is
 Ollama's, not Mistral's.
 
