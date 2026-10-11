@@ -1343,3 +1343,33 @@ func settledBackgroundGroups(t *testing.T, want int) []BackgroundGroup {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func TestRunBashForWithoutTimeoutRunsPastTheToolTimeout(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousTimeout := bashToolTimeout
+	bashToolTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { bashToolTimeout = previousTimeout })
+
+	output, err := RunBashFor(context.Background(), "sleep 1; echo done", ".", 0)
+	if err != nil || !strings.Contains(output, "done") {
+		t.Fatalf("got %q, %v", output, err)
+	}
+	if _, err := RunBashFor(context.Background(), "sleep 5", ".", 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out after 300ms") {
+		t.Fatalf("expected its own timeout, got %v", err)
+	}
+}
+
+func TestRunBashKeepsTheStartAndEndOfLongOutput(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousMax := maxBashOutput
+	maxBashOutput = 1000
+	t.Cleanup(func() { maxBashOutput = previousMax })
+
+	output, err := RunBash(context.Background(), "echo FIRST; head -c 100000 /dev/zero | tr '\\0' x; echo; echo LAST", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "FIRST") || !strings.Contains(output, "LAST") || !strings.Contains(output, "bytes of output omitted") || len(output) > 1300 {
+		t.Fatalf("got %d bytes: %.200q", len(output), output)
+	}
+}

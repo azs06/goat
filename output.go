@@ -222,6 +222,10 @@ func transcriptMarkdown(entries []historyEntry, model string) string {
 			}
 		case "tool_call":
 			summary, _ := toolArgSummary(entry.ToolName, entry.Arguments)
+			if entry.Status == "user" {
+				fmt.Fprintf(&b, "\n**You ran** `%s`\n", summary)
+				break
+			}
 			fmt.Fprintf(&b, "\n**%s**\n", toolDisplayName(entry.ToolName)+"("+summary+")")
 		case "tool_output":
 			status := ""

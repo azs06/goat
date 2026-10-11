@@ -113,6 +113,7 @@ type shortcut struct{ keys, action string }
 
 var promptShortcuts = []shortcut{
 	{"/", "commands"},
+	{"!", "run a shell command"},
 	{"tab", "complete command or path"},
 	{"↑ ↓", "history, or lines"},
 	{"ctrl-j", "new line (or \\ enter)"},

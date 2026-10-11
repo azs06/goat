@@ -496,6 +496,8 @@ func (e *promptEditor) render(footer string, width int) string {
 		below = renderCompletionMenu(items, e.selected, width)
 	} else if e.showShortcuts {
 		below = renderShortcuts(width)
+	} else if strings.HasPrefix(string(e.buf), "!") {
+		below = []string{renderShellHint(width)}
 	}
 	for _, line := range below {
 		b.WriteString("\n" + line)

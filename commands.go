@@ -126,7 +126,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		}
 		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
-	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Ctrl-C interrupts a turn."))
+	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn."))
 	fmt.Println()
 	fmt.Println(renderHelpTable(commands))
 	if style.Enabled() {
@@ -140,6 +140,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 
 func commandClear(ctx context.Context, c *config, args []string) error {
 	replaceConversation(c, conversationState{})
+	c.pendingShell = nil
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	// A new conversation starts under a fresh banner with the current model and effort.
@@ -186,6 +187,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 	}
 	adoptSavedConversation(c, previous)
+	c.pendingShell = nil
 	saveSession(c)
 
 	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))

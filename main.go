@@ -58,6 +58,11 @@ type config struct {
 	// pendingSaved is the saved session goat started without a model to continue it
 	// on. It is left on disk untouched, and restored once /login or /model picks a model.
 	pendingSaved *savedSession
+	// oneShot is set for a -p run, whose prompt is never a "!" command.
+	oneShot bool
+	// pendingShell holds the output of the "!" commands run since the last message,
+	// ready for the model; it goes with the next message.
+	pendingShell []string
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -341,14 +346,16 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	}
 
 	opts := turnOptions{
-		model:    cfg.model.ID,
-		effort:   cfg.reasoningEffort,
-		planMode: cfg.planMode,
-		codeMode: cfg.codeMode,
+		model:       cfg.model.ID,
+		effort:      cfg.reasoningEffort,
+		planMode:    cfg.planMode,
+		codeMode:    cfg.codeMode,
+		contextNote: shellContextNote(cfg.pendingShell),
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
 			cfg.conversation = state
+			cfg.pendingShell = nil
 			saveSession(cfg)
 		},
 	}
@@ -363,6 +370,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 
 	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
+	if err == nil {
+		// The ! output went with this message. After a failure it waits for /retry.
+		cfg.pendingShell = nil
+	}
 	if err == nil || !provider.IsThinkingBindingError(err) {
 		return err
 	}
@@ -377,6 +388,9 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
 	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
+	if err == nil {
+		cfg.pendingShell = nil
+	}
 	return err
 }
 
@@ -385,28 +399,36 @@ func handleInput(cfg *config, text string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	cmd, args, err := lookupCommand(text)
-	if err != nil {
-		return err
+	shellCommand, isShell := shellEscapeText(cfg, text)
+	var cmd *cliCommand
+	var args []string
+	if !isShell {
+		var err error
+		if cmd, args, err = lookupCommand(text); err != nil {
+			return err
+		}
 	}
 
 	// On an interactive color terminal, what is typed while the work runs is queued.
 	queueing := cfg.interactive && style.Enabled()
 	started := time.Now()
 	before, _ := loadConversationHistoryEntries()
-	err = runWithInputGuard(queueing, func() error {
+	err := runWithInputGuard(queueing, func() error {
 		if queueing {
 			fmt.Print(bracketedPasteOn)
 			defer fmt.Print(bracketedPasteOff)
 			startKeyCapture(ctx, cfg.input)
 			defer stopKeyCapture()
 		}
-		if cmd != nil {
+		switch {
+		case isShell:
+			return runShellEscape(ctx, cfg, shellCommand)
+		case cmd != nil:
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
 	})
-	if cmd == nil && err == nil && style.Enabled() {
+	if cmd == nil && !isShell && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
 			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed, turnCostText(before)))
@@ -464,6 +486,9 @@ func footerParts(cfg *config) []string {
 	}
 	if running := backgroundFooterPart(); running != "" {
 		parts = append(parts, running)
+	}
+	if pending := pendingShellFooterPart(cfg); pending != "" {
+		parts = append(parts, pending)
 	}
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())
@@ -631,6 +656,7 @@ func main() {
 		// A one-shot run never asks anything: stdin may hold the prompt itself.
 		cfg.interactive = false
 		cfg.approver.interactive = false
+		cfg.oneShot = true
 		code := runOneShot(cfg, opts)
 		stopBackgroundOnExit(os.Stderr)
 		os.Exit(code)

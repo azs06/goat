@@ -277,12 +277,26 @@ Typing `/` opens a menu of matching commands; after a command and a space it sug
 command's arguments, such as the effort levels after `/effort `. Pasted text keeps its
 line breaks and is never sent before you press Enter.
 
+### Shell commands
+
+A line starting with `!` runs in the shell instead of going to the model: `!git status`,
+`!npm test`. It runs the way `run_bash` runs commands (with `bash -lc` in the workspace,
+without the API keys in its environment and without a terminal to read from), but it is
+not confirmed, since you typed it, and has no time limit: Ctrl-C stops it. Up to 40 lines of
+its output are shown and `/output` shows the rest. The output also goes to the model with
+your next message, so `!npm test` then `fix the failures` works; the footer says when
+some is waiting. `/clear` drops it. A command started with `&` keeps running and is
+listed by `/ps`.
+
+Lines piped into goat run `!` commands only with `-y`, and a `-p` prompt is never one: it
+goes to the model as it is.
+
 ### Typing while goat works
 
 The line under the spinner takes a message while a turn runs, and Enter queues it. Queued
 text goes to the model with the next tool results, so it can change course mid-turn;
-anything still queued when the turn ends is sent as the next prompt. Slash commands wait
-until the turn is over. Up on an empty line takes the last queued message back to edit.
+anything still queued when the turn ends is sent as the next prompt. Slash commands and
+`!` commands wait until the turn is over. Up on an empty line takes the last queued message back to edit.
 After Ctrl-C or a failed turn nothing queued is sent; it is put back in the prompt
 instead. While the reply is streaming the line is hidden, but what you type is kept.
 Queueing needs an interactive color terminal.

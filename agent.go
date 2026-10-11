@@ -60,6 +60,9 @@ type turnOptions struct {
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	approveBash func(ctx context.Context, command, workdir string) error
+	// contextNote, when set, goes before the prompt in the turn's first request, such as
+	// the output of the ! commands the user ran since the last message.
+	contextNote string
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -336,6 +339,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
 	}
+	req.UserText = opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
 	}

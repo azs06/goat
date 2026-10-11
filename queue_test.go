@@ -73,6 +73,16 @@ func TestQueuedInputOrder(t *testing.T) {
 	if _, ok := nextQueuedInput(); ok {
 		t.Fatal("expected an empty queue")
 	}
+
+	// A ! shell command waits for the turn to end and runs on its own, like a slash
+	// command.
+	turnQueue.items = []string{"look", "!git status", "then this"}
+	if text := takeQueuedText(); text != "look" {
+		t.Fatalf("expected steering to stop at the shell command, got %q", text)
+	}
+	if text, ok := nextQueuedInput(); !ok || text != "!git status" {
+		t.Fatalf("expected the shell command on its own, got %q %v", text, ok)
+	}
 }
 
 func TestInterruptReturnsTheQueueToThePrompt(t *testing.T) {

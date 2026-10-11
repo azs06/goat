@@ -12,12 +12,54 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // bashToolTimeout is a variable so tests can shorten it.
 var bashToolTimeout = 30 * time.Second
+
+// maxBashOutput is how much of a command's output is kept: half from the start and half
+// from the end. A command run without a timeout can print without end.
+var maxBashOutput = 1 << 20
+
+// cappedOutput keeps the first and last limit/2 bytes written to it and counts the
+// rest. Stdout and stderr share it, as with CombinedOutput.
+type cappedOutput struct {
+	mu      sync.Mutex
+	limit   int
+	head    []byte
+	tail    []byte
+	omitted int64
+}
+
+func (c *cappedOutput) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := len(p)
+	half := c.limit / 2
+	if room := half - len(c.head); room > 0 {
+		take := min(room, len(p))
+		c.head = append(c.head, p[:take]...)
+		p = p[take:]
+	}
+	c.tail = append(c.tail, p...)
+	if extra := len(c.tail) - (c.limit - half); extra > 0 {
+		c.omitted += int64(extra)
+		c.tail = append(c.tail[:0], c.tail[extra:]...)
+	}
+	return n, nil
+}
+
+func (c *cappedOutput) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.omitted == 0 {
+		return string(c.head) + string(c.tail)
+	}
+	return fmt.Sprintf("%s\n... (%d bytes of output omitted) ...\n%s", c.head, c.omitted, c.tail)
+}
 
 const (
 	// bashPipeWaitDelay is how long run_bash keeps reading output after the shell exits,
@@ -1192,8 +1234,15 @@ func previewDataChange(oldLabel, newLabel string, oldData, newData []byte) strin
 }
 
 // RunBash runs a shell command in workdir, which must be inside the workspace, with
-// credentials removed from its environment, and returns its combined output.
+// credentials removed from its environment, and returns its combined output. It is
+// killed after the run_bash timeout.
 func RunBash(ctx context.Context, command, workdir string) (string, error) {
+	return RunBashFor(ctx, command, workdir, bashToolTimeout)
+}
+
+// RunBashFor is RunBash with its own timeout; zero or less means none, so only ctx
+// stops the command. Output past maxBashOutput is cut from the middle.
+func RunBashFor(ctx context.Context, command, workdir string, timeout time.Duration) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", fmt.Errorf("missing command")
@@ -1208,7 +1257,10 @@ func RunBash(ctx context.Context, command, workdir string) (string, error) {
 		return "", err
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, bashToolTimeout)
+	runCtx, cancel := context.WithCancel(ctx)
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, "bash", "-lc", command)
@@ -1217,8 +1269,11 @@ func RunBash(ctx context.Context, command, workdir string) (string, error) {
 	configureProcessGroup(cmd)
 	cmd.WaitDelay = bashPipeWaitDelay
 
-	output, err := cmd.CombinedOutput()
-	trimmedOutput := strings.TrimRight(string(output), "\n")
+	output := &cappedOutput{limit: maxBashOutput}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err = cmd.Run()
+	trimmedOutput := strings.TrimRight(output.String(), "\n")
 	if trimmedOutput == "" {
 		trimmedOutput = "(no output)"
 	}
@@ -1228,8 +1283,7 @@ func RunBash(ctx context.Context, command, workdir string) (string, error) {
 	// A shell that exited on its own may leave processes it started running in its group,
 	// such as a server started with "&". goat keeps track of them so the user can see and
 	// stop them (/ps). An interrupted or timed-out command's group was killed instead.
-	// Login profiles can start helpers that linger a moment after the shell exits, so
-	// what is recorded here is checked again whenever the list is read.
+	// What is recorded here is checked again whenever the list is read.
 	killed := err != nil && !errors.Is(err, exec.ErrWaitDelay) && (ctx.Err() != nil || errors.Is(runCtx.Err(), context.DeadlineExceeded))
 	if !killed && cmd.Process != nil {
 		rememberIfAlive(cmd.Process.Pid, command, relDir)
@@ -1247,7 +1301,7 @@ func RunBash(ctx context.Context, command, workdir string) (string, error) {
 	case ctx.Err() != nil:
 		return "", fmt.Errorf("command interrupted by the user\n%s", result)
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return "", fmt.Errorf("command timed out after %s and was killed\n%s", bashToolTimeout, result)
+		return "", fmt.Errorf("command timed out after %s and was killed\n%s", timeout, result)
 	default:
 		return "", fmt.Errorf("%w\n%s", err, result)
 	}

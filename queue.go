@@ -11,8 +11,8 @@ import (
 // While a turn runs on an interactive color terminal, keys go to a line under the
 // spinner instead of being thrown away. Enter queues the line: plain text is sent to the
 // model with the next tool results, so it can steer a turn that is still working, and
-// whatever is left when the turn ends is sent as the next prompt. Slash commands always
-// wait for the turn to end. Up on an empty line takes the last queued message back to
+// whatever is left when the turn ends is sent as the next prompt. Slash commands and !
+// shell commands always wait for the turn to end. Up on an empty line takes the last queued message back to
 // edit it. After Ctrl-C or a failed turn nothing is sent; the queue goes back into the
 // prompt instead.
 
@@ -68,13 +68,19 @@ func queueKey(key string) {
 	}
 }
 
+// isQueuedCommand reports whether a queued line is a slash command or a ! shell
+// command, which run on their own once the turn is over.
+func isQueuedCommand(item string) bool {
+	return strings.HasPrefix(item, "/") || strings.HasPrefix(item, "!")
+}
+
 // takeQueuedText removes the plain text messages at the front of the queue and joins
-// them, stopping at the first slash command. It returns "" when there are none.
+// them, stopping at the first command. It returns "" when there are none.
 func takeQueuedText() string {
 	turnQueue.mu.Lock()
 	defer turnQueue.mu.Unlock()
 	n := 0
-	for n < len(turnQueue.items) && !strings.HasPrefix(turnQueue.items[n], "/") {
+	for n < len(turnQueue.items) && !isQueuedCommand(turnQueue.items[n]) {
 		n++
 	}
 	text := strings.Join(turnQueue.items[:n], "\n")
@@ -82,11 +88,11 @@ func takeQueuedText() string {
 	return text
 }
 
-// nextQueuedInput is what runs next once a turn is over: a slash command on its own,
-// or the plain text messages up to the next command, joined.
+// nextQueuedInput is what runs next once a turn is over: a command on its own, or the
+// plain text messages up to the next command, joined.
 func nextQueuedInput() (string, bool) {
 	turnQueue.mu.Lock()
-	if len(turnQueue.items) > 0 && strings.HasPrefix(turnQueue.items[0], "/") {
+	if len(turnQueue.items) > 0 && isQueuedCommand(turnQueue.items[0]) {
 		command := turnQueue.items[0]
 		turnQueue.items = turnQueue.items[1:]
 		turnQueue.mu.Unlock()

@@ -32,9 +32,18 @@ var background struct {
 	groups []BackgroundGroup
 }
 
+// settleWindow is how long a command's group may take to empty after its shell exits
+// before what is left counts as running in the background. Login profiles can start
+// helpers that outlive the shell by a few milliseconds.
+const settleWindow = 150 * time.Millisecond
+
 // rememberIfAlive records the process group of a command whose shell has exited when
 // something in it is still running, and reports whether it did.
 func rememberIfAlive(pgid int, command, dir string) bool {
+	deadline := time.Now().Add(settleWindow)
+	for groupAlive(pgid) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if !groupAlive(pgid) {
 		return false
 	}
