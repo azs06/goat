@@ -1,6 +1,7 @@
 package style
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -245,5 +246,54 @@ func TestWrapBreaksAtWidthAndCarriesOpenStyles(t *testing.T) {
 	}
 	if got := Wrap("averyveryverylongword", 4, "", ""); got != "averyveryverylongword" {
 		t.Fatalf("long words should overflow, got %q", got)
+	}
+}
+
+func TestOneDarkStylesEveryRoleInColor(t *testing.T) {
+	styled(t)
+	theme, ok := Builtin("One-Dark")
+	if !ok {
+		t.Fatal("expected a built-in one-dark theme")
+	}
+	for _, role := range Roles {
+		if theme.Style(role).IsZero() {
+			t.Errorf("one-dark leaves %s unstyled", role)
+		}
+	}
+	t.Cleanup(SetTrueColor(true))
+	for role, open := range map[Role]string{
+		Accent:      "\x1b[38;2;97;175;239m",
+		Heading:     "\x1b[1;38;2;224;108;117m",
+		Success:     "\x1b[38;2;152;195;121m",
+		Error:       "\x1b[38;2;224;108;117m",
+		Warning:     "\x1b[38;2;229;192;123m",
+		UserMessage: "\x1b[1;38;2;171;178;191;48;2;44;49;60m",
+	} {
+		if got := theme.Style(role).Open(); got != open {
+			t.Errorf("%s opens with %q, want %q", role, got, open)
+		}
+	}
+	if names := BuiltinNames(); len(names) < 2 || names[0] != DefaultThemeName {
+		t.Errorf("got %v", names)
+	}
+}
+
+func TestThemeFileExtendsABuiltinTheme(t *testing.T) {
+	styled(t)
+	path := t.TempDir() + "/theme.json"
+	os.WriteFile(path, []byte(`{"extends": "one-dark", "styles": {"accent": "color: red"}}`), 0o644)
+	theme, problems, err := LoadTheme(path)
+	if err != nil || len(problems) > 0 {
+		t.Fatal(err, problems)
+	}
+	oneDark, _ := Builtin("one-dark")
+	if theme.Style(Accent) == oneDark.Style(Accent) || theme.Style(Heading) != oneDark.Style(Heading) {
+		t.Fatal("expected one-dark with the file's accent")
+	}
+
+	os.WriteFile(path, []byte(`{"extends": "solarized", "styles": {}}`), 0o644)
+	theme, problems, err = LoadTheme(path)
+	if err != nil || len(problems) != 1 || !strings.Contains(problems[0], `no built-in theme "solarized"`) || theme.Style(Heading) != Default().Style(Heading) {
+		t.Fatalf("expected the default theme and one problem, got %v %v", problems, err)
 	}
 }

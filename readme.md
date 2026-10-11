@@ -516,7 +516,16 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 ## Themes
 
 goat's look is black and white by default; the one exception is syntax highlighting in
-code blocks, which uses color. All styling goes through a small style engine
+code blocks, which uses color. For color everywhere, goat has a built-in **One Dark**
+theme, after Atom's: blue accents and borders, red headings, green and red for success,
+errors and diffs, yellow for warnings and approvals.
+
+```sh
+/theme one-dark        # switch for this session; /theme default switches back
+GOAT_THEME=one-dark    # in the shell or ~/.config/goat/.env, to start with it
+```
+
+All styling goes through a small style engine
 (`internal/style`): text is styled by role, and a theme decides what each role looks like.
 A theme is a JSON file whose styles are CSS declarations, written as a string or as an
 object:
@@ -533,11 +542,15 @@ object:
 }
 ```
 
-goat reads the file `GOAT_THEME` names, or else `~/.config/goat/theme.json`
-(`$XDG_CONFIG_HOME/goat/theme.json` when that is set). It is layered over the built-in
-theme, [`internal/style/default_theme.json`](internal/style/default_theme.json), property
-by property, the way CSS cascades: roles you leave out keep their defaults, and
-`font-weight: normal` turns a default bold off. `/theme` reloads the file.
+goat reads the file `GOAT_THEME` names (unless it names a built-in theme), or else
+`~/.config/goat/theme.json` (`$XDG_CONFIG_HOME/goat/theme.json` when that is set). It is
+layered over the default theme,
+[`internal/style/themes/default.json`](internal/style/themes/default.json), property by
+property, the way CSS cascades: roles you leave out keep their defaults, and
+`font-weight: normal` turns a default bold off. To adjust a built-in theme instead, name
+it in `"extends"`, e.g. `{"extends": "one-dark", "styles": {"heading": "color: #61afef"}}`;
+the built-in themes are in [`internal/style/themes`](internal/style/themes). `/theme`
+reloads the file and lists the built-in themes.
 
 - **Properties:** `color`, `background-color` (or `background`), `font-weight` (`bold`,
   `normal`, `lighter`, or 100-900; light weights draw faint), `font-style` (`italic`,
@@ -582,7 +595,7 @@ the exception: they locate the global file, so they come only from the environme
 | `GOAT_CODEMODE` | `false` | Start in code mode |
 | `GOAT_ANTHROPIC_FALLBACKS` | `on` | Server-side refusal fallbacks for Claude models |
 | `GOAT_ANTHROPIC_CACHE_TTL` | `5m` | Lifetime of Claude prompt cache entries, `5m` or `1h` |
-| `GOAT_THEME` | `~/.config/goat/theme.json` | Theme file |
+| `GOAT_THEME` | `~/.config/goat/theme.json` | A built-in theme (`default`, `one-dark`) or a theme file |
 | `GOAT_REDUCED_MOTION` | | Keep the spinner still (it updates once a second) |
 | `NO_COLOR` | | Turn styling off |
 | `GOAT_FORCE_COLOR` | | Style output even when stdout is not a terminal, for example when piping through a pager that understands colors |

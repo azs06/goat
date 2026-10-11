@@ -1,7 +1,7 @@
 package style
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,24 +67,65 @@ type Theme struct {
 	styles map[Role]Style
 }
 
-//go:embed default_theme.json
-var defaultThemeJSON []byte
+// themeFiles are the built-in themes, one JSON file each, named after the file.
+//
+//go:embed themes/*.json
+var themeFiles embed.FS
+
+// DefaultThemeName is the theme goat starts with: black and white.
+const DefaultThemeName = "default"
 
 var (
-	defaultTheme = mustParseDefault()
+	defaultTheme = mustParseBuiltin(DefaultThemeName, nil)
+	builtins     = parseBuiltins()
 	current      = defaultTheme
 )
 
-func mustParseDefault() *Theme {
-	theme, problems, err := ParseTheme(defaultThemeJSON, nil)
+// mustParseBuiltin parses a built-in theme over base. A broken one is a bug in goat.
+func mustParseBuiltin(name string, base *Theme) *Theme {
+	data, err := themeFiles.ReadFile("themes/" + name + ".json")
+	if err != nil {
+		panic(fmt.Sprintf("style: no built-in theme %q: %v", name, err))
+	}
+	theme, problems, err := ParseTheme(data, base)
 	if err != nil || len(problems) > 0 {
-		panic(fmt.Sprintf("style: the built-in theme is broken: %v %v", err, problems))
+		panic(fmt.Sprintf("style: the built-in theme %q is broken: %v %v", name, err, problems))
 	}
 	return theme
 }
 
-// Default is the built-in theme.
+// parseBuiltins reads every built-in theme, each layered over the default one.
+func parseBuiltins() map[string]*Theme {
+	themes := map[string]*Theme{DefaultThemeName: defaultTheme}
+	entries, _ := themeFiles.ReadDir("themes")
+	for _, entry := range entries {
+		name := strings.TrimSuffix(entry.Name(), ".json")
+		if name != DefaultThemeName {
+			themes[name] = mustParseBuiltin(name, defaultTheme)
+		}
+	}
+	return themes
+}
+
+// Default is the built-in default theme.
 func Default() *Theme { return defaultTheme }
+
+// Builtin returns the built-in theme with this name, such as "one-dark".
+func Builtin(name string) (*Theme, bool) {
+	theme, ok := builtins[strings.ToLower(strings.TrimSpace(name))]
+	return theme, ok
+}
+
+// BuiltinNames lists the built-in themes, the default first.
+func BuiltinNames() []string {
+	names := []string{DefaultThemeName}
+	for _, name := range sortedKeys(builtins) {
+		if name != DefaultThemeName {
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
 // Use makes theme the current one. Call it while nothing else is rendering: at
 // startup or between turns, never while the spinner runs.
@@ -104,9 +145,11 @@ func (t *Theme) Style(role Role) Style { return t.styles[role] }
 //	}
 //
 // A style is a CSS declaration block, written as a string or as an object of
-// properties. Keys starting with "$" (such as "$schema") are ignored.
+// properties. "extends" names a built-in theme to layer the file over instead of the
+// default one. Keys starting with "$" (such as "$schema") are ignored.
 type themeFile struct {
-	Styles map[string]json.RawMessage `json:"styles"`
+	Extends string                     `json:"extends"`
+	Styles  map[string]json.RawMessage `json:"styles"`
 }
 
 // ParseTheme reads a theme from JSON and layers it over base (nil for no base, which
@@ -120,7 +163,7 @@ func ParseTheme(data []byte, base *Theme) (*Theme, []string, error) {
 	}
 	var problems []string
 	for key := range top {
-		if key != "styles" && !strings.HasPrefix(key, "$") {
+		if key != "styles" && key != "extends" && !strings.HasPrefix(key, "$") {
 			problems = append(problems, fmt.Sprintf("unknown top-level key %q (styles go under \"styles\")", key))
 		}
 	}
@@ -174,13 +217,30 @@ func ParseTheme(data []byte, base *Theme) (*Theme, []string, error) {
 	return theme, problems, nil
 }
 
-// LoadTheme reads the theme file at path and layers it over the default theme.
+// LoadTheme reads the theme file at path and layers it over the default theme, or over
+// the built-in theme its "extends" names.
 func LoadTheme(path string) (*Theme, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	return ParseTheme(data, defaultTheme)
+	var file themeFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, nil, fmt.Errorf("invalid theme JSON: %w", err)
+	}
+	base, problem := defaultTheme, ""
+	if name := strings.TrimSpace(file.Extends); name != "" {
+		if builtin, ok := Builtin(name); ok {
+			base = builtin
+		} else {
+			problem = fmt.Sprintf("extends: there is no built-in theme %q (built in: %s)", name, strings.Join(BuiltinNames(), ", "))
+		}
+	}
+	theme, problems, err := ParseTheme(data, base)
+	if problem != "" {
+		problems = append([]string{problem}, problems...)
+	}
+	return theme, problems, err
 }
 
 // decodeDeclarations reads one style: a CSS declaration string or an object whose

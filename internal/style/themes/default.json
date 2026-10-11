@@ -1,5 +1,5 @@
 {
-  "$comment": "goat's built-in theme: black and white, except for syntax highlighting in code blocks. The grays are exact entries of the 256-color grayscale ramp.",
+  "$comment": "goat's default theme: black and white, except for syntax highlighting in code blocks. The grays are exact entries of the 256-color grayscale ramp.",
   "styles": {
     ":root": "--white: #eeeeee; --light: #e4e4e4; --silver: #d0d0d0; --gray-light: #bcbcbc; --gray: #8a8a8a; --gray-dim: #808080; --gray-dark: #585858; --shade: #303030",
 

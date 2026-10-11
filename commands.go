@@ -54,7 +54,7 @@ func init() {
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
-		{name: "theme", usage: "/theme", description: "Reload the theme file and show which one is in use", callback: commandTheme},
+		{name: "theme", usage: "/theme [name]", description: "Switch to a built-in theme, such as one-dark, or reload the theme file", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
 		{name: "undo", usage: "/undo [preview|skip]", description: "Undo the latest file change (/undo skip gives up on one that cannot be restored)", callback: commandUndo},
 	}
@@ -587,9 +587,19 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 		case "undo":
 			add("preview", "show what would be restored")
 			add("skip", "give up on a change that cannot be restored")
+		case "theme":
+			for _, name := range style.BuiltinNames() {
+				add(name, themeHints[name])
+			}
 		}
 		return items
 	}
+}
+
+// themeHints describe the built-in themes.
+var themeHints = map[string]string{
+	"default":  "black and white",
+	"one-dark": "colors after Atom's One Dark",
 }
 
 // modelHints describe the models the picker offers by default.
