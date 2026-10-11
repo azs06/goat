@@ -55,6 +55,21 @@ func runKeyCommands() (warnings []string) {
 			break
 		}
 	}
+	// auth.json's commands, for the providers nothing else has supplied. Their keys stay
+	// in goat's memory.
+	for _, name := range provider.Names {
+		command := authCommands[name]
+		if command == "" || provider.CredentialSource(name) != "" {
+			continue
+		}
+		key, err := runKeyCommand(command)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s's key_command in auth.json %v", name, err))
+			continue
+		}
+		provider.StoreKey(name, key, false)
+		authOrigins[name] = "key_command in " + displayPath(authPath())
+	}
 	return warnings
 }
 

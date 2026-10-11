@@ -182,3 +182,10 @@ func replaceFold(s, old, replacement string) string {
 		s, lower = s[i+len(old):], lower[i+len(old):]
 	}
 }
+
+// CheckBaseURL checks a base URL the way ResolveEndpoint does, naming it by label in
+// errors and never repeating it.
+func CheckBaseURL(label, raw string) error {
+	_, err := checkBaseURL(label, strings.TrimSpace(raw), "")
+	return err
+}

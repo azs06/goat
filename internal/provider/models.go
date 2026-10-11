@@ -52,14 +52,10 @@ var CredentialVars = map[string][]string{
 }
 
 // CredentialSource returns the variable that holds the provider's credentials,
-// or "" when none is set.
+// StoredSource for a key from auth.json, or "" when there is none.
 func CredentialSource(provider string) string {
-	for _, name := range CredentialVars[provider] {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return name
-		}
-	}
-	return ""
+	source, _, _ := Credential(provider)
+	return source
 }
 
 // Unavailable says why a provider cannot be used: it has no credentials, or its base URL

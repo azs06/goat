@@ -111,6 +111,9 @@ func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 	if saved != nil && strings.TrimSpace(saved.Model) != "" {
 		candidates = append(candidates, candidate{"saved session", saved.Model})
 	}
+	if configStartup.model != "" {
+		candidates = append(candidates, candidate{"config.json", configStartup.model})
+	}
 	if raw := strings.TrimSpace(os.Getenv("OPENAI_MODEL")); raw != "" {
 		candidates = append(candidates, candidate{"OPENAI_MODEL", "openai:" + strings.TrimPrefix(raw, "openai:")})
 	}
@@ -142,6 +145,7 @@ func startupEffort(saved *savedSession, flag string) provider.Effort {
 	if saved != nil {
 		candidates = append(candidates, struct{ source, value string }{"saved session", saved.Effort})
 	}
+	candidates = append(candidates, struct{ source, value string }{"config.json", configStartup.effort})
 	candidates = append(candidates, struct{ source, value string }{"OPENAI_REASONING_EFFORT", os.Getenv("OPENAI_REASONING_EFFORT")})
 
 	for _, candidate := range candidates {
@@ -505,8 +509,14 @@ const exitConfirmWindow = 2 * time.Second
 
 func main() {
 	// Before the flags, so --model can name an entry's model. Entries also come before
-	// the global .env, so it treats their key variables as credentials.
-	envWarnings, entriesErr := loadProviderEntries()
+	// the global .env, so it treats their key variables as credentials. config.json's
+	// settings go into the environment before .env, which then cannot override them.
+	configEntries, envWarnings, entriesErr := loadConfigFile()
+	if entriesErr == nil {
+		var entryWarnings []string
+		entryWarnings, entriesErr = loadProviderEntries(configEntries)
+		envWarnings = append(envWarnings, entryWarnings...)
+	}
 	opts, err := parseCLI(os.Args[1:], os.Stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return
@@ -531,6 +541,13 @@ func main() {
 		log.Fatal(entriesErr)
 	}
 
+	// Keys from auth.json before the global .env, which is then not used for the
+	// providers auth.json supplies.
+	authWarnings, err := loadAuthFile()
+	if err != nil {
+		log.Fatal(err)
+	}
+	envWarnings = append(envWarnings, authWarnings...)
 	// The files can hold any GOAT_ setting, so they load before the settings are read.
 	globalWarnings, err := loadGlobalEnv()
 	if err != nil {

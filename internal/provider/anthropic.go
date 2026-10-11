@@ -77,10 +77,10 @@ func NewAnthropic() Provider {
 	// defaults, and the API key comes before the token, as in the SDK.
 	endpoint := endpointOrOfficial(Anthropic)
 	opts := []option.RequestOption{option.WithHTTPClient(keyClient(anthropicHeaderTimeout)), option.WithBaseURL(endpoint.URL)}
-	if key := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); key != "" {
-		opts = append(opts, option.WithAPIKey(key))
-	} else if token := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN")); token != "" {
-		opts = append(opts, option.WithAuthToken(token))
+	if _, credential, authToken := Credential(Anthropic); credential != "" && authToken {
+		opts = append(opts, option.WithAuthToken(credential))
+	} else if credential != "" {
+		opts = append(opts, option.WithAPIKey(credential))
 	}
 	return &anthropicProvider{
 		client:        anthropic.NewClient(opts...),

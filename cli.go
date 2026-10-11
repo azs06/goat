@@ -85,12 +85,12 @@ Flags:
   -v, --version        print the version and exit
   -h, --help           show this help
 
-API keys come from OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and
-DEEPSEEK_API_KEY: in the environment or in ~/.config/goat/.env
-($XDG_CONFIG_HOME/goat/.env when that is set), which goat reads in every folder.
-The project's own .env is not read. A command that prints a key can stand in
-for it, e.g. OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential".
-See the readme for the rest.
+API keys go in ~/.config/goat/auth.json, e.g. {"openai": {"key": "sk-..."}}, or
+{"openai": {"key_command": "op read op://Private/OpenAI/credential"}}; the shell's
+OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and DEEPSEEK_API_KEY win
+over it. Settings go in ~/.config/goat/config.json, e.g. {"theme": "one-dark"}.
+goat reads both in every folder ($XDG_CONFIG_HOME/goat when that is set); the
+project's own .env is not read. See the readme for the rest.
 `
 
 // parseCLI reads the command line. Flags may come before or after the prompt words.

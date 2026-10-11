@@ -171,11 +171,11 @@ func TestProcessUsesTheGlobalEnvFile(t *testing.T) {
 	}
 }
 
-func TestProcessNamesTheGlobalEnvFile(t *testing.T) {
+func TestProcessNamesTheAuthFile(t *testing.T) {
 	workDir := t.TempDir()
 	_, errOut, code := runGoat(t, workDir, "", nil)
-	if code == 0 || !strings.Contains(errOut, "or in "+filepath.Join(workDir, "config", "goat", ".env")) || strings.Contains(errOut, "does not read") {
-		t.Fatalf("the missing-key error should name the global file, got %q (exit %d)", errOut, code)
+	if code == 0 || !strings.Contains(errOut, "add one to "+filepath.Join(workDir, "config", "goat", "auth.json")) || strings.Contains(errOut, "does not read") {
+		t.Fatalf("the missing-key error should name auth.json, got %q (exit %d)", errOut, code)
 	}
 
 	// Keys left in the project's .env are the likely mistake, so the error says why they

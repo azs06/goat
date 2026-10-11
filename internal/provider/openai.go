@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -45,6 +44,11 @@ type OpenAICreateFunc func(ctx context.Context, params responses.ResponseNewPara
 // OpenAIStreamFunc makes one streamed Responses API call, passing visible text to onText.
 type OpenAIStreamFunc func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error)
 
+func openAIKey() string {
+	_, key, _ := Credential(OpenAI)
+	return key
+}
+
 func NewOpenAI() Provider {
 	// goat names the endpoint and key itself, so the client sends the key only where
 	// ResolveEndpoint has checked; later options win over the SDK's environment defaults.
@@ -52,7 +56,7 @@ func NewOpenAI() Provider {
 	client := openai.NewClient(
 		option.WithHTTPClient(keyClient(0)),
 		option.WithBaseURL(endpoint.URL),
-		option.WithAPIKey(strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))),
+		option.WithAPIKey(openAIKey()),
 	)
 	return &openAIProvider{client: &client}
 }

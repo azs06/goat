@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/azs06/goat/internal/provider"
 )
@@ -20,25 +21,31 @@ func providerEntriesPath() string {
 	return ""
 }
 
-// loadProviderEntries registers the providers the user adds in providers.json. A file
-// goat cannot open is skipped with a warning; one it cannot parse stops goat, naming the
-// file and line without quoting it.
-func loadProviderEntries() (warnings []string, err error) {
-	path := providerEntriesPath()
-	if path == "" {
-		return nil, nil
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return []string{fmt.Sprintf("skipping %s: %v", displayPath(path), err)}, nil
-	}
-	entries, err := provider.ParseEntries(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", displayPath(path), err)
+// loadProviderEntries registers the providers config.json adds (fromConfig) and those
+// in providers.json, the older file for them. A file goat cannot open is skipped with a
+// warning; one it cannot parse stops goat, naming the file and line without quoting it.
+// A provider both files define is a mistake too.
+func loadProviderEntries(fromConfig []provider.Entry) (warnings []string, err error) {
+	entries := fromConfig
+	if path := providerEntriesPath(); path != "" {
+		data, readErr := os.ReadFile(path)
+		switch {
+		case errors.Is(readErr, fs.ErrNotExist):
+		case readErr != nil:
+			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", displayPath(path), readErr))
+		default:
+			more, err := provider.ParseEntries(data)
+			if err != nil {
+				return warnings, fmt.Errorf("%s: %w", displayPath(path), err)
+			}
+			for _, entry := range more {
+				if slices.ContainsFunc(entries, func(e provider.Entry) bool { return e.Name == entry.Name }) {
+					return warnings, fmt.Errorf("%s defines %s, which config.json's providers define too; keep one", displayPath(path), entry.Name)
+				}
+			}
+			entries = append(entries, more...)
+		}
 	}
 	provider.RegisterEntries(entries)
-	return nil, nil
+	return warnings, nil
 }

@@ -124,7 +124,8 @@ func loadGlobalEnv() (warnings []string, err error) {
 	// A credential the shell gives, directly or as a key command, settles the provider.
 	fromShell := map[string]bool{}
 	for _, name := range provider.Names {
-		fromShell[name] = provider.CredentialSource(name) != ""
+		// auth.json settles a provider the same way, whether it gave a key or a command.
+		fromShell[name] = provider.CredentialSource(name) != "" || authSettled[name]
 		for _, variable := range provider.CredentialVars[name] {
 			if strings.TrimSpace(os.Getenv(variable+"_COMMAND")) != "" {
 				fromShell[name] = true
@@ -272,6 +273,9 @@ func credentialOrigin(name string) string {
 	if provider.KeyCommands[source] != "" && envSources[source] != "" {
 		return "key from " + envSources[source] + " in " + displayPath(providerEntriesPath())
 	}
+	if source == provider.StoredSource {
+		return "key from " + authOrigins[name]
+	}
 	return variableOrigin(source)
 }
 
@@ -349,8 +353,8 @@ func noAPIKeyMessage() string {
 		return "no provider can be used; " + strings.Join(entries, "; ")
 	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
-	if global := globalEnvPath(); global != "" {
-		message += " or in " + global
+	if auth := authPath(); auth != "" {
+		message = "no API key found; add one to " + auth + `, such as {"openai": {"key": "sk-..."}}, or set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment`
 	}
 	if info, err := os.Stat(".env"); err == nil && !info.IsDir() {
 		message += " (goat does not read the .env in this folder: it belongs to the project)"
