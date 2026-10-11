@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/respjson"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -51,6 +54,11 @@ type chatMessage struct {
 	Content    string         `json:"content"`
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+	// Reasoning a thinking model streamed, under the field its server used. Servers
+	// such as DeepSeek and Kimi require it sent back on turns that called tools; only
+	// servers that produce it get it back.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Reasoning        string `json:"reasoning,omitempty"`
 }
 
 type chatToolCall struct {
@@ -106,26 +114,33 @@ func chatRequestMessages(system string, transcript []json.RawMessage) []openai.C
 
 // streamedChat is one complete streamed response.
 type streamedChat struct {
-	id     string
-	text   strings.Builder
-	calls  []chatToolCall
-	finish string
-	usage  openai.CompletionUsage
+	id               string
+	text             strings.Builder
+	reasoningContent strings.Builder
+	reasoning        strings.Builder
+	calls            []chatToolCall
+	// positions maps a call's index on the wire to its place in calls.
+	positions map[int]int
+	finish    string
+	usage     openai.CompletionUsage
 }
 
 // addToolCallDelta adds a piece of a streamed tool call. Calls are told apart by index;
 // a new ID at an index that already has one starts another call, for servers that give
-// every call index 0. The name arrives whole in the call's first piece.
+// every call index 0, and later pieces at that index go to the new call. The name
+// arrives whole in the call's first piece.
 func (s *streamedChat) addToolCallDelta(delta openai.ChatCompletionChunkChoiceDeltaToolCall) {
+	if s.positions == nil {
+		s.positions = map[int]int{}
+	}
 	index := max(int(delta.Index), 0)
-	for len(s.calls) <= index {
+	position, ok := s.positions[index]
+	if !ok || delta.ID != "" && s.calls[position].ID != "" && delta.ID != s.calls[position].ID {
 		s.calls = append(s.calls, chatToolCall{Type: "function"})
+		position = len(s.calls) - 1
+		s.positions[index] = position
 	}
-	call := &s.calls[index]
-	if delta.ID != "" && call.ID != "" && delta.ID != call.ID {
-		s.calls = append(s.calls, chatToolCall{Type: "function"})
-		call = &s.calls[len(s.calls)-1]
-	}
+	call := &s.calls[position]
 	if delta.ID != "" {
 		call.ID = delta.ID
 	}
@@ -157,6 +172,9 @@ func (p *chatProvider) stream(ctx context.Context, params openai.ChatCompletionN
 			if choice.Index != 0 {
 				continue
 			}
+			// Reasoning is not shown, only kept for the transcript.
+			result.reasoningContent.WriteString(extraString(choice.Delta.JSON.ExtraFields, "reasoning_content"))
+			result.reasoning.WriteString(extraString(choice.Delta.JSON.ExtraFields, "reasoning"))
 			if text := choice.Delta.Content; text != "" {
 				result.text.WriteString(text)
 				if onText != nil {
@@ -173,8 +191,11 @@ func (p *chatProvider) stream(ctx context.Context, params openai.ChatCompletionN
 		}
 	}
 	if err := stream.Err(); err != nil {
+		// An error the server reported in the stream is passed on as it is, so
+		// RetryDelay can tell a rate limit from a request that will never succeed.
 		var apiErr *openai.Error
-		if !errors.As(err, &apiErr) && ctx.Err() == nil {
+		var streamErr *ssestream.StreamError
+		if !errors.As(err, &apiErr) && !errors.As(err, &streamErr) && ctx.Err() == nil {
 			return nil, printed, fmt.Errorf("%w: %v", errIncompleteStream, err)
 		}
 		return nil, printed, err
@@ -224,15 +245,18 @@ func (p *chatProvider) Send(ctx context.Context, req Request, onText func(string
 		return nil, printed, err
 	}
 
-	out := &Response{ID: streamed.id, Text: streamed.text.String(), Usage: chatUsage(streamed.usage)}
+	// Servers reuse response IDs (Ollama picks one of 999) or send none, and the history
+	// tells responses apart by ID, so each gets its own.
+	out := &Response{ID: fmt.Sprintf("%s#%d", cmp.Or(streamed.id, "chat"), time.Now().UnixNano()), Text: streamed.text.String(), Usage: chatUsage(streamed.usage)}
 	switch {
 	case streamed.finish == "content_filter":
 		out.Stop, out.RefusalDetail = StopRefusal, "content filter"
+	case streamed.finish == "length":
+		// A tool call cut off by the limit is never run; the agent answers it as not run.
+		out.Stop = StopMaxTokens
 	case len(streamed.calls) > 0:
 		// Some servers end a response that calls tools with "stop".
 		out.Stop = StopToolUse
-	case streamed.finish == "length":
-		out.Stop = StopMaxTokens
 	case streamed.finish == "stop":
 		out.Stop = StopEndTurn
 	default:
@@ -253,16 +277,22 @@ func (p *chatProvider) Send(ctx context.Context, req Request, onText func(string
 			// Some servers leave out the ID; the tool results need one to answer.
 			call.ID = fmt.Sprintf("call_%d_%d", len(messages), i)
 		}
-		if strings.TrimSpace(call.Function.Arguments) == "" {
+		if strings.TrimSpace(call.Function.Arguments) == "" && out.Stop == StopToolUse {
 			call.Function.Arguments = "{}"
 		}
 		out.ToolCalls = append(out.ToolCalls, ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
 	}
-	assistant, err := json.Marshal(chatMessage{Role: "assistant", Content: out.Text, ToolCalls: streamed.calls})
+	assistant, err := json.Marshal(chatMessage{
+		Role:             "assistant",
+		Content:          out.Text,
+		ToolCalls:        streamed.calls,
+		ReasoningContent: streamed.reasoningContent.String(),
+		Reasoning:        streamed.reasoning.String(),
+	})
 	if err != nil {
 		return nil, printed, err
 	}
-	out.Conversation = Conversation{Provider: p.name, Messages: append(messages, assistant)}
+	out.Conversation = Conversation{Provider: p.name, Format: FormatChat, Messages: append(messages, assistant)}
 	return out, printed, nil
 }
 
@@ -294,7 +324,7 @@ func (p *chatProvider) Seed(ctx context.Context, model, summary string) (Convers
 	if err != nil {
 		return Conversation{}, err
 	}
-	return Conversation{Provider: p.name, Messages: []json.RawMessage{user, assistant}}, nil
+	return Conversation{Provider: p.name, Format: FormatChat, Messages: []json.RawMessage{user, assistant}}, nil
 }
 
 // RetryDelay retries a stream that broke off, and rate limits; the SDK already retries
@@ -304,6 +334,20 @@ func (p *chatProvider) RetryDelay(err error, attempt int) (time.Duration, bool) 
 		return fallbackRetryDelay(attempt), true
 	}
 	return streamRetryDelay(err, attempt)
+}
+
+// extraString reads a string field the SDK does not know, such as reasoning_content.
+func extraString(fields map[string]respjson.Field, name string) string {
+	// The SDK marks fields it has no type for as invalid, so only the raw text counts.
+	field, ok := fields[name]
+	if !ok {
+		return ""
+	}
+	var text string
+	if json.Unmarshal([]byte(field.Raw()), &text) != nil {
+		return ""
+	}
+	return text
 }
 
 func (p *chatProvider) ListModels(ctx context.Context) ([]string, error) {

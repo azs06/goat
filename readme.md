@@ -156,7 +156,8 @@ name of your choosing:
   Completions (Ollama, LM Studio, vLLM, llama.cpp, LiteLLM, OpenRouter and most hosted
   services), or `"anthropic"` for the Anthropic Messages API.
 - `base_url` is where requests go, checked like the `*_BASE_URL` variables.
-- `key_env` names the variable that holds the key, in the shell or the global `.env`;
+- `key_env` names the variable that holds the key (a name in capitals, such as
+  `OPENROUTER_API_KEY`), set in the shell or the global `.env`;
   `key_command` is a command that prints it, like the `_COMMAND` variables. An entry with
   neither sends no key, as a local server needs. The file never holds a key itself, and
   an entry never gets a built-in provider's key unless `key_env` names it.

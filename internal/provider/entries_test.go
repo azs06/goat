@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -52,7 +54,14 @@ func TestParseEntriesRefusesMistakes(t *testing.T) {
 		{`{"p": {"api": "openai", "base_url": "https://me:SECRET@x.example"}}`, "p.base_url must not contain a user name or password"},
 		{`{"p": {"api": "openai", "base_url": "ftp://SECRET.example"}}`, "p.base_url must start with https://"},
 		{`{"p": {"api": "openai", "base_url": "https://x.example", "key_env": "K", "key_command": "c"}}`, "both key_env and key_command"},
-		{`{"p": {"api": "openai", "base_url": "https://x.example", "key_env": "sk-SECRET"}}`, "must be a variable name"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "key_env": "sk-SECRET"}}`, "must be the name of a variable"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "key_env": "gsk_SECRETabc123"}}`, "must be the name of a variable"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "key_env": "my_proxy_key"}}`, "in capitals"},
+		{`{"sk-ant-api03-SECRET": {"api": "openai", "base_url": "https://x.example"}}`, "lowercase letters, digits and dashes"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "sk-proj-SECRET": ""}}`, "p has a field for a key; providers.json does not hold keys"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "sk_SECRETVALUE": ""}}`, "p has a field for a key"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "Xyzabc123": ""}}`, "p has an unknown field;"},
+		{`{"p": {"api": "openai", "base_url": "https://x.example", "base_url": "http://SECRET.example"}}`, `p has a field "base_url" twice`},
 		{`{"p": {"api": "openai", "base_url": "https://x.example", "models": "m"}}`, "list of model names"},
 		{`{"p": {"api": "openai", "base_url": "https://x.example", "models": [" "]}}`, "empty name"},
 		{`{"p": {"api": "openai", "base_url": "https://x.example"}, "p": {"api": "openai", "base_url": "https://y.example"}}`, "defined twice"},
@@ -159,5 +168,57 @@ func TestEntriesDescribeEffort(t *testing.T) {
 	}
 	if !SpeaksAnthropic("proxy") || SpeaksAnthropic("local") || !SpeaksAnthropic(DeepSeek) || SpeaksAnthropic(OpenAI) {
 		t.Error("SpeaksAnthropic")
+	}
+}
+
+func TestParseEntriesFindsTheLineOfASyntaxErrorInALongFile(t *testing.T) {
+	var file strings.Builder
+	file.WriteString("{\n")
+	for i := range 5 {
+		fmt.Fprintf(&file, "  \"e%d\": {\n    \"api\": \"openai\",\n    \"base_url\": \"https://x.example\"\n  },\n\n", i)
+	}
+	// Line 28 is missing its comma, which the parser finds at the start of line 29.
+	file.WriteString("  \"last\": {\n    \"api\": \"openai\"\n    \"base_url\": \"https://x.example\"\n  }\n}\n")
+	_, err := ParseEntries([]byte(file.String()))
+	if err == nil || !strings.HasPrefix(err.Error(), "line 29: ") {
+		t.Fatalf("expected line 29, got %v\n%s", err, file.String())
+	}
+}
+
+func TestEntryModelsWinOverBuiltInLookingNames(t *testing.T) {
+	entriesTest(t, `{"ollama": {"api": "openai", "base_url": "http://localhost:11434/v1", "models": ["gpt-oss:20b", "deepseek-r1:8b"]}}`)
+	for _, raw := range []string{"gpt-oss:20b", "deepseek-r1:8b"} {
+		if got, err := ResolveModel(raw); err != nil || got.Provider != "ollama" {
+			t.Errorf("%s: got %v, %v", raw, got, err)
+		}
+	}
+	if got, _ := ResolveModel("gpt-6-luna"); got.Provider != OpenAI {
+		t.Errorf("an unlisted model should still go by its name, got %v", got)
+	}
+	if _, err := ResolveModel("qwen3:8b"); err == nil || !strings.Contains(err.Error(), "e.g. ollama:qwen3:8b") {
+		t.Errorf("expected a hint to prefix the model, got %v", err)
+	}
+}
+
+func TestMissingEntryKeyNamesTheVariable(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	entriesTest(t, `{"openrouter": {"api": "openai", "base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY"}}`)
+	if err := Unavailable("openrouter"); err == nil || err.Error() != "openrouter models need OPENROUTER_API_KEY, the variable its key_env names, to be set" {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestConversationFitsTheEntrysCurrentAPI(t *testing.T) {
+	entriesTest(t, `{"local": {"api": "anthropic", "base_url": "http://localhost:1"}}`)
+	chat := Conversation{Provider: "local", Format: FormatChat, Messages: []json.RawMessage{json.RawMessage(`{}`)}}
+	if chat.Fits("local") {
+		t.Fatal("a Chat Completions transcript must not continue on an Anthropic-format entry")
+	}
+	messages := Conversation{Provider: "local", Messages: chat.Messages}
+	if !messages.Fits("local") || messages.Fits("other") || !(Conversation{}).Fits("local") {
+		t.Fatal("Fits")
+	}
+	if !(Conversation{Provider: Anthropic, Messages: chat.Messages}).Fits(Anthropic) {
+		t.Fatal("built-in transcripts fit their provider")
 	}
 }

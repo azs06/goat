@@ -138,7 +138,9 @@ func (e *EntriesError) Error() string {
 
 var (
 	entryNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	envNamePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	envNamePattern   = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+	// safeText is text short and plain enough to be a name, never a key.
+	safeText = regexp.MustCompile(`^[a-z][a-z_-]{0,19}$`)
 )
 
 // entryFields are the fields an entry may have.
@@ -171,7 +173,7 @@ func ParseEntries(data []byte) ([]Entry, error) {
 			return nil, syntaxError(data, err, "")
 		}
 		if seen[name] {
-			return nil, &EntriesError{Line: line, Message: fmt.Sprintf("%q is defined twice", name)}
+			return nil, &EntriesError{Line: line, Message: quoteIfSafe(name, "this entry's name") + " is defined twice"}
 		}
 		seen[name] = true
 		entry, err := parseEntry(name, raw)
@@ -191,14 +193,14 @@ func ParseEntries(data []byte) ([]Entry, error) {
 
 func parseEntry(name string, raw json.RawMessage) (Entry, error) {
 	if !entryNamePattern.MatchString(name) {
-		return Entry{}, fmt.Errorf("the name %q may only use lowercase letters, digits and dashes", name)
+		return Entry{}, errors.New("an entry's name may only use lowercase letters, digits and dashes")
 	}
 	if isBuiltIn(name) {
-		return Entry{}, fmt.Errorf("%q is a built-in provider; give the entry another name", name)
+		return Entry{}, fmt.Errorf("%s is a built-in provider; give the entry another name", name)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-		return Entry{}, fmt.Errorf("%s must be an object such as {\"api\": \"openai\", \"base_url\": \"...\"}", name)
+	fields, err := objectFields(raw)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%s %v", name, err)
 	}
 	for _, field := range slices.Sorted(maps.Keys(fields)) {
 		if slices.Contains(entryFields, field) {
@@ -206,9 +208,9 @@ func parseEntry(name string, raw json.RawMessage) (Entry, error) {
 		}
 		lower := strings.ToLower(field)
 		if strings.Contains(lower, "key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
-			return Entry{}, fmt.Errorf("%s has a field %q; providers.json does not hold keys: name the variable that does with key_env, or a command that prints the key with key_command", name, field)
+			return Entry{}, fmt.Errorf("%s has %s; providers.json does not hold keys: name the variable that does with key_env, or a command that prints the key with key_command", name, quoteIfSafe(field, "a field for a key"))
 		}
-		return Entry{}, fmt.Errorf("%s has an unknown field %q; the fields are %s", name, field, strings.Join(entryFields, ", "))
+		return Entry{}, fmt.Errorf("%s has %s; the fields are %s", name, quoteIfSafe(field, "an unknown field"), strings.Join(entryFields, ", "))
 	}
 
 	entry := Entry{Name: name}
@@ -252,9 +254,46 @@ func parseEntry(name string, raw json.RawMessage) (Entry, error) {
 		return Entry{}, fmt.Errorf("%s has both key_env and key_command; use one", name)
 	}
 	if entry.KeyEnv != "" && !envNamePattern.MatchString(entry.KeyEnv) {
-		return Entry{}, fmt.Errorf("%s.key_env must be a variable name such as MY_PROXY_KEY", name)
+		// Upper case only: a key pasted in by mistake (gsk_..., hf_...) is not taken for
+		// a name and then shown in "needs ... to be set" messages.
+		return Entry{}, fmt.Errorf("%s.key_env must be the name of a variable, in capitals, such as MY_PROXY_KEY; the key itself goes in that variable", name)
 	}
 	return entry, nil
+}
+
+// quoteIfSafe quotes text from the file when it cannot be a pasted key, and otherwise
+// describes it.
+func quoteIfSafe(text, description string) string {
+	if safeText.MatchString(text) {
+		return fmt.Sprintf("%s %q", description, text)
+	}
+	return description
+}
+
+// objectFields reads a JSON object's fields, refusing one that appears twice: the
+// decoder would quietly keep the last, which could be a different base_url.
+func objectFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil, errors.New(`must be an object such as {"api": "openai", "base_url": "..."}`)
+	}
+	fields := map[string]json.RawMessage{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, errors.New("is not valid JSON")
+		}
+		field, _ := token.(string)
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New("is not valid JSON")
+		}
+		if _, ok := fields[field]; ok {
+			return nil, fmt.Errorf("has %s twice", quoteIfSafe(field, "a field"))
+		}
+		fields[field] = value
+	}
+	return fields, nil
 }
 
 // syntaxError describes invalid JSON by line only: the decoder's own message quotes the
@@ -262,7 +301,14 @@ func parseEntry(name string, raw json.RawMessage) (Entry, error) {
 func syntaxError(data []byte, err error, fallback string) error {
 	var syntax *json.SyntaxError
 	if errors.As(err, &syntax) {
-		return &EntriesError{Line: lineAt(data, syntax.Offset), Message: "not valid JSON here: look for a missing comma, quote or brace"}
+		// The streaming decoder's offset leaves out what earlier tokens consumed, so the
+		// whole file is checked again for the true position.
+		offset := syntax.Offset
+		var whole any
+		if errors.As(json.Unmarshal(data, &whole), &syntax) {
+			offset = syntax.Offset
+		}
+		return &EntriesError{Line: lineAt(data, offset-1), Message: "not valid JSON: look here or at the end of the line before for a missing comma, quote or brace"}
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return &EntriesError{Message: "the file ends too early: look for a missing closing brace or quote"}

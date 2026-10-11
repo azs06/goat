@@ -148,3 +148,78 @@ func TestEntryKeysAreHiddenFromCommands(t *testing.T) {
 		t.Fatalf("got %q", env)
 	}
 }
+
+func TestAnEntrySharingABuiltInKeyKeepsTheShellsChoice(t *testing.T) {
+	entryTest(t, `{"corp": {"api": "anthropic", "base_url": "https://corp.example", "key_env": "ANTHROPIC_API_KEY"}}`)
+	for range 20 {
+		_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+		t.Setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
+		os.WriteFile(global, []byte("ANTHROPIC_API_KEY=file-key\n"), 0o600)
+		if _, err := loadGlobalEnv(); err != nil {
+			t.Fatal(err)
+		}
+		if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			t.Fatal("the shell's Anthropic token should keep the file's key out, whichever provider owns it")
+		}
+	}
+}
+
+func TestNoProviderMessageNamesAnEntrysMissingKey(t *testing.T) {
+	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"} {
+		t.Setenv(name, "")
+	}
+	entryTest(t, `{"openrouter": {"api": "openai", "base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY"}}`)
+	if got := noAPIKeyMessage(); !strings.Contains(got, "openrouter models need OPENROUTER_API_KEY") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestEntryKeysAreHiddenWhateverTheirCase(t *testing.T) {
+	entryTest(t, `{"proxy": {"api": "anthropic", "base_url": "https://p.example", "key_env": "WORK_LLM"}}`)
+	if env := workspace.CommandEnvironment([]string{"work_llm=secret", "PATH=/bin"}); !slices.Equal(env, []string{"PATH=/bin"}) {
+		t.Fatalf("got %q", env)
+	}
+}
+
+func TestModelCompletionsKeepAnEntrysPrefixWhereNeeded(t *testing.T) {
+	entryTest(t, `{"ollama": {"api": "openai", "base_url": "http://localhost:11434/v1", "models": ["gpt-oss:20b", "qwen3-coder"]},
+		"lmstudio": {"api": "openai", "base_url": "http://localhost:1234/v1", "models": ["qwen3-coder", "phi-5"]}}`)
+	var got []string
+	for _, item := range commandArgumentCompletions(&config{})("model", "") {
+		got = append(got, item.text)
+	}
+	want := []string{"/model gpt-oss:20b", "/model ollama:qwen3-coder", "/model lmstudio:qwen3-coder", "/model phi-5"}
+	for _, text := range want {
+		if !slices.Contains(got, text) {
+			t.Errorf("expected %q in %q", text, got)
+		}
+	}
+	for _, item := range commandArgumentCompletions(&config{})("model", "qwen") {
+		if !strings.HasSuffix(item.text, ":qwen3-coder") {
+			t.Errorf("typing the bare name should still find %q", item.text)
+		}
+	}
+}
+
+func TestProcessHidesAnEntrysPathInWarnings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"bad key"}}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+	workDir := t.TempDir()
+	writeProviderEntries(t, workDir, `{"gw": {"api": "openai", "base_url": "`+server.URL+`/acct/SECRETTOK/v1"}}`)
+	out, errOut, _ := runGoat(t, workDir, "/model list\n/exit\n", nil)
+	if !strings.Contains(errOut, "could not list gw models") || strings.Contains(out+errOut, "SECRETTOK") {
+		t.Fatalf("expected the listing failure without the path:\n%s\n%s", out, errOut)
+	}
+}
+
+func TestProcessWithoutAModelSaysHowToPickOne(t *testing.T) {
+	server, _ := fakeChatServer(t, "unused")
+	workDir := t.TempDir()
+	writeProviderEntries(t, workDir, `{"local": {"api": "openai", "base_url": "`+server.URL+`/v1"}}`)
+	_, errOut, code := runGoat(t, workDir, "hi", nil, "-p")
+	if code == 0 || !strings.Contains(errOut, "-m provider:model") {
+		t.Fatalf("got %q (exit %d)", errOut, code)
+	}
+}

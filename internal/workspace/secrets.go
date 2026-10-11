@@ -43,7 +43,7 @@ func isCredentialVar(name string) bool {
 	}
 	for _, vars := range provider.CredentialVars {
 		for _, credential := range vars {
-			if upper == credential {
+			if strings.EqualFold(upper, credential) {
 				return true
 			}
 		}

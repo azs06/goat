@@ -132,12 +132,13 @@ func loadGlobalEnv() (warnings []string, err error) {
 		}
 	}
 	// A key command belongs to its provider like the key: a shell credential keeps the
-	// file's commands out too.
-	credentialOf := map[string]string{}
+	// file's commands out too. A variable can belong to several providers when an
+	// entry's key_env names a built-in key; the shell settling any of them keeps it out.
+	credentialOf := map[string][]string{}
 	for name, vars := range provider.CredentialVars {
 		for _, variable := range vars {
-			credentialOf[variable] = name
-			credentialOf[variable+"_COMMAND"] = name
+			credentialOf[variable] = append(credentialOf[variable], name)
+			credentialOf[variable+"_COMMAND"] = append(credentialOf[variable+"_COMMAND"], name)
 		}
 	}
 
@@ -148,7 +149,7 @@ func loadGlobalEnv() (warnings []string, err error) {
 		if fixedByEnvironment[canonical] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 			continue
 		}
-		if owner := credentialOf[canonical]; owner != "" && fromShell[owner] {
+		if slices.ContainsFunc(credentialOf[canonical], func(owner string) bool { return fromShell[owner] }) {
 			continue
 		}
 		if err := os.Setenv(name, values[name]); err != nil {
@@ -334,6 +335,18 @@ func noAPIKeyMessage() string {
 	}
 	if len(refused) > 0 {
 		return "no provider can be used; " + strings.Join(refused, "; ")
+	}
+	// Entries from providers.json say what each one is missing.
+	var entries []string
+	for _, name := range provider.Names {
+		if _, ok := provider.LookupEntry(name); ok {
+			if err := provider.Unavailable(name); err != nil {
+				entries = append(entries, err.Error())
+			}
+		}
+	}
+	if len(entries) > 0 {
+		return "no provider can be used; " + strings.Join(entries, "; ")
 	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
 	if global := globalEnvPath(); global != "" {

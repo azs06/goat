@@ -160,6 +160,9 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	if previous.Conversation.Provider != "" && previous.Conversation.Provider != model.Provider {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
+	if !previous.Conversation.Fits(model.Provider) {
+		return fmt.Errorf("the previous conversation cannot continue on %s: its api in providers.json has changed since", model.Provider)
+	}
 	if err := provider.Unavailable(model.Provider); err != nil {
 		return fmt.Errorf("the previous conversation used %s: %w", model, err)
 	}
@@ -467,6 +470,10 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
+	if len(choices) == 0 && len(provider.AvailableNames()) > 0 {
+		fmt.Println(style.Warning.Render("No models to offer: " + strings.Join(provider.AvailableNames(), ", ") + " list none; use /model list, or /model provider:model."))
+		return
+	}
 	if len(choices) == 0 {
 		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(strings.TrimPrefix(noAPIKeyMessage(), "no API key found; "), "no provider can be used; ") + "."))
 		return
@@ -557,7 +564,15 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 				if choice == c.model {
 					description = "current · " + description
 				}
-				add(choice.ID, description)
+				// A bare ID that would resolve elsewhere, such as an entry's gpt-oss:20b
+				// or a model two entries list, keeps its provider.
+				value := choice.ID
+				if resolved, err := provider.ResolveModel(value); err != nil || resolved != choice {
+					value = choice.String()
+				}
+				if strings.HasPrefix(strings.ToLower(choice.ID), strings.ToLower(partial)) || strings.HasPrefix(strings.ToLower(value), strings.ToLower(partial)) {
+					items = append(items, completion{display: value, description: description, text: "/model " + value, argument: true})
+				}
 			}
 			add("list", "every model the providers report")
 		case "approve":

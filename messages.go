@@ -51,7 +51,9 @@ func stderrColor() bool {
 func warnf(format string, args ...any) {
 	resume := pauseSpinner()
 	defer resume()
-	message := fmt.Sprintf(format, args...)
+	// Errors in warnings, such as a failed model listing, may quote a base URL whose
+	// path holds a token.
+	message := provider.HideEndpointPaths(fmt.Sprintf(format, args...))
 	if stderrColor() {
 		fmt.Fprintln(os.Stderr, style.Warning.Render(style.Glyphs().Warn+" "+message))
 		return

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // chatServer is a fake Chat Completions server. Each request is answered with the next
@@ -280,5 +281,108 @@ func TestAnthropicEntrySendsOnlyItsOwnKey(t *testing.T) {
 	}
 	if body["thinking"] != nil || body["output_config"] != nil || body["fallbacks"] != nil {
 		t.Fatalf("expected no Claude-only settings for another model, got %v", body)
+	}
+}
+
+func TestChatProviderNeverRunsAToolCallCutOffByTheLimit(t *testing.T) {
+	server := newChatServer(t, []string{
+		chunk(`{"tool_calls":[{"index":0,"id":"x1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"a.go\",\"con"}}]}`, ""),
+		chunk(`{"tool_calls":[{"index":1,"id":"x2","type":"function","function":{"name":"run_bash","arguments":""}}]}`, "length"),
+	})
+	p := newChatProvider("local", server.URL+"/v1", "")
+	resp, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "hi"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Stop != StopMaxTokens {
+		t.Fatalf("expected max tokens, got %s", resp.Stop)
+	}
+	for _, call := range resp.ToolCalls {
+		if call.Arguments == "{}" {
+			t.Fatalf("a call with no arguments must not be given empty ones: %+v", resp.ToolCalls)
+		}
+	}
+}
+
+func TestChatProviderFollowsCallsThatShareIndexZero(t *testing.T) {
+	server := newChatServer(t, []string{
+		chunk(`{"tool_calls":[{"index":0,"id":"x1","function":{"name":"a","arguments":"{\"p\":"}}]}`, ""),
+		chunk(`{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}`, ""),
+		chunk(`{"tool_calls":[{"index":0,"id":"x2","function":{"name":"b","arguments":"{\"q\":"}}]}`, ""),
+		chunk(`{"tool_calls":[{"index":0,"function":{"arguments":"2}"}}]}`, "tool_calls"),
+	})
+	p := newChatProvider("local", server.URL+"/v1", "")
+	resp, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "hi"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ToolCall{{ID: "x1", Name: "a", Arguments: `{"p":1}`}, {ID: "x2", Name: "b", Arguments: `{"q":2}`}}
+	if len(resp.ToolCalls) != 2 || resp.ToolCalls[0] != want[0] || resp.ToolCalls[1] != want[1] {
+		t.Fatalf("got %+v", resp.ToolCalls)
+	}
+}
+
+func TestChatProviderRetriesOnlyTransientStreamErrors(t *testing.T) {
+	for _, test := range []struct {
+		event string
+		retry bool
+	}{
+		{`{"error":{"message":"Rate limit reached. Please try again in 7s.","type":"requests","code":"rate_limit_exceeded"}}`, true},
+		{`{"error":{"message":"This model's maximum context length is 8192 tokens","type":"invalid_request_error","code":"context_length_exceeded"}}`, false},
+	} {
+		server := newChatServer(t, []string{test.event})
+		p := newChatProvider("local", server.URL+"/v1", "")
+		_, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "hi"}, nil)
+		if err == nil {
+			t.Fatal("expected the stream's error")
+		}
+		delay, retry := p.RetryDelay(err, 0)
+		if retry != test.retry || retry && delay != 7*time.Second {
+			t.Errorf("%s: got retry %v after %s", test.event, retry, delay)
+		}
+	}
+}
+
+func TestChatProviderReplaysReasoning(t *testing.T) {
+	server := newChatServer(t,
+		[]string{
+			chunk(`{"reasoning_content":"I should read "}`, ""),
+			chunk(`{"reasoning_content":"the file."}`, ""),
+			chunk(`{"tool_calls":[{"index":0,"id":"x1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}`, "tool_calls"),
+		},
+		[]string{chunk(`{"content":"ok"}`, "stop")},
+	)
+	p := newChatProvider("local", server.URL+"/v1", "")
+	resp, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "hi"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := p.Send(context.Background(), Request{Model: "m", Conversation: resp.Conversation, ToolResults: []ToolResult{{CallID: "x1", Output: "x"}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	messages := server.bodies[1]["messages"].([]any)
+	assistant := messages[1].(map[string]any)
+	if assistant["reasoning_content"] != "I should read the file." || assistant["reasoning"] != nil {
+		t.Fatalf("expected the reasoning sent back as it came, got %v", assistant)
+	}
+	if first := server.bodies[0]["messages"].([]any)[0].(map[string]any); first["reasoning_content"] != nil {
+		t.Fatalf("a user message carries no reasoning: %v", first)
+	}
+}
+
+func TestChatProviderGivesEachResponseItsOwnID(t *testing.T) {
+	empty := `{"id":"","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":"stop"}]}`
+	server := newChatServer(t, []string{chunk(`{"content":"a"}`, "stop")}, []string{chunk(`{"content":"b"}`, "stop")}, []string{empty})
+	p := newChatProvider("local", server.URL+"/v1", "")
+	seen := map[string]bool{}
+	for range 3 {
+		resp, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "hi"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.ID == "" || seen[resp.ID] {
+			t.Fatalf("got a repeated or empty ID %q", resp.ID)
+		}
+		seen[resp.ID] = true
 	}
 }

@@ -91,7 +91,7 @@ func (c *config) provider(name string) (provider.Provider, error) {
 
 func (c *config) currentProvider() (provider.Provider, error) {
 	if c.model.IsZero() {
-		return nil, fmt.Errorf("no model is selected; use /model")
+		return nil, fmt.Errorf("no model is selected; pick one with /model, or start goat with -m provider:model")
 	}
 	return c.provider(c.model.Provider)
 }
@@ -200,7 +200,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
-	if saved.Conversation.IsEmpty() || saved.Conversation.Provider == cfg.model.Provider {
+	if saved.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, saved)
 		return
 	}
@@ -212,7 +212,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		warnf("failed to keep the saved conversation: %v", err)
 		return
 	}
-	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Provider == cfg.model.Provider {
+	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, previous)
 		saveSession(cfg)
 		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", cfg.model.Provider, saved.Conversation.Provider)))
@@ -515,6 +515,10 @@ func main() {
 		if entriesErr != nil {
 			// A model the broken file would have defined is not the real problem.
 			err = entriesErr
+		}
+		for _, warning := range envWarnings {
+			// Such as providers.json being unreadable, which may be why a model is unknown.
+			fmt.Fprintln(os.Stderr, "[warn] "+warning)
 		}
 		fmt.Fprintln(os.Stderr, "goat: "+err.Error())
 		os.Exit(2)

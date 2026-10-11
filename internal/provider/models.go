@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -100,11 +101,25 @@ func MissingCredentialsError(provider string) error {
 	if entry, ok := entries[provider]; ok && entry.KeyCommand != "" {
 		return fmt.Errorf("%s models need a key, and its key_command in providers.json gave none", provider)
 	}
+	if entry, ok := entries[provider]; ok {
+		return fmt.Errorf("%s models need %s, the variable its key_env names, to be set", provider, entry.KeyEnv)
+	}
 	return fmt.Errorf("%s models need %s to be set", provider, strings.Join(CredentialVars[provider], " or "))
 }
 
 func isKnown(name string) bool {
 	return slices.Contains(Names, name)
+}
+
+// entryNames are the registered entries' names, in order.
+func entryNames() []string {
+	var names []string
+	for _, name := range Names {
+		if _, ok := entries[name]; ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // entryNamePrefix matches what can only be meant as a provider prefix: a name in the
@@ -145,10 +160,8 @@ func ResolveModel(raw string) (Model, error) {
 		return Model{Provider: strings.ToLower(provider), ID: id}, nil
 	}
 
-	if provider := forModelID(raw); provider != "" {
-		return Model{Provider: provider, ID: raw}, nil
-	}
-	// A model that exactly one entry lists needs no prefix.
+	// A model that exactly one entry lists needs no prefix, even when its name looks
+	// like a built-in provider's: an Ollama entry's gpt-oss:20b is meant for Ollama.
 	var listedBy []string
 	for _, name := range Names {
 		if entry, ok := entries[name]; ok && slices.Contains(entry.Models, raw) {
@@ -161,8 +174,16 @@ func ResolveModel(raw string) (Model, error) {
 	if len(listedBy) > 1 {
 		return Model{}, fmt.Errorf("%s is listed by %s; prefix it with the one you mean, e.g. %s:%s", raw, strings.Join(listedBy, " and "), listedBy[0], raw)
 	}
+	if provider := forModelID(raw); provider != "" {
+		return Model{Provider: provider, ID: raw}, nil
+	}
 	if prefix := entryNamePrefix.FindString(raw); prefix != "" {
-		return Model{}, fmt.Errorf("there is no provider named %s; providers.json does not define it", strings.TrimSuffix(prefix, ":"))
+		// qwen3:8b may be an Ollama model rather than a provider named qwen3.
+		message := fmt.Sprintf("there is no provider named %s", strings.TrimSuffix(prefix, ":"))
+		if names := entryNames(); len(names) > 0 {
+			message += fmt.Sprintf("; if %s is a model, prefix it with the provider that serves it, e.g. %s:%s", raw, names[0], raw)
+		}
+		return Model{}, errors.New(message)
 	}
 	return Model{}, fmt.Errorf("cannot tell which provider serves %q; prefix it with the provider, e.g. openai:%s", raw, raw)
 }
