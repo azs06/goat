@@ -45,10 +45,14 @@ func promptFingerprint(codeMode bool) string {
 }
 
 func sessionFromConfig(cfg *config) savedSession {
+	model := ""
+	if !cfg.model.IsZero() {
+		model = cfg.model.String()
+	}
 	return savedSession{
 		Version:            sessionVersion,
 		ConversationID:     activeConversationID,
-		Model:              cfg.model.String(),
+		Model:              model,
 		Effort:             string(cfg.reasoningEffort),
 		Conversation:       cfg.conversation.conversation,
 		PendingToolResults: cfg.conversation.pendingToolResults,

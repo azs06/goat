@@ -51,9 +51,28 @@ func (u Usage) ContextTokens() int64 {
 // provider named in it: OpenAI keeps the conversation on its servers and only needs the
 // latest response ID, while Anthropic needs the whole transcript, kept append-only.
 type Conversation struct {
-	Provider   string            `json:"provider,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// Format is FormatChat for a Chat Completions transcript, and empty for the
+	// formats the provider name settles. An entry's api can change between runs.
+	Format     string            `json:"format,omitempty"`
 	ResponseID string            `json:"response_id,omitempty"`
 	Messages   []json.RawMessage `json:"messages,omitempty"`
+}
+
+// FormatChat marks a transcript in the Chat Completions format.
+const FormatChat = "chat"
+
+// Fits reports whether provider can continue the conversation: it is empty, or it was
+// made by that provider in the format the provider speaks now.
+func (c Conversation) Fits(provider string) bool {
+	if c.IsEmpty() {
+		return true
+	}
+	format := ""
+	if entry, ok := entries[provider]; ok && entry.API == APIOpenAI {
+		format = FormatChat
+	}
+	return c.Provider == provider && c.Format == format
 }
 
 func (c Conversation) IsEmpty() bool {
@@ -161,8 +180,15 @@ func SeedPrompt(summary string) string {
 // DescribeEffort says what the provider will actually receive for effort. p is the
 // provider serving model, or nil when it has not been created yet.
 func DescribeEffort(p Provider, model Model, effort Effort) string {
-	switch model.Provider {
+	kind := model.Provider
+	if entry, ok := entries[model.Provider]; ok {
+		kind = entry.API
+	}
+	switch kind {
 	case OpenAI:
+		if _, isEntry := entries[model.Provider]; isEntry {
+			return "nothing; goat sends no effort setting to OpenAI-compatible servers"
+		}
 		if !openAISupportsReasoning(model.ID) {
 			return "nothing; this model takes no reasoning setting"
 		}
@@ -174,6 +200,9 @@ func DescribeEffort(p Provider, model Model, effort Effort) string {
 		return "thinking turned off"
 	case Anthropic:
 		caps := guessAnthropicCapabilities(model.ID)
+		if _, isEntry := entries[model.Provider]; isEntry && !strings.HasPrefix(strings.ToLower(model.ID), "claude-") {
+			caps = entryModelCapabilities
+		}
 		if provider, ok := p.(*anthropicProvider); ok {
 			provider.mu.Lock()
 			if known, found := provider.capabilities[model.ID]; found {

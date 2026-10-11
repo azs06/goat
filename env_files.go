@@ -32,6 +32,44 @@ func goatConfigDir() string {
 	return filepath.Join(home, ".config", "goat")
 }
 
+// mentionsConfigDir reports a run_bash command that names goat's config directory, which
+// holds the global .env: by config/goat, XDG_CONFIG_HOME or its full path, or by a
+// relative path from a workdir above it, or by running inside it. Such commands are
+// always confirmed, even when commands run without asking. It is a tripwire, not a
+// boundary: it matches text, so quoting, globs, variables or a cd earlier in the
+// command get past it.
+func mentionsConfigDir(command, workdir string) bool {
+	lower := strings.ToLower(command)
+	for strings.Contains(lower, "//") || strings.Contains(lower, "/./") {
+		lower = strings.ReplaceAll(strings.ReplaceAll(lower, "//", "/"), "/./", "/")
+	}
+	needles := []string{"config/goat", `config\goat`, "xdg_config_home"}
+	if dir := goatConfigDir(); dir != "" {
+		needles = append(needles, strings.ToLower(dir))
+		if abs, err := filepath.Abs(workdir); err == nil {
+			if within(abs, dir) {
+				return true
+			}
+			if within(dir, abs) {
+				rel, _ := filepath.Rel(abs, dir)
+				needles = append(needles, strings.ToLower(filepath.ToSlash(rel)), strings.ToLower(rel))
+			}
+		}
+	}
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// within reports whether path is dir or inside it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // globalEnvPath is the .env file goat reads in every workspace, or "" when there is no
 // config directory.
 func globalEnvPath() string {
@@ -83,29 +121,41 @@ func loadGlobalEnv() (warnings []string, err error) {
 		warnings = append(warnings, warning)
 	}
 
+	// A credential the shell gives, directly or as a key command, settles the provider.
 	fromShell := map[string]bool{}
 	for _, name := range provider.Names {
 		fromShell[name] = provider.CredentialSource(name) != ""
+		for _, variable := range provider.CredentialVars[name] {
+			if strings.TrimSpace(os.Getenv(variable+"_COMMAND")) != "" {
+				fromShell[name] = true
+			}
+		}
 	}
-	credentialOf := map[string]string{}
+	// A key command belongs to its provider like the key: a shell credential keeps the
+	// file's commands out too. A variable can belong to several providers when an
+	// entry's key_env names a built-in key; the shell settling any of them keeps it out.
+	credentialOf := map[string][]string{}
 	for name, vars := range provider.CredentialVars {
 		for _, variable := range vars {
-			credentialOf[variable] = name
+			credentialOf[variable] = append(credentialOf[variable], name)
+			credentialOf[variable+"_COMMAND"] = append(credentialOf[variable+"_COMMAND"], name)
 		}
 	}
 
 	var taken []string
 	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if fixedByEnvironment[name] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
+		// On Windows anthropic_auth_token is ANTHROPIC_AUTH_TOKEN, so checks go by EnvName.
+		canonical := workspace.EnvName(name)
+		if fixedByEnvironment[canonical] || strings.TrimSpace(os.Getenv(name)) != "" || strings.TrimSpace(values[name]) == "" {
 			continue
 		}
-		if owner := credentialOf[name]; owner != "" && fromShell[owner] {
+		if slices.ContainsFunc(credentialOf[canonical], func(owner string) bool { return fromShell[owner] }) {
 			continue
 		}
 		if err := os.Setenv(name, values[name]); err != nil {
 			return warnings, fmt.Errorf("setting %s from %s: %w", name, path, err)
 		}
-		envSources[name] = displayPath(path)
+		envSources[canonical] = displayPath(path)
 		taken = append(taken, name)
 	}
 	workspace.HideFromCommands(taken...)
@@ -219,16 +269,85 @@ func credentialOrigin(name string) string {
 	if source == "" {
 		return ""
 	}
-	if file := envSources[source]; file != "" {
-		return source + " from " + file
+	if provider.KeyCommands[source] != "" && envSources[source] != "" {
+		return "key from " + envSources[source] + " in " + displayPath(providerEntriesPath())
 	}
-	return source + " from the environment"
+	return variableOrigin(source)
 }
 
-// noAPIKeyMessage is the error for a start without any credentials. It names the full
+// variableOrigin says where a variable came from: a file goat loaded, or the environment.
+func variableOrigin(name string) string {
+	if file := envSources[name]; file != "" {
+		return name + " from " + file
+	}
+	return name + " from the environment"
+}
+
+// endpointNotices are the startup lines about providers whose base URL moves their
+// requests: the base URLs goat refuses, and every host that is not the provider's own
+// API, so a key never goes to a proxy without the user seeing where. An entry from
+// providers.json is only mentioned when its key would go unencrypted.
+func endpointNotices() []string {
+	var notices []string
+	for _, name := range provider.Names {
+		if provider.CredentialSource(name) == "" {
+			continue
+		}
+		endpoint, err := provider.ResolveEndpoint(name)
+		if err != nil {
+			notices = append(notices, fmt.Sprintf("%s is unavailable: %v", name, err))
+			continue
+		}
+		if _, isEntry := provider.LookupEntry(name); isEntry {
+			// The user wrote the entry's URL into their own config, so only plain http
+			// to another machine is worth a word at every start.
+			if endpoint.Unencrypted {
+				notices = append(notices, fmt.Sprintf("%s sends its key to %s%s", name, endpoint.Origin(), unencryptedNote(endpoint)))
+			}
+			continue
+		}
+		if endpoint.Custom {
+			notices = append(notices, fmt.Sprintf("%s requests go to %s (%s)%s", name, endpoint.Origin(), variableOrigin(provider.BaseURLVars[name]), unencryptedNote(endpoint)))
+		}
+	}
+	return notices
+}
+
+func unencryptedNote(endpoint provider.Endpoint) string {
+	if endpoint.Unencrypted {
+		return ", unencrypted: the key crosses the network in plain text"
+	}
+	return ""
+}
+
+// noAPIKeyMessage is the error for a start without a usable provider. Usually there are
+// no credentials, but a key whose base URL goat refuses is named instead. It names the full
 // path of the global file, and says the workspace's .env is not read, since keys left
 // there from before are the likely mistake.
 func noAPIKeyMessage() string {
+	var refused []string
+	for _, name := range provider.Names {
+		if provider.CredentialSource(name) != "" {
+			if err := provider.Unavailable(name); err != nil {
+				refused = append(refused, err.Error())
+			}
+		}
+	}
+	if len(refused) > 0 {
+		return "no provider can be used; " + strings.Join(refused, "; ")
+	}
+	// Entries from providers.json say what each one is missing.
+	var entries []string
+	for _, name := range provider.Names {
+		if _, ok := provider.LookupEntry(name); ok {
+			if err := provider.Unavailable(name); err != nil {
+				entries = append(entries, err.Error())
+			}
+		}
+	}
+	if len(entries) > 0 {
+		return "no provider can be used; " + strings.Join(entries, "; ")
+	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
 	if global := globalEnvPath(); global != "" {
 		message += " or in " + global

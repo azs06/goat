@@ -63,8 +63,8 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	if p, ok := c.providers[name]; ok {
 		return p, nil
 	}
-	if !provider.Available(name) {
-		return nil, provider.MissingCredentialsError(name)
+	if err := provider.Unavailable(name); err != nil {
+		return nil, err
 	}
 
 	var p provider.Provider
@@ -76,7 +76,11 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	case provider.DeepSeek:
 		p = provider.NewDeepSeek()
 	default:
-		return nil, fmt.Errorf("unknown provider %q", name)
+		entry, err := provider.NewEntry(name)
+		if err != nil {
+			return nil, err
+		}
+		p = entry
 	}
 	if c.providers == nil {
 		c.providers = map[string]provider.Provider{}
@@ -87,7 +91,7 @@ func (c *config) provider(name string) (provider.Provider, error) {
 
 func (c *config) currentProvider() (provider.Provider, error) {
 	if c.model.IsZero() {
-		return nil, fmt.Errorf("no model is selected; use /model")
+		return nil, fmt.Errorf("no model is selected; pick one with /model, or start goat with -m provider:model")
 	}
 	return c.provider(c.model.Provider)
 }
@@ -117,12 +121,12 @@ func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 			warnf("ignoring the model from %s: %v", c.source, err)
 			continue
 		}
-		if !provider.Available(ref.Provider) {
+		if unavailable := provider.Unavailable(ref.Provider); unavailable != nil {
 			switch c.source {
 			case "GOAT_MODEL":
-				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
+				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, unavailable)
 			case "--model":
-				warnf("ignoring --model %s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
+				warnf("ignoring --model %s: %v", c.raw, unavailable)
 			}
 			continue
 		}
@@ -196,7 +200,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
-	if saved.Conversation.IsEmpty() || saved.Conversation.Provider == cfg.model.Provider {
+	if saved.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, saved)
 		return
 	}
@@ -208,7 +212,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		warnf("failed to keep the saved conversation: %v", err)
 		return
 	}
-	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Provider == cfg.model.Provider {
+	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, previous)
 		saveSession(cfg)
 		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", cfg.model.Provider, saved.Conversation.Provider)))
@@ -216,10 +220,10 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	}
 
 	startConversation(cfg, conversationState{})
-	if provider.Available(saved.Conversation.Provider) {
+	if err := provider.Unavailable(saved.Conversation.Provider); err == nil {
 		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation does not carry over to %s; it was kept, and /resume restores it.", saved.Model, cfg.model)))
 	} else {
-		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s.", saved.Model, provider.MissingCredentialsError(saved.Conversation.Provider))))
+		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s can be used (%v).", saved.Model, saved.Conversation.Provider, err)))
 	}
 }
 
@@ -500,11 +504,22 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 const exitConfirmWindow = 2 * time.Second
 
 func main() {
+	// Before the flags, so --model can name an entry's model. Entries also come before
+	// the global .env, so it treats their key variables as credentials.
+	envWarnings, entriesErr := loadProviderEntries()
 	opts, err := parseCLI(os.Args[1:], os.Stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return
 	}
 	if err != nil {
+		if entriesErr != nil {
+			// A model the broken file would have defined is not the real problem.
+			err = entriesErr
+		}
+		for _, warning := range envWarnings {
+			// Such as providers.json being unreadable, which may be why a model is unknown.
+			fmt.Fprintln(os.Stderr, "[warn] "+warning)
+		}
 		fmt.Fprintln(os.Stderr, "goat: "+err.Error())
 		os.Exit(2)
 	}
@@ -512,16 +527,26 @@ func main() {
 		fmt.Println("goat " + goatVersion())
 		return
 	}
+	if entriesErr != nil {
+		log.Fatal(entriesErr)
+	}
 
 	// The files can hold any GOAT_ setting, so they load before the settings are read.
-	envWarnings, err := loadGlobalEnv()
+	globalWarnings, err := loadGlobalEnv()
 	if err != nil {
 		log.Fatal(err)
 	}
+	envWarnings = append(envWarnings, globalWarnings...)
+	// Before the terminal is set up, so a password manager can prompt on it.
+	envWarnings = append(envWarnings, runKeyCommands()...)
 	// Read at package initialization, before the files loaded.
 	style.Detect()
 	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
 	if len(provider.AvailableNames()) == 0 {
+		// A failed key command or an unreadable global file may be why.
+		for _, warning := range envWarnings {
+			fmt.Fprintln(os.Stderr, "[warn] "+warning)
+		}
 		log.Fatal(noAPIKeyMessage())
 	}
 
@@ -529,7 +554,7 @@ func main() {
 	workspace.Warnf = warnf
 	terminal.Warnf = warnf
 	applyTheme()
-	for _, warning := range envWarnings {
+	for _, warning := range append(envWarnings, endpointNotices()...) {
 		warnf("%s", warning)
 	}
 	cfg := loadConfig(opts)

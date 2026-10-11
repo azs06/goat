@@ -160,8 +160,11 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	if previous.Conversation.Provider != "" && previous.Conversation.Provider != model.Provider {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
-	if !provider.Available(model.Provider) {
-		return fmt.Errorf("the previous conversation used %s: %w", model, provider.MissingCredentialsError(model.Provider))
+	if !previous.Conversation.Fits(model.Provider) {
+		return fmt.Errorf("the previous conversation cannot continue on %s: its api in providers.json has changed since", model.Provider)
+	}
+	if err := provider.Unavailable(model.Provider); err != nil {
+		return fmt.Errorf("the previous conversation used %s: %w", model, err)
 	}
 
 	if err := sessionSaver(previousSessionPath, sessionFromConfig(c)); err != nil {
@@ -349,11 +352,32 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		{"Model:", style.Highlight.Render(c.model.String())},
 		{"Effort:", effortStatusText(c)},
 	}
+	width := 9
 	for _, name := range provider.Names {
-		if origin := credentialOrigin(name); origin != "" {
-			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
-		} else {
-			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
+		width = max(width, len(name))
+	}
+	for _, name := range provider.Names {
+		origin := credentialOrigin(name)
+		entry, isEntry := provider.LookupEntry(name)
+		switch err := provider.Unavailable(name); {
+		case err != nil && isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
+		case origin == "" && !isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
+		case err != nil:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
+		default:
+			endpoint, _ := provider.ResolveEndpoint(name)
+			if isEntry && entry.Keyless() {
+				origin = "no key"
+			}
+			if endpoint.Custom {
+				origin += "; requests go to " + endpoint.Origin()
+				if !isEntry || !entry.Keyless() {
+					origin += unencryptedNote(endpoint)
+				}
+			}
+			rows = append(rows, [2]string{"Provider:", style.PadRight(name, width) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
 		}
 	}
 
@@ -446,8 +470,12 @@ func commandModel(ctx context.Context, c *config, args []string) error {
 
 func printModelChoices(c *config, choices []provider.Model) {
 	c.lastModelChoices = choices
+	if len(choices) == 0 && len(provider.AvailableNames()) > 0 {
+		fmt.Println(style.Warning.Render("No models to offer: " + strings.Join(provider.AvailableNames(), ", ") + " list none; use /model list, or /model provider:model."))
+		return
+	}
 	if len(choices) == 0 {
-		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(noAPIKeyMessage(), "no API key found; ") + "."))
+		fmt.Println(style.Warning.Render("No models are available: " + strings.TrimPrefix(strings.TrimPrefix(noAPIKeyMessage(), "no API key found; "), "no provider can be used; ") + "."))
 		return
 	}
 	fmt.Println(style.Strong.Render("Models") + style.Muted.Render(" (only providers with an API key are listed):"))
@@ -466,8 +494,8 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		fmt.Println(formatNotice(fmt.Sprintf("Already using %s.", target)))
 		return nil
 	}
-	if !provider.Available(target.Provider) {
-		return provider.MissingCredentialsError(target.Provider)
+	if err := provider.Unavailable(target.Provider); err != nil {
+		return err
 	}
 	p, err := c.provider(target.Provider)
 	if err != nil {
@@ -536,7 +564,15 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 				if choice == c.model {
 					description = "current · " + description
 				}
-				add(choice.ID, description)
+				// A bare ID that would resolve elsewhere, such as an entry's gpt-oss:20b
+				// or a model two entries list, keeps its provider.
+				value := choice.ID
+				if resolved, err := provider.ResolveModel(value); err != nil || resolved != choice {
+					value = choice.String()
+				}
+				if strings.HasPrefix(strings.ToLower(choice.ID), strings.ToLower(partial)) || strings.HasPrefix(strings.ToLower(value), strings.ToLower(partial)) {
+					items = append(items, completion{display: value, description: description, text: "/model " + value, argument: true})
+				}
 			}
 			add("list", "every model the providers report")
 		case "approve":
@@ -597,6 +633,10 @@ func liveModels(ctx context.Context, c *config) map[string][]string {
 	startSpinner("Listing models")
 	defer stopSpinner()
 	for _, name := range provider.AvailableNames() {
+		if entry, ok := provider.LookupEntry(name); ok && len(entry.Models) > 0 {
+			// The picker offers only the models the entry lists.
+			continue
+		}
 		provider, err := c.provider(name)
 		if err != nil {
 			continue

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/style"
 	"github.com/azs06/goat/internal/terminal"
 )
@@ -50,7 +51,9 @@ func stderrColor() bool {
 func warnf(format string, args ...any) {
 	resume := pauseSpinner()
 	defer resume()
-	message := fmt.Sprintf(format, args...)
+	// Errors in warnings, such as a failed model listing, may quote a base URL whose
+	// path holds a token.
+	message := provider.HideEndpointPaths(fmt.Sprintf(format, args...))
 	if stderrColor() {
 		fmt.Fprintln(os.Stderr, style.Warning.Render(style.Glyphs().Warn+" "+message))
 		return
@@ -69,6 +72,7 @@ func formatWarning(message string) string {
 }
 
 func formatError(message string) string {
+	message = provider.HideEndpointPaths(message)
 	g := style.Glyphs()
 	if !style.Enabled() {
 		return "Error: " + message

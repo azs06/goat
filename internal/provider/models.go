@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ const (
 	DefaultDeepSeekModel  = "deepseek-v4-pro"
 )
 
+// Names are the providers: the built-in ones, then the entries from providers.json.
 var Names = []string{OpenAI, Anthropic, DeepSeek}
 
 // Model is a model together with the provider that serves it.
@@ -28,6 +31,10 @@ type Model struct {
 }
 
 func (m Model) String() string {
+	if m.IsZero() {
+		// An entry that lists no models gives goat none to start with.
+		return "none (pick one with /model)"
+	}
 	return m.Provider + ":" + m.ID
 }
 
@@ -36,7 +43,8 @@ func (m Model) IsZero() bool {
 }
 
 // CredentialVars are the environment variables that make a provider available.
-// A provider's models are only offered when one of them is set.
+// A provider's models are only offered when one of them is set. Entries that send no key
+// have none.
 var CredentialVars = map[string][]string{
 	OpenAI:    {"OPENAI_API_KEY"},
 	Anthropic: {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
@@ -54,8 +62,29 @@ func CredentialSource(provider string) string {
 	return ""
 }
 
+// Unavailable says why a provider cannot be used: it has no credentials, or its base URL
+// is invalid, or there is no such provider. It is nil for a usable provider.
+func Unavailable(provider string) error {
+	if entry, ok := entries[provider]; ok {
+		if !entry.Keyless() && CredentialSource(provider) == "" {
+			return MissingCredentialsError(provider)
+		}
+		return nil
+	}
+	if !isBuiltIn(provider) {
+		return fmt.Errorf("there is no provider named %s; providers.json does not define it", provider)
+	}
+	if CredentialSource(provider) == "" {
+		return MissingCredentialsError(provider)
+	}
+	if _, err := ResolveEndpoint(provider); err != nil {
+		return err
+	}
+	return nil
+}
+
 func Available(provider string) bool {
-	return CredentialSource(provider) != ""
+	return Unavailable(provider) == nil
 }
 
 func AvailableNames() []string {
@@ -69,17 +98,33 @@ func AvailableNames() []string {
 }
 
 func MissingCredentialsError(provider string) error {
+	if entry, ok := entries[provider]; ok && entry.KeyCommand != "" {
+		return fmt.Errorf("%s models need a key, and its key_command in providers.json gave none", provider)
+	}
+	if entry, ok := entries[provider]; ok {
+		return fmt.Errorf("%s models need %s, the variable its key_env names, to be set", provider, entry.KeyEnv)
+	}
 	return fmt.Errorf("%s models need %s to be set", provider, strings.Join(CredentialVars[provider], " or "))
 }
 
 func isKnown(name string) bool {
-	for _, provider := range Names {
-		if provider == name {
-			return true
+	return slices.Contains(Names, name)
+}
+
+// entryNames are the registered entries' names, in order.
+func entryNames() []string {
+	var names []string
+	for _, name := range Names {
+		if _, ok := entries[name]; ok {
+			names = append(names, name)
 		}
 	}
-	return false
+	return names
 }
+
+// entryNamePrefix matches what can only be meant as a provider prefix: a name in the
+// form entries use, followed by a colon.
+var entryNamePrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*:`)
 
 // forModelID guesses the provider from a bare model ID.
 func forModelID(id string) string {
@@ -115,8 +160,30 @@ func ResolveModel(raw string) (Model, error) {
 		return Model{Provider: strings.ToLower(provider), ID: id}, nil
 	}
 
+	// A model that exactly one entry lists needs no prefix, even when its name looks
+	// like a built-in provider's: an Ollama entry's gpt-oss:20b is meant for Ollama.
+	var listedBy []string
+	for _, name := range Names {
+		if entry, ok := entries[name]; ok && slices.Contains(entry.Models, raw) {
+			listedBy = append(listedBy, name)
+		}
+	}
+	if len(listedBy) == 1 {
+		return Model{Provider: listedBy[0], ID: raw}, nil
+	}
+	if len(listedBy) > 1 {
+		return Model{}, fmt.Errorf("%s is listed by %s; prefix it with the one you mean, e.g. %s:%s", raw, strings.Join(listedBy, " and "), listedBy[0], raw)
+	}
 	if provider := forModelID(raw); provider != "" {
 		return Model{Provider: provider, ID: raw}, nil
+	}
+	if prefix := entryNamePrefix.FindString(raw); prefix != "" {
+		// qwen3:8b may be an Ollama model rather than a provider named qwen3.
+		message := fmt.Sprintf("there is no provider named %s", strings.TrimSuffix(prefix, ":"))
+		if names := entryNames(); len(names) > 0 {
+			message += fmt.Sprintf("; if %s is a model, prefix it with the provider that serves it, e.g. %s:%s", raw, names[0], raw)
+		}
+		return Model{}, errors.New(message)
 	}
 	return Model{}, fmt.Errorf("cannot tell which provider serves %q; prefix it with the provider, e.g. openai:%s", raw, raw)
 }
@@ -135,7 +202,7 @@ func curatedModels(provider string) []string {
 	case DeepSeek:
 		return []string{DefaultDeepSeekModel, "deepseek-flash"}
 	default:
-		return nil
+		return entries[provider].Models
 	}
 }
 
@@ -186,6 +253,13 @@ func pickerModels(provider string, ids []string) []string {
 	case DeepSeek:
 		return newestDeepSeekModels(ids)
 	default:
+		// An entry that lists models offers just those; one without offers whatever its
+		// server lists.
+		if listed := entries[provider].Models; len(listed) > 0 {
+			return filterModels(ids, func(id string) bool {
+				return slices.ContainsFunc(listed, func(model string) bool { return strings.EqualFold(model, id) })
+			})
+		}
 		return ids
 	}
 }
@@ -279,7 +353,8 @@ func isOpenAIChatModel(id string) bool {
 	return true
 }
 
-// DefaultModel picks a starting model from a provider that has credentials.
+// DefaultModel picks a starting model from a provider that has credentials, the
+// built-in ones first, then the first model of the first entry that lists any.
 func DefaultModel() Model {
 	if Available(OpenAI) {
 		return Model{Provider: OpenAI, ID: DefaultOpenAIModel}
@@ -289,6 +364,11 @@ func DefaultModel() Model {
 	}
 	if Available(DeepSeek) {
 		return Model{Provider: DeepSeek, ID: DefaultDeepSeekModel}
+	}
+	for _, name := range Names {
+		if entry, ok := entries[name]; ok && len(entry.Models) > 0 && Available(name) {
+			return Model{Provider: name, ID: entry.Models[0]}
+		}
 	}
 	return Model{}
 }

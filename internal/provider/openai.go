@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -44,7 +46,14 @@ type OpenAICreateFunc func(ctx context.Context, params responses.ResponseNewPara
 type OpenAIStreamFunc func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error)
 
 func NewOpenAI() Provider {
-	client := openai.NewClient()
+	// goat names the endpoint and key itself, so the client sends the key only where
+	// ResolveEndpoint has checked; later options win over the SDK's environment defaults.
+	endpoint := endpointOrOfficial(OpenAI)
+	client := openai.NewClient(
+		option.WithHTTPClient(keyClient(0)),
+		option.WithBaseURL(endpoint.URL),
+		option.WithAPIKey(strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))),
+	)
 	return &openAIProvider{client: &client}
 }
 
