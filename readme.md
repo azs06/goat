@@ -398,7 +398,7 @@ one round trip and keeps the intermediate text out of the conversation. The call
 script makes are shown indented under it as they run.
 
 - Every call goes through the same checks as a direct call: workspace paths, the `.env`
-  and `.goat` refusals, plan mode, and approval for each `run_bash` command. Each change is
+  and state directory refusals, plan mode, and approval for each `run_bash` command. Each change is
   its own `/undo` step.
 - The script runs in an embedded JavaScript engine ([goja](https://github.com/dop251/goja))
   with nothing but `goat` and `console`: no file, network, environment or process access,
@@ -532,7 +532,12 @@ Ollama's, not Mistral's.
 
 ## Conversations and state
 
-goat keeps its state in `.goat/` inside the workspace:
+goat keeps each workspace's state outside it, the way other coding agents do, in a
+directory of its own under your state directory:
+`~/.local/state/goat/projects/<workspace>/` (`$XDG_STATE_HOME/goat/projects/<workspace>/`
+when that is set). `<workspace>` is the workspace's path with `/` turned into `-` and a
+short hash added, such as `-Users-you-code-app-1a2b3c4d`. `/history` shows where. The
+directory is readable only by you.
 
 | File | |
 | --- | --- |
@@ -547,10 +552,14 @@ conversation automatically, the same way `/compact` does: it is summarized into 
 smaller context. If `session.json` or `operations.json` cannot be read, goat moves it
 aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 
+Older versions kept these files in a `.goat/` directory in the workspace. goat moves them
+the first time it starts there and removes `.goat/`, saying so. A file the state
+directory already has is left in `.goat/` instead, with a warning.
+
 ## Safety
 
 - File tools only accept paths inside the workspace, refuse symlinks that lead outside it,
-  and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
+  and cannot touch goat's state directory, or a `.goat/` an older goat left. They also refuse `.env`, `.env.*` and `.envrc` (templates such
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
 - A provider's key goes to its own API unless its base URL says otherwise, and only your
@@ -595,7 +604,8 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   every command for the rest of the session, or type feedback to decline with a reason the
   model sees. Commands time out after 30 seconds, and everything a command started is
   killed with it. Changes made through `run_bash` are not snapshotted. A command that
-  mentions `.goat` is always confirmed, even when commands otherwise run without asking.
+  mentions goat's state directory (or `.goat`) is always confirmed, even when commands
+  otherwise run without asking.
 
 ## Themes
 

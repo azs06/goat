@@ -159,7 +159,7 @@ func TestSendPromptStreamWritesConversationHistory(t *testing.T) {
 		t.Fatalf("expected resp-history, got %q", conv.conversation.ResponseID)
 	}
 
-	historyData, err := os.ReadFile(filepath.Join(workDir, ".goat", "history.jsonl"))
+	historyData, err := os.ReadFile(filepath.Join(statePath(t, ""), "history.jsonl"))
 	if err != nil {
 		t.Fatalf("read history file: %v", err)
 	}

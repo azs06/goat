@@ -32,7 +32,9 @@ const (
 	// maxDiffCells bounds the LCS table behind a diff preview (about 16 MB of int32s).
 	maxDiffCells = 4_000_000
 
-	// StateDirName holds goat's history, operation log, and undo snapshots.
+	// StateDirName starts the paths of goat's own files, such as ".goat/history.jsonl",
+	// which ResolveStatePath maps to the workspace's state directory. Older versions kept
+	// them in a .goat directory in the workspace; file tools still never open one.
 	StateDirName = ".goat"
 )
 
@@ -142,9 +144,8 @@ func sameExistingFile(firstResolvedPath, secondResolvedPath string) bool {
 	return err == nil && os.SameFile(firstInfo, secondInfo)
 }
 
-// ResolveStatePath resolves a path inside the workspace, including goat's own state
-// directory. Tools that act for the model must use ResolvePath instead.
-func ResolveStatePath(path string) (string, string, error) {
+// resolveInWorkspace resolves a path lexically inside the workspace.
+func resolveInWorkspace(path string) (string, string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", "", fmt.Errorf("path is required")
 	}
@@ -174,7 +175,7 @@ func ResolveStatePath(path string) (string, string, error) {
 // workspace lexically, the path must not reach outside it, or into goat's state
 // directory, through a symlink.
 func ResolvePath(path string) (string, string, error) {
-	resolvedPath, relPath, err := ResolveStatePath(path)
+	resolvedPath, relPath, err := resolveInWorkspace(path)
 	if err != nil {
 		return "", "", err
 	}

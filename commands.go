@@ -233,13 +233,13 @@ func commandHistory(ctx context.Context, c *config, args []string) error {
 	}
 
 	if info, err := os.Stat(resolvedPath); err == nil {
-		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", relPath, style.Muted.Render(fmt.Sprintf("(%d bytes)", info.Size())))}}))
+		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", displayPath(relPath), style.Muted.Render(fmt.Sprintf("(%d bytes)", info.Size())))}}))
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 
-	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", relPath + " " + style.Muted.Render("(not created yet)")}}))
+	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", displayPath(relPath) + " " + style.Muted.Render("(not created yet)")}}))
 	return nil
 }
 

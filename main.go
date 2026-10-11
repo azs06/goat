@@ -415,6 +415,27 @@ func handleInput(cfg *config, text string) error {
 	return err
 }
 
+// migrateLegacyState moves the .goat directory an older goat kept in the workspace to
+// goat's state directory, and says so. A -p run says it on stderr, keeping stdout for
+// the reply.
+func migrateLegacyState(oneShot bool) {
+	root, moved, left, err := workspace.MigrateLegacyState()
+	if err != nil {
+		warnf("could not move %s out of the workspace: %v", workspace.StateDirName, err)
+		return
+	}
+	out := io.Writer(os.Stdout)
+	if oneShot {
+		out = os.Stderr
+	}
+	if len(moved) > 0 {
+		fmt.Fprintln(out, formatNotice(fmt.Sprintf("Moved goat's files from %s to %s.", workspace.StateDirName, displayPath(root))))
+	}
+	if len(left) > 0 {
+		warnf("%s still holds %s: %s already has files of those names, so they were left; remove %s once you no longer need them", workspace.StateDirName, strings.Join(left, ", "), displayPath(root), workspace.StateDirName)
+	}
+}
+
 // printWelcome shows the banner and the notices about the restored state.
 func printWelcome(cfg *config) {
 	cwd, _ := os.Getwd()
@@ -568,6 +589,8 @@ func main() {
 	// File tools stay out of the config directory, which a workspace such as the home
 	// directory contains.
 	workspace.ProtectDir(goatConfigDir())
+	// Nor into goat's own state, kept in the user's state directory.
+	workspace.ProtectDir(workspace.StateHome())
 	authWarnings, err := loadAuthFile()
 	if err != nil {
 		log.Fatal(err)
@@ -601,6 +624,8 @@ func main() {
 	for _, warning := range append(envWarnings, endpointNotices()...) {
 		warnf("%s", warning)
 	}
+	// Before the session is read: an older goat kept it in the workspace.
+	migrateLegacyState(opts.print)
 	cfg := loadConfig(opts)
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
