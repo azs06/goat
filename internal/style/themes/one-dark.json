@@ -1,0 +1,36 @@
+{
+  "$comment": "One Dark, after Atom's theme of that name. Its palette: mono-1 #abb2bf (text), mono-2 #828997, mono-3 #5c6370, cyan #56b6c2, blue #61afef, purple #c678dd, green #98c379, red #e06c75, orange #d19a66, yellow #e5c07b, with #2c313c and #3e4451 for backgrounds. The terminal's own background stays; One Dark's is #282c34.",
+  "styles": {
+    ":root": "--mono-1: #abb2bf; --mono-2: #828997; --mono-3: #5c6370; --cyan: #56b6c2; --blue: #61afef; --purple: #c678dd; --green: #98c379; --red: #e06c75; --orange: #d19a66; --yellow: #e5c07b; --line: #2c313c; --selection: #3e4451",
+
+    "accent": "color: var(--blue)",
+    "muted": "color: var(--mono-2)",
+    "subtle": "color: var(--mono-3)",
+    "strong": "font-weight: bold",
+    "emphasis": "font-style: italic",
+    "highlight": "color: var(--yellow); font-weight: bold",
+    "title": "color: var(--blue); font-weight: bold",
+    "heading": "color: var(--red); font-weight: bold",
+    "subheading": "color: var(--purple); font-weight: bold",
+    "quote": "color: var(--mono-2); font-style: italic",
+    "code": "color: var(--mono-1)",
+    "code-comment": "color: var(--mono-3); font-style: italic",
+    "code-keyword": "color: var(--purple)",
+    "code-string": "color: var(--green)",
+    "code-number": "color: var(--orange)",
+    "code-function": "color: var(--blue)",
+    "code-type": "color: var(--yellow)",
+    "code-constant": "color: var(--cyan)",
+    "inline-code": "color: var(--cyan)",
+    "success": "color: var(--green)",
+    "error": "color: var(--red)",
+    "warning": "color: var(--yellow)",
+    "approval-title": "color: var(--yellow); font-weight: bold",
+    "diff-added": "color: var(--green)",
+    "diff-removed": "color: var(--red)",
+    "prompt": "color: var(--purple)",
+    "user-marker": "color: var(--purple); background-color: var(--line)",
+    "user-message": "color: var(--mono-1); font-weight: bold; background-color: var(--line)",
+    "selected": "color: var(--blue); font-weight: bold; background-color: var(--selection)"
+  }
+}

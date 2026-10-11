@@ -26,11 +26,19 @@ func themePath() (path string, explicit bool) {
 	return filepath.Join(dir, "theme.json"), false
 }
 
-// applyTheme loads the theme file, if there is one, over the built-in theme and makes
-// it current. Declarations that cannot be used are warned about and skipped; a file
-// that cannot be read or is not valid JSON leaves the built-in theme in place. It
-// returns the file in use, or "" for the built-in theme.
+// applyTheme makes the configured theme current: the built-in theme GOAT_THEME names,
+// or else the theme file (GOAT_THEME's path, or theme.json in the config directory)
+// layered over the built-in default or the theme its "extends" names. Declarations that
+// cannot be used are warned about and skipped; a file that cannot be read or is not
+// valid JSON leaves the default theme in place. It returns what is in use, such as
+// "the built-in one-dark theme" or the file's path, or "" for the default theme.
 func applyTheme() string {
+	if name := strings.TrimSpace(os.Getenv("GOAT_THEME")); name != "" {
+		if theme, ok := style.Builtin(name); ok {
+			style.Use(theme)
+			return "the built-in " + strings.ToLower(name) + " theme"
+		}
+	}
 	path, explicit := themePath()
 	if path == "" {
 		style.Use(style.Default())
@@ -51,13 +59,29 @@ func applyTheme() string {
 	return path
 }
 
+// commandTheme switches to a built-in theme for this session, or with no argument
+// reloads the configured theme and lists the built-in ones.
 func commandTheme(ctx context.Context, c *config, args []string) error {
-	path := applyTheme()
-	if path == "" {
-		wanted, _ := themePath()
-		fmt.Println("Using the built-in theme. " + style.Muted.Render(fmt.Sprintf("Put a theme in %s or set GOAT_THEME to use your own.", wanted)))
+	if len(args) > 0 {
+		name := strings.ToLower(strings.TrimSpace(args[0]))
+		theme, ok := style.Builtin(name)
+		if !ok {
+			return fmt.Errorf("there is no built-in theme %q; the built-in themes are %s", args[0], strings.Join(style.BuiltinNames(), ", "))
+		}
+		style.Use(theme)
+		fmt.Println(formatSuccess("Switched to the "+name+" theme for this session.") + style.Muted.Render(" To keep it, set GOAT_THEME="+name+" in "+displayPath(globalEnvPath())+"."))
 		return nil
 	}
-	fmt.Println(formatSuccess("Reloaded the theme from " + path))
+	using := applyTheme()
+	switch {
+	case using == "":
+		wanted, _ := themePath()
+		fmt.Println("Using the default theme. " + style.Muted.Render(fmt.Sprintf("Put a theme in %s or set GOAT_THEME to use your own.", wanted)))
+	case strings.HasPrefix(using, "the built-in "):
+		fmt.Println("Using " + using + ".")
+	default:
+		fmt.Println(formatSuccess("Reloaded the theme from " + using))
+	}
+	fmt.Println(style.Muted.Render("Built-in themes: " + strings.Join(style.BuiltinNames(), ", ") + ". /theme <name> switches."))
 	return nil
 }
