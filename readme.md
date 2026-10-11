@@ -21,61 +21,138 @@ approval. From a certain point on, goat has been improving its own source code.
   only the script's result comes back into the conversation.
 - Works the same in scripts: `goat -p "..."` prints just the reply.
 
-## Quick start
+## Setup
 
-goat needs Go 1.25 or newer and an API key for at least one provider:
+### 1. Install
+
+goat needs [Go](https://go.dev/dl/) 1.25 or newer.
 
 ```sh
-export OPENAI_API_KEY=...      # OpenAI models, and/or
-export ANTHROPIC_API_KEY=...   # Claude models (ANTHROPIC_AUTH_TOKEN also works), and/or
-export DEEPSEEK_API_KEY=...    # DeepSeek models
-
-go install github.com/azs06/goat@latest && goat
-# or, from a checkout: go run .   (or go build -o goat . && ./goat)
+go install github.com/azs06/goat@latest
+goat --version
 ```
 
-Keys can also go in `~/.config/goat/.env` (`$XDG_CONFIG_HOME/goat/.env` when
-`XDG_CONFIG_HOME` is set), which goat reads in every folder, so a `go install`ed goat
-finds them wherever you start it:
+`go install` puts the binary in `$(go env GOPATH)/bin` (usually `~/go/bin`). If the shell
+says `goat: command not found`, add that directory to your `PATH`, for example in
+`~/.zshrc` or `~/.bashrc`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+To build from a checkout instead: `git clone https://github.com/azs06/goat && cd goat &&
+go install .` (or `go run .` to try it without installing).
+
+### 2. Add an API key
+
+goat needs a key for at least one provider: `OPENAI_API_KEY` for OpenAI models,
+`ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) for Claude models, `DEEPSEEK_API_KEY` for
+DeepSeek models. Only providers with a key are offered.
+
+Put the keys in goat's global file, `~/.config/goat/.env`
+(`$XDG_CONFIG_HOME/goat/.env` when `XDG_CONFIG_HOME` is set). goat reads it whichever
+folder it starts in:
 
 ```sh
 mkdir -p ~/.config/goat
 (umask 077 && touch ~/.config/goat/.env)   # readable only by you
-${EDITOR:-vi} ~/.config/goat/.env           # add a line such as OPENAI_API_KEY=sk-...
+${EDITOR:-vi} ~/.config/goat/.env
 ```
-
-Adding the key in an editor keeps it out of your shell history. The shell wins: a
-variable it sets to a non-empty value keeps that value. A provider's key is settled as a
-whole: if the shell supplies `ANTHROPIC_AUTH_TOKEN`, a global `ANTHROPIC_API_KEY` is not
-used. goat does not read the `.env` in the project it works on: that file belongs to the
-project (its own keys, database URLs and so on), and a cloned repository could otherwise
-point a provider's base URL at a server that would receive your key.
-
-To keep a key out of files altogether, give goat a command that prints it: the
-credential's name plus `_COMMAND`, in the shell or the global `.env`. goat runs it at
-startup with `sh` (`cmd.exe` on Windows), on the terminal, so a password manager can ask
-for a fingerprint or a passphrase, and uses the one line it prints. Input piped to goat,
-such as a prompt for `goat -p`, is not passed on to it, and its error output only reaches
-a terminal, never a log goat's own error output is redirected to. For example, in
-`~/.config/goat/.env`:
 
 ```sh
-OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential"                 # 1Password
-ANTHROPIC_API_KEY_COMMAND="security find-generic-password -w -s anthropic-api-key"  # macOS Keychain
-DEEPSEEK_API_KEY_COMMAND="pass show api/deepseek"                               # pass
+# ~/.config/goat/.env
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+DEEPSEEK_API_KEY=sk-...
 ```
 
-The shell still wins: a key or a key command set there beats anything in the global file.
-Within one place, a key that is set beats a command, which is then not run. A command
-that fails, prints nothing, prints more than one line or takes over 30 seconds leaves its
-key unset, with a warning that never repeats its output; for Anthropic the other
-credential's command is tried next. On a timeout only the shell is stopped, so a command
-that runs several programs should `exec` the last one. `/status` shows where
-each provider's key came from, and goat warns if the global file can be read by other
-users. If the file cannot be parsed, goat names it (and the line, where it can tell)
-without printing its contents. Only providers with a key are offered. Run
-goat from the root of the project you want it to work on: that directory is its
-workspace.
+Typing the key in an editor keeps it out of your shell history. goat warns at startup if
+other users can read the file (fix it with `chmod 600 ~/.config/goat/.env`).
+
+Keys exported in the shell work too, and win over the file:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+goat does **not** read the `.env` in the project it works on. That file belongs to the
+project (its own keys, database URLs and so on), and a cloned repository could otherwise
+point a provider's base URL at a server that would receive your key. Keys you kept in a
+project's `.env` need to move to the global file.
+
+### 3. Run it
+
+Start goat from the root of the project you want it to work on; that directory is its
+workspace:
+
+```sh
+cd ~/code/my-project
+goat
+```
+
+Type `/status` to check that the keys were found and where each came from:
+
+```
+Provider:  openai    unavailable (OPENAI_API_KEY not set)
+Provider:  anthropic unavailable (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set)
+Provider:  deepseek  available (DEEPSEEK_API_KEY from ~/.config/goat/.env)
+```
+
+`/model` picks a model, and `/help` lists the commands. See [Using goat](#using-goat) for
+the rest.
+
+### Optional: keep keys out of files
+
+Instead of the key, give goat a command that prints it: the key's name plus `_COMMAND`,
+in the global file or the shell. goat runs it at startup with `sh` (`cmd.exe` on
+Windows) and uses the one line it prints:
+
+```sh
+# ~/.config/goat/.env
+OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential"                     # 1Password
+ANTHROPIC_API_KEY_COMMAND="security find-generic-password -w -s anthropic-api-key"  # macOS Keychain
+DEEPSEEK_API_KEY_COMMAND="pass show api/deepseek"                                   # pass
+```
+
+The command runs on the terminal, so a password manager can ask for a fingerprint or a
+passphrase. Input piped to goat, such as a prompt for `goat -p`, is not passed on to it,
+and its error output only reaches a terminal, never a log goat's own error output is
+redirected to.
+
+### Optional: use a proxy or compatible API
+
+`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` and `DEEPSEEK_BASE_URL` send a provider's
+requests, and its key, somewhere other than its own API, such as a company proxy. Set
+them in the shell or the global file. goat says at startup where the requests go; see
+[Safety](#safety) for the checks it makes.
+
+### Which value wins
+
+- The shell wins: a variable it sets to a non-empty value keeps that value, and a key or
+  key command set there beats anything in the global file.
+- A provider's key is settled as a whole: if the shell supplies `ANTHROPIC_AUTH_TOKEN`, a
+  global `ANTHROPIC_API_KEY` is not used.
+- Within one place, a key that is set beats a command, which is then not run.
+- A command that fails, prints nothing, prints more than one line or takes over 30
+  seconds leaves its key unset, with a warning that never repeats its output; for
+  Anthropic the other credential's command is tried next. On a timeout only the shell is
+  stopped, so a command that runs several programs should `exec` the last one.
+
+### Troubleshooting
+
+- **`goat: command not found`**: the Go bin directory is not on your `PATH`; see
+  [Install](#1-install).
+- **`no API key found; set OPENAI_API_KEY, ...`**: goat found no key in the shell or the
+  global file. The message names the file it looked for; check the path, and that each
+  line looks like `NAME=value`. If it adds that goat does not read the `.env` in this
+  folder, your keys are in the project's `.env`: move them to the global file.
+- **`... is not a valid .env file: check line N`**: a line in the global file is not
+  `NAME=value`, or a quote is not closed. goat never prints the file's contents, so open
+  it and look at that line.
+- **A provider shows as unavailable in `/status`**: the reason follows it, such as a key
+  that is not set or a base URL goat refuses.
+- **Keys work in one folder but not another**: they are probably exported in one shell
+  session or a project's `.env`; put them in the global file.
 
 ## Using goat
 
@@ -437,7 +514,7 @@ the exception: they locate the global file, so they come only from the environme
 | `OPENAI_API_KEY` | | Enables OpenAI models |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | | Enables Claude models |
 | `DEEPSEEK_API_KEY` | | Enables DeepSeek models |
-| `OPENAI_API_KEY_COMMAND`, `ANTHROPIC_API_KEY_COMMAND`, `ANTHROPIC_AUTH_TOKEN_COMMAND`, `DEEPSEEK_API_KEY_COMMAND` | | A command that prints the key, run at startup when the key itself is not set (see [Quick start](#quick-start)) |
+| `OPENAI_API_KEY_COMMAND`, `ANTHROPIC_API_KEY_COMMAND`, `ANTHROPIC_AUTH_TOKEN_COMMAND`, `DEEPSEEK_API_KEY_COMMAND` | | A command that prints the key, run at startup when the key itself is not set (see [Setup](#optional-keep-keys-out-of-files)) |
 | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or a compatible API (see [Safety](#safety) for the checks) |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek's Anthropic-compatible endpoint |
 | `GOAT_MODEL` | | Model to start with, overriding the saved one (e.g. `claude-opus-5-5`) |
