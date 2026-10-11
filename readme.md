@@ -51,8 +51,10 @@ Claude models, DeepSeek for DeepSeek models, or one of the
 providers with a key are offered (and the keyless local servers you
 [add yourself](#optional-add-other-providers)).
 
-The quickest way is to start goat and type `/login`: pick the provider, choose
-**API key** (logging in with an account is not available yet) and paste the key. goat
+The quickest way is to start goat and type `/login`: pick the provider and paste the
+key. OpenAI, Anthropic, OpenRouter and xAI also list signing in with your account
+(ChatGPT Plus/Pro, Claude Pro/Max, OpenRouter, Grok or X), which is not available yet,
+so choose **API key** there; the other providers take only a key. goat
 does not show the key as you type it, saves it to `~/.config/goat/auth.json` (readable
 only by you), checks it by listing the provider's models, and starts using it at once.
 `/login openai` skips the list. Without a key goat still starts at a terminal, so
@@ -319,7 +321,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | --- | --- |
 | `/model [name]` | Pick a model with the arrow keys (type to filter), or `/model <name or number>`. The last entry, and `/model list`, ask each provider for every model. Only providers with an API key are listed. |
 | `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
-| `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then **API key**, then paste the key, which is not shown. Logging in with an account is listed but not available yet. Needs a terminal. |
+| `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter and xAI, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
 | `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |

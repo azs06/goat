@@ -66,6 +66,25 @@ func Label(name string) string {
 	return name
 }
 
+// signIns name the account a provider lets people sign in with instead of pasting a
+// key, for the few that have such a flow: subscriptions, or OpenRouter's, which creates
+// a key. goat does not sign in yet; /login lists the choice so people know it exists.
+var signIns = map[string]string{
+	OpenAI:       "ChatGPT Plus/Pro subscription",
+	Anthropic:    "Claude Pro/Max subscription",
+	"openrouter": "OpenRouter account",
+	"xai":        "Grok or X subscription",
+}
+
+// SignIn names the account a provider can be signed in with, or "" when it takes only
+// an API key. An entry from config.json takes only a key, whatever its name.
+func SignIn(name string) string {
+	if entry, ok := entries[name]; ok && !entry.Preset {
+		return ""
+	}
+	return signIns[name]
+}
+
 // PresetKeyVars are the variables that hold the presets' keys.
 func PresetKeyVars() []string {
 	vars := make([]string, 0, len(presets))

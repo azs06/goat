@@ -478,3 +478,28 @@ func TestLoginDropsClientsOfEntriesSharingTheKey(t *testing.T) {
 		t.Fatalf("corp got %q", value)
 	}
 }
+
+func TestOnlySomeProvidersOfferSigningIn(t *testing.T) {
+	dir := configTest(t)
+	writeConfigFile(t, dir, "config.json", `{"providers": {"xai": {"api": "openai", "base_url": "http://localhost:1/v1"}}}`)
+	loadAll(t)
+	for name, offered := range map[string]bool{provider.OpenAI: true, provider.Anthropic: true, "openrouter": true, provider.DeepSeek: false, "gemini": false, "moonshot": false, "xai": false} {
+		if got := provider.SignIn(name) != ""; got != offered {
+			t.Errorf("%s: sign-in offered %v", name, got)
+		}
+	}
+	// A provider with only an API key goes straight to it, without asking.
+	c := &config{input: newLineReader(strings.NewReader("")), interactive: true}
+	out := captureStdout(t, func() {
+		if ok, err := pickLoginMethod(context.Background(), c, provider.DeepSeek); !ok || err != nil {
+			t.Fatalf("got %v, %v", ok, err)
+		}
+	})
+	if out != "" {
+		t.Fatalf("asked about signing in to DeepSeek: %q", out)
+	}
+	out = captureStdout(t, func() { pickLoginMethod(context.Background(), c, provider.Anthropic) })
+	if !strings.Contains(out, "Claude Pro/Max subscription is not available yet") {
+		t.Fatalf("got %q", out)
+	}
+}

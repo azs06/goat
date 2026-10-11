@@ -20,8 +20,9 @@ import (
 	"github.com/azs06/goat/internal/terminal"
 )
 
-// /login saves a provider's API key to auth.json and starts using it at once. Signing in
-// with an account is listed but not available yet.
+// /login saves a provider's API key to auth.json and starts using it at once. For the
+// few providers that let people sign in with an account instead, that choice is listed
+// but not available yet.
 
 // keylessNotice is shown when goat starts with no provider it can use.
 func keylessNotice() string {
@@ -68,7 +69,7 @@ func commandLogin(ctx context.Context, c *config, args []string) error {
 		fmt.Println(formatWarning(notice))
 	}
 
-	if ok, err := pickLoginMethod(ctx, c, label); err != nil || !ok {
+	if ok, err := pickLoginMethod(ctx, c, name); err != nil || !ok {
 		if err == nil {
 			fmt.Println(formatNotice("Nothing changed."))
 		}
@@ -186,16 +187,22 @@ func pickLoginProvider(ctx context.Context, c *config) (string, error) {
 	return "", fmt.Errorf("there is no provider named %s", answer)
 }
 
-// pickLoginMethod asks how to sign in. Only an API key works for now; ok is false when
-// the user cancels.
-func pickLoginMethod(ctx context.Context, c *config, label string) (bool, error) {
+// pickLoginMethod asks how to sign in, for a provider that has an account to sign in
+// with; the others take only an API key, so nothing is asked. Only an API key works for
+// now. ok is false when the user cancels.
+func pickLoginMethod(ctx context.Context, c *config, name string) (bool, error) {
+	account := provider.SignIn(name)
+	if account == "" {
+		return true, nil
+	}
+	label := provider.Label(name)
 	options := []selectOption{
 		{label: "API key", hint: "paste a key from " + label + "'s console"},
-		{label: "Log in with your account", hint: "not available yet", disabled: true},
+		{label: "Sign in with your " + account, hint: "not available yet", disabled: true},
 	}
 	chosen, err := selectOptionInteractive(ctx, c, "Sign in to "+label+" with", options)
 	if errors.Is(err, errSelectorUnavailable) {
-		fmt.Println(style.Muted.Render("Signing in with an API key; logging in with an account is not available yet."))
+		fmt.Println(style.Muted.Render("Signing in with an API key; signing in with your " + account + " is not available yet."))
 		return true, nil
 	}
 	return chosen == 0, err
