@@ -536,8 +536,10 @@ goat keeps each workspace's state outside it, the way other coding agents do, in
 directory of its own under your state directory:
 `~/.local/state/goat/projects/<workspace>/` (`$XDG_STATE_HOME/goat/projects/<workspace>/`
 when that is set). `<workspace>` is the workspace's path with `/` turned into `-` and a
-short hash added, such as `-Users-you-code-app-1a2b3c4d`. `/history` shows where. The
-directory is readable only by you.
+short hash added, such as `-Users-you-code-app-1a2b3c4d`, with symlinks resolved (and,
+on macOS and Windows, in lower case), so the same folder reached by another path keeps
+its state. `/history` shows where. The directory is readable only by you. Without a home
+directory, goat keeps it in the temporary directory.
 
 | File | |
 | --- | --- |
