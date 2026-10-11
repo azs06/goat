@@ -171,3 +171,36 @@ func TestAShellKeyCommandBeatsTheGlobalFile(t *testing.T) {
 		t.Errorf("the shell's command should win, got %q", os.Getenv("OPENAI_API_KEY"))
 	}
 }
+
+func TestBaseURLsAreHiddenFromCommands(t *testing.T) {
+	env := workspace.CommandEnvironment([]string{"OPENAI_BASE_URL=https://proxy.example/t/FAKE/v1", "anthropic_base_url=https://p", "SITE_URL=https://x"})
+	if !slices.Equal(env, []string{"SITE_URL=https://x"}) {
+		t.Errorf("got %q", env)
+	}
+}
+
+func TestAShellKeyCommandKeepsTheFilesCommandsOut(t *testing.T) {
+	keyCommandsTest(t)
+	_, global := envFilesTest(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN_COMMAND", "echo shell-token")
+	os.WriteFile(global, []byte("ANTHROPIC_API_KEY_COMMAND=\"touch "+marker+"; echo file-key\"\n"), 0o600)
+	if _, err := loadGlobalEnv(); err != nil {
+		t.Fatal(err)
+	}
+	runKeyCommands()
+	if _, err := os.Stat(marker); err == nil || os.Getenv("ANTHROPIC_AUTH_TOKEN") != "shell-token" || os.Getenv("ANTHROPIC_API_KEY") != "" {
+		t.Errorf("the shell's command should settle Anthropic; token %q, key %q", os.Getenv("ANTHROPIC_AUTH_TOKEN"), os.Getenv("ANTHROPIC_API_KEY"))
+	}
+}
+
+func TestProcessKeepsKeyCommandErrorsOffARedirectedStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the test command is sh")
+	}
+	// runGoat captures stderr, so it is not a terminal, as when it goes to a log.
+	_, errOut, _ := runGoat(t, t.TempDir(), "", []string{"OPENAI_API_KEY_COMMAND=echo sk-FAKE-SECRET >&2; exit 1"})
+	if strings.Contains(errOut, "FAKE-SECRET") || !strings.Contains(errOut, "OPENAI_API_KEY_COMMAND failed") {
+		t.Fatalf("got %q", errOut)
+	}
+}

@@ -66,7 +66,12 @@ func runKeyCommand(command string) (string, error) {
 	if terminal.StdinIsTerminal() {
 		cmd.Stdin = os.Stdin
 	}
-	cmd.Stdout, cmd.Stderr = &stdout, os.Stderr
+	// Its stderr goes to the screen for prompts, but not into a log goat's stderr is
+	// redirected to, where a helper that echoes the key would leave it.
+	if info, err := os.Stderr.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		cmd.Stderr = os.Stderr
+	}
+	cmd.Stdout = &stdout
 	// A helper the command leaves running must not hold goat's startup; what it prints
 	// later is ignored. On a timeout only the shell is stopped, so a command that runs
 	// others should exec the last one.

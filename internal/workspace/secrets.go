@@ -56,6 +56,18 @@ func isCredentialVar(name string) bool {
 	return false
 }
 
+// isEndpointVar reports a provider's base URL variable, such as OPENAI_BASE_URL. Some
+// proxies take a token in the URL, so it is kept from commands like a key.
+func isEndpointVar(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, variable := range provider.BaseURLVars {
+		if upper == variable {
+			return true
+		}
+	}
+	return false
+}
+
 // CommandEnvironment is the environment run_bash commands get: goat's own, without
 // credentials or anything goat loaded itself. A command that prints its environment would
 // otherwise put the user's keys in the transcript the model provider receives.
@@ -63,7 +75,7 @@ func CommandEnvironment(environ []string) []string {
 	kept := make([]string, 0, len(environ))
 	for _, entry := range environ {
 		name, _, _ := strings.Cut(entry, "=")
-		if dotenvKeys[EnvName(name)] || isCredentialVar(name) {
+		if dotenvKeys[EnvName(name)] || isCredentialVar(name) || isEndpointVar(name) {
 			continue
 		}
 		kept = append(kept, entry)

@@ -131,10 +131,13 @@ func loadGlobalEnv() (warnings []string, err error) {
 			}
 		}
 	}
+	// A key command belongs to its provider like the key: a shell credential keeps the
+	// file's commands out too.
 	credentialOf := map[string]string{}
 	for name, vars := range provider.CredentialVars {
 		for _, variable := range vars {
 			credentialOf[variable] = name
+			credentialOf[variable+"_COMMAND"] = name
 		}
 	}
 

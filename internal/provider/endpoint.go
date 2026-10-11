@@ -85,9 +85,9 @@ func endpointOrOfficial(provider string) Endpoint {
 	return endpoint
 }
 
-// isLoopback reports the hosts Go's HTTP_PROXY handling never sends through a proxy:
-// localhost and loopback addresses. A name such as llm.localhost may still go through
-// one, in plain text, so it does not count.
+// isLoopback reports hosts that are always this machine: localhost and loopback
+// addresses. A name such as llm.localhost is looked up like any other, so it does not
+// count.
 func isLoopback(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
@@ -99,15 +99,17 @@ func isLoopback(host string) bool {
 // keyClient is the HTTP client for requests that carry a key. It never follows a
 // redirect: the SDKs send the key in headers such as x-api-key, which Go copies to
 // whatever host a redirect names, so a redirect could carry it somewhere goat never
-// checked. The redirect comes back as an error response instead. headerTimeout bounds
-// the wait for a response to start; zero means no bound.
+// checked. The redirect comes back as an error response instead. It also never sends a
+// plain http request through HTTP_PROXY, where the proxy would read the key; https goes
+// through a proxy as a tunnel it cannot read. headerTimeout bounds the wait for a
+// response to start; zero means no bound.
 func keyClient(headerTimeout time.Duration) *http.Client {
-	transport := http.DefaultTransport
-	if t, ok := transport.(*http.Transport); ok && headerTimeout > 0 {
-		t = t.Clone()
-		t.ResponseHeaderTimeout = headerTimeout
-		transport = t
+	transport := &http.Transport{}
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = t.Clone()
 	}
+	transport.Proxy = proxyOnlyEncrypted
+	transport.ResponseHeaderTimeout = headerTimeout
 	return &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -116,17 +118,35 @@ func keyClient(headerTimeout time.Duration) *http.Client {
 	}
 }
 
-// HideEndpointPaths shortens every custom base URL in text to its scheme and host, so a
+func proxyOnlyEncrypted(r *http.Request) (*url.URL, error) {
+	if r.URL.Scheme != "https" {
+		return nil, nil
+	}
+	return http.ProxyFromEnvironment(r)
+}
+
+// HideEndpointPaths shortens every base URL the user set to its scheme and host, so a
 // token in its path or query does not reach the screen, the history or a compaction
-// summary through an error that quotes the request URL.
+// summary through an error that quotes the request URL. Request URLs keep the base URL's
+// path but not its query, so that form is shortened too.
 func HideEndpointPaths(text string) string {
 	for _, name := range Names {
-		endpoint, err := ResolveEndpoint(name)
-		if err != nil || !endpoint.Custom {
+		if strings.TrimSpace(os.Getenv(BaseURLVars[name])) == "" {
 			continue
 		}
-		if origin := endpoint.Origin(); len(endpoint.URL) > len(origin) {
-			text = replaceFold(text, endpoint.URL, origin+"/…")
+		endpoint, err := ResolveEndpoint(name)
+		if err != nil {
+			continue
+		}
+		origin := endpoint.Origin()
+		forms := []string{endpoint.URL}
+		if u, err := url.Parse(endpoint.URL); err == nil {
+			forms = append(forms, origin+strings.TrimRight(u.EscapedPath(), "/"))
+		}
+		for _, form := range forms {
+			if len(form) > len(origin) {
+				text = replaceFold(text, form, origin+"/…")
+			}
 		}
 	}
 	return text

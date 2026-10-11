@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,28 @@ func TestHideEndpointPaths(t *testing.T) {
 	}
 	if !strings.Contains(got, "http://127.0.0.1:9/…/responses") || !strings.Contains(got, "https://api.anthropic.com/v1/messages") {
 		t.Errorf("got %s", got)
+	}
+}
+
+func TestHideEndpointPathsWithoutTheQuery(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("DEEPSEEK_BASE_URL", "")
+	// The SDK drops the query when it adds the request path.
+	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.example/t/FAKE-TOKEN/v1?mode=x")
+	got := HideEndpointPaths(`Post "https://proxy.example/t/FAKE-TOKEN/v1/v1/messages": 502`)
+	if strings.Contains(got, "FAKE-TOKEN") {
+		t.Errorf("got %s", got)
+	}
+	// A path on the official host is the user's too.
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/t/FAKE-TOKEN")
+	if got := HideEndpointPaths("https://api.anthropic.com/t/FAKE-TOKEN/v1/messages"); strings.Contains(got, "FAKE-TOKEN") {
+		t.Errorf("got %s", got)
+	}
+}
+
+func TestKeyRequestsSkipProxiesInPlainText(t *testing.T) {
+	request, _ := http.NewRequest(http.MethodPost, "http://LOCALHOST:4000/v1/messages", nil)
+	if proxy, err := keyClient(0).Transport.(*http.Transport).Proxy(request); proxy != nil || err != nil {
+		t.Errorf("a plain http request with a key went to proxy %v (%v)", proxy, err)
 	}
 }

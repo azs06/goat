@@ -362,8 +362,13 @@ func TestProcessShowsWhereACustomEndpointSendsTheKey(t *testing.T) {
 }
 
 // Windows names ignore case. The cross-build is the only Windows check, so this flips the
-// switch to test the comparisons here.
+// switch to test the comparisons on other systems. On Windows itself, clearing the
+// lower-case names would clear the fixture's XDG_CONFIG_HOME and point the test at the
+// real config directory.
 func TestEnvFilesCompareNamesWithoutCaseWhereTheSystemDoes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("simulates Windows names on other systems")
+	}
 	_, global := envFilesTest(t, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "xdg_config_home", "home", "anthropic_api_key", "goat_t_lower")
 	previous := workspace.CaseInsensitiveEnv
 	workspace.CaseInsensitiveEnv = true
