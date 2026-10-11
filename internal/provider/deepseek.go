@@ -33,12 +33,8 @@ type deepSeekSettings struct {
 }
 
 func NewDeepSeek() Provider {
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL")), "/")
-	if baseURL == "" {
-		baseURL = defaultDeepSeekBaseURL
-	}
 	apiKey := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY"))
-	return NewDeepSeekFor(baseURL, apiKey)
+	return NewDeepSeekFor(endpointOrOfficial(DeepSeek).URL, apiKey)
 }
 
 // NewDeepSeekFor talks to DeepSeek at baseURL with apiKey, ignoring the environment.

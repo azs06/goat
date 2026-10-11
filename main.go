@@ -63,8 +63,8 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	if p, ok := c.providers[name]; ok {
 		return p, nil
 	}
-	if !provider.Available(name) {
-		return nil, provider.MissingCredentialsError(name)
+	if err := provider.Unavailable(name); err != nil {
+		return nil, err
 	}
 
 	var p provider.Provider
@@ -117,12 +117,12 @@ func startupModel(saved *savedSession, flag string) (provider.Model, string) {
 			warnf("ignoring the model from %s: %v", c.source, err)
 			continue
 		}
-		if !provider.Available(ref.Provider) {
+		if unavailable := provider.Unavailable(ref.Provider); unavailable != nil {
 			switch c.source {
 			case "GOAT_MODEL":
-				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
+				warnf("ignoring GOAT_MODEL=%s: %v", c.raw, unavailable)
 			case "--model":
-				warnf("ignoring --model %s: %v", c.raw, provider.MissingCredentialsError(ref.Provider))
+				warnf("ignoring --model %s: %v", c.raw, unavailable)
 			}
 			continue
 		}
@@ -529,7 +529,7 @@ func main() {
 	workspace.Warnf = warnf
 	terminal.Warnf = warnf
 	applyTheme()
-	for _, warning := range envWarnings {
+	for _, warning := range append(envWarnings, endpointNotices()...) {
 		warnf("%s", warning)
 	}
 	cfg := loadConfig(opts)

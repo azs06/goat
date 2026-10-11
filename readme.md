@@ -324,6 +324,12 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
+- A provider's key goes to its own API unless its `*_BASE_URL` says otherwise, and only
+  your shell or `~/.config/goat/.env` can say so. goat refuses a base URL that is not
+  http(s) or that carries a user name or password. For any other host it says at startup,
+  and in `/status`, where the requests go and which file set the URL, flagging plain http
+  to another machine as unencrypted (http to `localhost` is fine). It shows only the
+  scheme and host, since some proxies take a token in the path.
 - `run_bash` commands do not inherit goat's API keys, anything loaded from
   `~/.config/goat/.env`, or other variables named like credentials (`*_API_KEY`, `*_SECRET`,
   `*_AUTH_TOKEN`, `*_PASSWORD` and similar). `~/.config/goat/.env` is outside the
@@ -401,7 +407,7 @@ the exception: they locate the global file, so they come only from the environme
 | `OPENAI_API_KEY` | | Enables OpenAI models |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | | Enables Claude models |
 | `DEEPSEEK_API_KEY` | | Enables DeepSeek models |
-| `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or a compatible API |
+| `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | | Point a provider at a proxy or a compatible API (see [Safety](#safety) for the checks) |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek's Anthropic-compatible endpoint |
 | `GOAT_MODEL` | | Model to start with, overriding the saved one (e.g. `claude-opus-5-5`) |
 | `OPENAI_MODEL` | `gpt-6-luna` | OpenAI model when there is no saved session |

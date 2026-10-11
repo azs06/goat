@@ -327,3 +327,33 @@ func TestGoatConfigDirIgnoresARelativeXDGConfigHome(t *testing.T) {
 		t.Errorf("got %q", dir)
 	}
 }
+
+func TestProcessRefusesABaseURLWithAPassword(t *testing.T) {
+	workDir := t.TempDir()
+	env := []string{"ANTHROPIC_API_KEY=test", "ANTHROPIC_BASE_URL=https://user:hunter2@proxy.example"}
+	_, errOut, code := runGoat(t, workDir, "", env)
+	if code == 0 || !strings.Contains(errOut, "no provider can be used; ANTHROPIC_BASE_URL must not contain a user name or password") || strings.Contains(errOut, "hunter2") {
+		t.Fatalf("got %q (exit %d)", errOut, code)
+	}
+}
+
+func TestProcessShowsWhereACustomEndpointSendsTheKey(t *testing.T) {
+	workDir := t.TempDir()
+	config := filepath.Join(workDir, "config", "goat")
+	os.MkdirAll(config, 0o700)
+	os.WriteFile(filepath.Join(config, ".env"), []byte("DEEPSEEK_API_KEY=test\nDEEPSEEK_BASE_URL=http://10.0.0.7:4000/t/sk-in-path/anthropic\n"), 0o600)
+	out, errOut, code := runGoat(t, workDir, "/status\n/exit\n", nil)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	want := "deepseek requests go to http://10.0.0.7:4000 (DEEPSEEK_BASE_URL from " + filepath.Join("~", "config", "goat", ".env") + "), unencrypted"
+	if !strings.Contains(errOut, want) {
+		t.Errorf("startup should say where the key goes, want %q in:\n%s", want, errOut)
+	}
+	if !strings.Contains(out, "requests go to http://10.0.0.7:4000, unencrypted") {
+		t.Errorf("/status should show the endpoint:\n%s", out)
+	}
+	if strings.Contains(out+errOut, "sk-in-path") {
+		t.Error("the endpoint's path must not be shown")
+	}
+}

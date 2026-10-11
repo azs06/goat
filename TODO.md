@@ -17,8 +17,6 @@ Deferred enhancements to implement later:
 
 - Global .env follow-ups:
   - On Windows environment names are case-insensitive, but the loader's checks (HOME/XDG_CONFIG_HOME not settable, credential grouping) compare names case-sensitively, so `xdg_config_home=` or `anthropic_auth_token=` in ~/.config/goat/.env slips past them. Only the user's own file is read, so this is about mistakes, not attacks. Untested; needs a Windows run.
-  - Build the Anthropic and OpenAI clients without the SDKs' environment defaults (as deepseek.go does), passing base URL and key explicitly, so goat alone decides where a key is sent.
-  - Validate base URLs (https unless loopback, no userinfo) and show a non-official host and where it came from at startup and in /status.
   - A per-provider key command (`op read …`, `security find-generic-password -w …`) read only from the shell or the global file, so keys need not sit on disk.
   - Provider entries in user config that bind a base URL to its own key (Codex-style), for proxies and OpenAI-compatible endpoints; a custom entry never inherits a built-in key.
 

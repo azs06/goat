@@ -219,16 +219,61 @@ func credentialOrigin(name string) string {
 	if source == "" {
 		return ""
 	}
-	if file := envSources[source]; file != "" {
-		return source + " from " + file
-	}
-	return source + " from the environment"
+	return variableOrigin(source)
 }
 
-// noAPIKeyMessage is the error for a start without any credentials. It names the full
+// variableOrigin says where a variable came from: a file goat loaded, or the environment.
+func variableOrigin(name string) string {
+	if file := envSources[name]; file != "" {
+		return name + " from " + file
+	}
+	return name + " from the environment"
+}
+
+// endpointNotices are the startup lines about providers whose base URL moves their
+// requests: the base URLs goat refuses, and every host that is not the provider's own
+// API, so a key never goes to a proxy without the user seeing where.
+func endpointNotices() []string {
+	var notices []string
+	for _, name := range provider.Names {
+		if provider.CredentialSource(name) == "" {
+			continue
+		}
+		endpoint, err := provider.ResolveEndpoint(name)
+		if err != nil {
+			notices = append(notices, fmt.Sprintf("%s is unavailable: %v", name, err))
+			continue
+		}
+		if endpoint.Custom {
+			notices = append(notices, fmt.Sprintf("%s requests go to %s (%s)%s", name, endpoint.Origin(), variableOrigin(provider.BaseURLVars[name]), unencryptedNote(endpoint)))
+		}
+	}
+	return notices
+}
+
+func unencryptedNote(endpoint provider.Endpoint) string {
+	if endpoint.Unencrypted {
+		return ", unencrypted: the key crosses the network in plain text"
+	}
+	return ""
+}
+
+// noAPIKeyMessage is the error for a start without a usable provider. Usually there are
+// no credentials, but a key whose base URL goat refuses is named instead. It names the full
 // path of the global file, and says the workspace's .env is not read, since keys left
 // there from before are the likely mistake.
 func noAPIKeyMessage() string {
+	var refused []string
+	for _, name := range provider.Names {
+		if provider.CredentialSource(name) != "" {
+			if err := provider.Unavailable(name); err != nil {
+				refused = append(refused, err.Error())
+			}
+		}
+	}
+	if len(refused) > 0 {
+		return "no provider can be used; " + strings.Join(refused, "; ")
+	}
 	message := "no API key found; set OPENAI_API_KEY, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) or DEEPSEEK_API_KEY in the environment"
 	if global := globalEnvPath(); global != "" {
 		message += " or in " + global
