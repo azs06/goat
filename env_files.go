@@ -268,6 +268,9 @@ func credentialOrigin(name string) string {
 	if source == "" {
 		return ""
 	}
+	if provider.KeyCommands[source] != "" && envSources[source] != "" {
+		return "key from " + envSources[source] + " in " + displayPath(providerEntriesPath())
+	}
 	return variableOrigin(source)
 }
 
@@ -281,7 +284,8 @@ func variableOrigin(name string) string {
 
 // endpointNotices are the startup lines about providers whose base URL moves their
 // requests: the base URLs goat refuses, and every host that is not the provider's own
-// API, so a key never goes to a proxy without the user seeing where.
+// API, so a key never goes to a proxy without the user seeing where. An entry from
+// providers.json is only mentioned when its key would go unencrypted.
 func endpointNotices() []string {
 	var notices []string
 	for _, name := range provider.Names {
@@ -291,6 +295,14 @@ func endpointNotices() []string {
 		endpoint, err := provider.ResolveEndpoint(name)
 		if err != nil {
 			notices = append(notices, fmt.Sprintf("%s is unavailable: %v", name, err))
+			continue
+		}
+		if _, isEntry := provider.LookupEntry(name); isEntry {
+			// The user wrote the entry's URL into their own config, so only plain http
+			// to another machine is worth a word at every start.
+			if endpoint.Unencrypted {
+				notices = append(notices, fmt.Sprintf("%s sends its key to %s%s", name, endpoint.Origin(), unencryptedNote(endpoint)))
+			}
 			continue
 		}
 		if endpoint.Custom {

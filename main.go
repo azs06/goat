@@ -76,7 +76,11 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	case provider.DeepSeek:
 		p = provider.NewDeepSeek()
 	default:
-		return nil, fmt.Errorf("unknown provider %q", name)
+		entry, err := provider.NewEntry(name)
+		if err != nil {
+			return nil, err
+		}
+		p = entry
 	}
 	if c.providers == nil {
 		c.providers = map[string]provider.Provider{}
@@ -500,11 +504,18 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 const exitConfirmWindow = 2 * time.Second
 
 func main() {
+	// Before the flags, so --model can name an entry's model. Entries also come before
+	// the global .env, so it treats their key variables as credentials.
+	envWarnings, entriesErr := loadProviderEntries()
 	opts, err := parseCLI(os.Args[1:], os.Stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return
 	}
 	if err != nil {
+		if entriesErr != nil {
+			// A model the broken file would have defined is not the real problem.
+			err = entriesErr
+		}
 		fmt.Fprintln(os.Stderr, "goat: "+err.Error())
 		os.Exit(2)
 	}
@@ -512,12 +523,16 @@ func main() {
 		fmt.Println("goat " + goatVersion())
 		return
 	}
+	if entriesErr != nil {
+		log.Fatal(entriesErr)
+	}
 
 	// The files can hold any GOAT_ setting, so they load before the settings are read.
-	envWarnings, err := loadGlobalEnv()
+	globalWarnings, err := loadGlobalEnv()
 	if err != nil {
 		log.Fatal(err)
 	}
+	envWarnings = append(envWarnings, globalWarnings...)
 	// Before the terminal is set up, so a password manager can prompt on it.
 	envWarnings = append(envWarnings, runKeyCommands()...)
 	// Read at package initialization, before the files loaded.

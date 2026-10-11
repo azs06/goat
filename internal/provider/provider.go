@@ -161,8 +161,15 @@ func SeedPrompt(summary string) string {
 // DescribeEffort says what the provider will actually receive for effort. p is the
 // provider serving model, or nil when it has not been created yet.
 func DescribeEffort(p Provider, model Model, effort Effort) string {
-	switch model.Provider {
+	kind := model.Provider
+	if entry, ok := entries[model.Provider]; ok {
+		kind = entry.API
+	}
+	switch kind {
 	case OpenAI:
+		if _, isEntry := entries[model.Provider]; isEntry {
+			return "nothing; goat sends no effort setting to OpenAI-compatible servers"
+		}
 		if !openAISupportsReasoning(model.ID) {
 			return "nothing; this model takes no reasoning setting"
 		}
@@ -174,6 +181,9 @@ func DescribeEffort(p Provider, model Model, effort Effort) string {
 		return "thinking turned off"
 	case Anthropic:
 		caps := guessAnthropicCapabilities(model.ID)
+		if _, isEntry := entries[model.Provider]; isEntry && !strings.HasPrefix(strings.ToLower(model.ID), "claude-") {
+			caps = entryModelCapabilities
+		}
 		if provider, ok := p.(*anthropicProvider); ok {
 			provider.mu.Lock()
 			if known, found := provider.capabilities[model.ID]; found {

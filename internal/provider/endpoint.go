@@ -47,29 +47,42 @@ func (e Endpoint) Origin() string {
 
 // ResolveEndpoint reads the provider's base URL variable and checks it. A URL must use
 // http or https and must not carry a user name or password. Errors name the variable but
-// not its value.
+// not its value. An entry's URL was checked when providers.json was read.
 func ResolveEndpoint(provider string) (Endpoint, error) {
+	if entry, ok := entries[provider]; ok {
+		return entry.endpoint, nil
+	}
 	official := officialEndpoints[provider]
 	name := BaseURLVars[provider]
 	raw := strings.TrimRight(strings.TrimSpace(os.Getenv(name)), "/")
 	if raw == "" {
 		return Endpoint{URL: official}, nil
 	}
+	return checkBaseURL(name, raw, official)
+}
+
+// checkBaseURL checks a base URL set under label, against the provider's official API
+// (none for an entry, which is always custom).
+func checkBaseURL(label, raw, official string) (Endpoint, error) {
+	raw = strings.TrimRight(raw, "/")
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return Endpoint{}, fmt.Errorf("%s is not a URL such as https://proxy.example/v1", name)
+		return Endpoint{}, fmt.Errorf("%s is not a URL such as https://proxy.example/v1", label)
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "https" && scheme != "http" {
-		return Endpoint{}, fmt.Errorf("%s must start with https:// (or http://)", name)
+		return Endpoint{}, fmt.Errorf("%s must start with https:// (or http://)", label)
 	}
 	if u.User != nil {
-		return Endpoint{}, fmt.Errorf("%s must not contain a user name or password", name)
+		return Endpoint{}, fmt.Errorf("%s must not contain a user name or password", label)
 	}
-	officialURL, _ := url.Parse(official)
+	custom := true
+	if officialURL, err := url.Parse(official); official != "" && err == nil {
+		custom = scheme != "https" || !strings.EqualFold(u.Hostname(), officialURL.Hostname()) || (u.Port() != "" && u.Port() != "443")
+	}
 	return Endpoint{
 		URL:         raw,
-		Custom:      scheme != "https" || !strings.EqualFold(u.Hostname(), officialURL.Hostname()) || (u.Port() != "" && u.Port() != "443"),
+		Custom:      custom,
 		Unencrypted: scheme == "http" && !isLoopback(u.Hostname()),
 	}, nil
 }
@@ -125,13 +138,14 @@ func proxyOnlyEncrypted(r *http.Request) (*url.URL, error) {
 	return http.ProxyFromEnvironment(r)
 }
 
-// HideEndpointPaths shortens every base URL the user set to its scheme and host, so a
-// token in its path or query does not reach the screen, the history or a compaction
-// summary through an error that quotes the request URL. Request URLs keep the base URL's
+// HideEndpointPaths shortens every base URL the user set, in a variable or an entry, to
+// its scheme and host, so a token in its path or query does not reach the screen, the
+// history or a compaction summary through an error that quotes the request URL. Request URLs keep the base URL's
 // path but not its query, so that form is shortened too.
 func HideEndpointPaths(text string) string {
 	for _, name := range Names {
-		if strings.TrimSpace(os.Getenv(BaseURLVars[name])) == "" {
+		_, isEntry := entries[name]
+		if !isEntry && strings.TrimSpace(os.Getenv(BaseURLVars[name])) == "" {
 			continue
 		}
 		endpoint, err := ResolveEndpoint(name)

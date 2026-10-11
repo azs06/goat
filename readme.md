@@ -126,6 +126,51 @@ requests, and its key, somewhere other than its own API, such as a company proxy
 them in the shell or the global file. goat says at startup where the requests go; see
 [Safety](#safety) for the checks it makes.
 
+### Optional: add other providers
+
+Local servers and other services go in `~/.config/goat/providers.json`, each under a
+name of your choosing:
+
+```json
+{
+  "ollama": {
+    "api": "openai",
+    "base_url": "http://localhost:11434/v1",
+    "models": ["qwen3-coder"]
+  },
+  "openrouter": {
+    "api": "openai",
+    "base_url": "https://openrouter.ai/api/v1",
+    "key_env": "OPENROUTER_API_KEY",
+    "models": ["moonshotai/kimi-k2"]
+  },
+  "work-proxy": {
+    "api": "anthropic",
+    "base_url": "https://llm.example.com",
+    "key_command": "op read op://Work/llm-proxy/credential"
+  }
+}
+```
+
+- `api` is the API the server speaks: `"openai"` for OpenAI-compatible Chat
+  Completions (Ollama, LM Studio, vLLM, llama.cpp, LiteLLM, OpenRouter and most hosted
+  services), or `"anthropic"` for the Anthropic Messages API.
+- `base_url` is where requests go, checked like the `*_BASE_URL` variables.
+- `key_env` names the variable that holds the key, in the shell or the global `.env`;
+  `key_command` is a command that prints it, like the `_COMMAND` variables. An entry with
+  neither sends no key, as a local server needs. The file never holds a key itself, and
+  an entry never gets a built-in provider's key unless `key_env` names it.
+- `models` are offered by `/model`. Without it, `/model` offers whatever the server lists.
+- Pick a model as `name:model`, e.g. `/model ollama:qwen3-coder` or
+  `goat -m ollama:qwen3-coder`; a model only one entry lists needs no prefix.
+
+goat sends OpenAI-compatible servers no effort setting, since many reject it.
+Anthropic-compatible entries get Claude's thinking and effort settings only for models
+named `claude-…`. Local servers often start with a small context window; if a long
+conversation loses track, raise it in the server's settings. goat checks the file at
+startup and stops with the line of a mistake, without printing the file. Entries show
+up in `/status`.
+
 ### Which value wins
 
 - The shell wins: a variable it sets to a non-empty value keeps that value, and a key or
@@ -373,7 +418,9 @@ prompt, so the cached prompt prefix stays the same and editing them costs no cac
 
 - Model names starting with `claude-` use Anthropic, `deepseek-` use DeepSeek, and `gpt-`,
   `o1`/`o3`/`o4`, `codex`, `chatgpt-` and `ft:` use OpenAI. Any other name needs a provider
-  prefix, such as `openai:my-fine-tune` or `anthropic:claude-custom`.
+  prefix, such as `openai:my-fine-tune` or `anthropic:claude-custom`. Providers added in
+  [`providers.json`](#optional-add-other-providers) are picked the same way, as
+  `name:model`.
 - The `/model` picker, including `/model list`, offers only OpenAI's GPT-5.6 and GPT-6
   models, Claude's 5.5 models and Claude Fable 5.1, and DeepSeek's newest pro and flash
   models. The model in use is always listed, and any other model can still be picked by
@@ -423,16 +470,20 @@ aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
 - A provider's key goes to its own API unless its `*_BASE_URL` says otherwise, and only
-  your shell or `~/.config/goat/.env` can say so. goat refuses a base URL that is not
+  your shell or `~/.config/goat/.env` can say so. Likewise only
+  `~/.config/goat/providers.json` adds providers, never a file in the workspace, and an
+  entry's key goes only to its own `base_url`. goat refuses a base URL that is not
   http(s) or that carries a user name or password. For any other host it says at startup,
   and in `/status`, where the requests go and which file set the URL, flagging plain http
-  to another machine as unencrypted (http to `localhost` is fine). It shows only the
+  to another machine as unencrypted (http to `localhost` is fine); an entry is
+  mentioned at startup only when its key would go unencrypted. It shows only the
   scheme and host, since some proxies take a token in the path, and shortens the URL the
   same way in error messages and the history. Requests that carry a key never follow a
   redirect, which could otherwise take the key to a host goat never checked, and never
   send plain http through `HTTP_PROXY`, where the proxy would read the key (https goes
   through it as a tunnel the proxy cannot read).
-- `run_bash` commands do not inherit goat's API keys, anything loaded from
+- `run_bash` commands do not inherit goat's API keys (including the variables entries
+  name in `key_env`), anything loaded from
   `~/.config/goat/.env`, the providers' `*_BASE_URL` (a proxy may take a token in it), or
   other variables named like credentials (`*_API_KEY`, `*_SECRET`, `*_AUTH_TOKEN`,
   `*_PASSWORD`, a key command's `*_COMMAND` and similar). `~/.config/goat/.env` is outside the
@@ -536,6 +587,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | File | |
 | --- | --- |
 | `~/.config/goat/.env` | API keys and other variables, loaded at startup in every folder; the shell wins. The workspace's `.env` is never read |
+| `~/.config/goat/providers.json` | Other providers: local servers, proxies and compatible APIs (see [Setup](#optional-add-other-providers)) |
 | `AGENTS.md` (or `GOAT.md`, `CLAUDE.md`) in the workspace | Project instructions |
 | `~/.config/goat/AGENTS.md` | Your own instructions for every project |
 | `~/.config/goat/theme.json` | Theme |

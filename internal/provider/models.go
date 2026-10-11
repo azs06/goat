@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	DefaultDeepSeekModel  = "deepseek-v4-pro"
 )
 
+// Names are the providers: the built-in ones, then the entries from providers.json.
 var Names = []string{OpenAI, Anthropic, DeepSeek}
 
 // Model is a model together with the provider that serves it.
@@ -28,6 +30,10 @@ type Model struct {
 }
 
 func (m Model) String() string {
+	if m.IsZero() {
+		// An entry that lists no models gives goat none to start with.
+		return "none (pick one with /model)"
+	}
 	return m.Provider + ":" + m.ID
 }
 
@@ -36,7 +42,8 @@ func (m Model) IsZero() bool {
 }
 
 // CredentialVars are the environment variables that make a provider available.
-// A provider's models are only offered when one of them is set.
+// A provider's models are only offered when one of them is set. Entries that send no key
+// have none.
 var CredentialVars = map[string][]string{
 	OpenAI:    {"OPENAI_API_KEY"},
 	Anthropic: {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
@@ -55,8 +62,17 @@ func CredentialSource(provider string) string {
 }
 
 // Unavailable says why a provider cannot be used: it has no credentials, or its base URL
-// is invalid. It is nil for a usable provider.
+// is invalid, or there is no such provider. It is nil for a usable provider.
 func Unavailable(provider string) error {
+	if entry, ok := entries[provider]; ok {
+		if !entry.Keyless() && CredentialSource(provider) == "" {
+			return MissingCredentialsError(provider)
+		}
+		return nil
+	}
+	if !isBuiltIn(provider) {
+		return fmt.Errorf("there is no provider named %s; providers.json does not define it", provider)
+	}
 	if CredentialSource(provider) == "" {
 		return MissingCredentialsError(provider)
 	}
@@ -81,17 +97,19 @@ func AvailableNames() []string {
 }
 
 func MissingCredentialsError(provider string) error {
+	if entry, ok := entries[provider]; ok && entry.KeyCommand != "" {
+		return fmt.Errorf("%s models need a key, and its key_command in providers.json gave none", provider)
+	}
 	return fmt.Errorf("%s models need %s to be set", provider, strings.Join(CredentialVars[provider], " or "))
 }
 
 func isKnown(name string) bool {
-	for _, provider := range Names {
-		if provider == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Names, name)
 }
+
+// entryNamePrefix matches what can only be meant as a provider prefix: a name in the
+// form entries use, followed by a colon.
+var entryNamePrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*:`)
 
 // forModelID guesses the provider from a bare model ID.
 func forModelID(id string) string {
@@ -130,6 +148,22 @@ func ResolveModel(raw string) (Model, error) {
 	if provider := forModelID(raw); provider != "" {
 		return Model{Provider: provider, ID: raw}, nil
 	}
+	// A model that exactly one entry lists needs no prefix.
+	var listedBy []string
+	for _, name := range Names {
+		if entry, ok := entries[name]; ok && slices.Contains(entry.Models, raw) {
+			listedBy = append(listedBy, name)
+		}
+	}
+	if len(listedBy) == 1 {
+		return Model{Provider: listedBy[0], ID: raw}, nil
+	}
+	if len(listedBy) > 1 {
+		return Model{}, fmt.Errorf("%s is listed by %s; prefix it with the one you mean, e.g. %s:%s", raw, strings.Join(listedBy, " and "), listedBy[0], raw)
+	}
+	if prefix := entryNamePrefix.FindString(raw); prefix != "" {
+		return Model{}, fmt.Errorf("there is no provider named %s; providers.json does not define it", strings.TrimSuffix(prefix, ":"))
+	}
 	return Model{}, fmt.Errorf("cannot tell which provider serves %q; prefix it with the provider, e.g. openai:%s", raw, raw)
 }
 
@@ -147,7 +181,7 @@ func curatedModels(provider string) []string {
 	case DeepSeek:
 		return []string{DefaultDeepSeekModel, "deepseek-flash"}
 	default:
-		return nil
+		return entries[provider].Models
 	}
 }
 
@@ -198,6 +232,13 @@ func pickerModels(provider string, ids []string) []string {
 	case DeepSeek:
 		return newestDeepSeekModels(ids)
 	default:
+		// An entry that lists models offers just those; one without offers whatever its
+		// server lists.
+		if listed := entries[provider].Models; len(listed) > 0 {
+			return filterModels(ids, func(id string) bool {
+				return slices.ContainsFunc(listed, func(model string) bool { return strings.EqualFold(model, id) })
+			})
+		}
 		return ids
 	}
 }
@@ -291,7 +332,8 @@ func isOpenAIChatModel(id string) bool {
 	return true
 }
 
-// DefaultModel picks a starting model from a provider that has credentials.
+// DefaultModel picks a starting model from a provider that has credentials, the
+// built-in ones first, then the first model of the first entry that lists any.
 func DefaultModel() Model {
 	if Available(OpenAI) {
 		return Model{Provider: OpenAI, ID: DefaultOpenAIModel}
@@ -301,6 +343,11 @@ func DefaultModel() Model {
 	}
 	if Available(DeepSeek) {
 		return Model{Provider: DeepSeek, ID: DefaultDeepSeekModel}
+	}
+	for _, name := range Names {
+		if entry, ok := entries[name]; ok && len(entry.Models) > 0 && Available(name) {
+			return Model{Provider: name, ID: entry.Models[0]}
+		}
 	}
 	return Model{}
 }

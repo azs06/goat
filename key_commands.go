@@ -24,7 +24,8 @@ var keyCommandTimeout = 30 * time.Second
 // OPENAI_API_KEY_COMMAND="op read op://Private/OpenAI/credential", so the key need not
 // sit in a file. A provider that already has a credential, from the shell or the global
 // .env, runs none of its commands; otherwise its variables are tried in order and the
-// first command that prints a key settles it. The key is kept out of run_bash commands,
+// first command that prints a key settles it. A providers.json entry's key_command fills
+// its key the same way. The key is kept out of run_bash commands,
 // like one from the global .env. It returns a warning for each command that failed;
 // warnings never quote the command's output, which may be part of a key.
 func runKeyCommands() (warnings []string) {
@@ -35,6 +36,9 @@ func runKeyCommands() (warnings []string) {
 		for _, variable := range provider.CredentialVars[name] {
 			commandVar := variable + "_COMMAND"
 			command := strings.TrimSpace(os.Getenv(commandVar))
+			if command == "" && provider.KeyCommands[variable] != "" {
+				commandVar, command = name+"'s key_command", provider.KeyCommands[variable]
+			}
 			if command == "" {
 				continue
 			}

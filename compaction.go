@@ -178,14 +178,14 @@ func shouldAutoCompactConversation(entries []historyEntry, tokenThreshold int64)
 	return false, ""
 }
 
-// autoCompactThreshold is the conversation size that triggers compaction. Anthropic
-// models get a larger default: their transcripts are cached, so a long conversation
-// costs less there.
+// autoCompactThreshold is the conversation size that triggers compaction. Models behind
+// the Anthropic API get a larger default: their transcripts are cached, so a long
+// conversation costs less there.
 func autoCompactThreshold(cfg *config) int64 {
 	if cfg.autoCompactTokens > 0 {
 		return cfg.autoCompactTokens
 	}
-	if cfg.model.Provider == provider.Anthropic || cfg.model.Provider == provider.DeepSeek {
+	if provider.SpeaksAnthropic(cfg.model.Provider) {
 		return defaultAnthropicAutoCompactTokens
 	}
 	return defaultAutoCompactTokens

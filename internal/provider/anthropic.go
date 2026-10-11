@@ -45,6 +45,8 @@ type anthropicProvider struct {
 	cacheTTL anthropic.BetaCacheControlEphemeralTTL
 	// deepseek is set when the adapter talks to DeepSeek's Anthropic-compatible API.
 	deepseek *deepSeekSettings
+	// entry is set for an Anthropic-compatible entry from providers.json.
+	entry bool
 
 	mu           sync.Mutex
 	capabilities map[string]anthropicModelCapabilities
@@ -88,6 +90,34 @@ func NewAnthropic() Provider {
 		capabilities:  map[string]anthropicModelCapabilities{},
 	}
 }
+
+// newAnthropicEntry talks to an Anthropic-compatible entry. Like DeepSeek it ignores
+// the ANTHROPIC_* environment, so Anthropic's key never goes there. The key goes in both
+// x-api-key and a bearer Authorization header: compatible servers differ in which one
+// they read, and both go to the same server.
+func newAnthropicEntry(name, baseURL, key string) *anthropicProvider {
+	opts := []option.RequestOption{
+		option.WithoutEnvironmentDefaults(),
+		option.WithHTTPClient(keyClient(anthropicHeaderTimeout)),
+		option.WithBaseURL(baseURL),
+	}
+	if key != "" {
+		opts = append(opts, option.WithAPIKey(key), option.WithAuthToken(key))
+	}
+	return &anthropicProvider{
+		name:          name,
+		client:        anthropic.NewClient(opts...),
+		customBaseURL: true,
+		fallbacks:     false,
+		entry:         true,
+		capabilities:  map[string]anthropicModelCapabilities{},
+	}
+}
+
+// entryModelCapabilities are assumed for a model an entry serves that is not a Claude
+// model: no thinking or effort settings, which other servers may reject, and a modest
+// output limit.
+var entryModelCapabilities = anthropicModelCapabilities{maxTokens: anthropicLegacyMaxTokens}
 
 // anthropicCacheTTL reads GOAT_ANTHROPIC_CACHE_TTL. The default 5-minute entries cost
 // 1.25x to write and stay warm as long as requests keep coming; "1h" entries cost 2x
@@ -158,7 +188,9 @@ func (p *anthropicProvider) modelCapabilities(ctx context.Context, model string)
 		return caps
 	}
 
-	if p.deepseek != nil {
+	if p.entry && !strings.HasPrefix(strings.ToLower(model), "claude-") {
+		caps = entryModelCapabilities
+	} else if p.deepseek != nil {
 		var listed bool
 		caps, listed = p.deepSeekCapabilities(ctx, model)
 		if !listed {

@@ -349,18 +349,32 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		{"Model:", style.Highlight.Render(c.model.String())},
 		{"Effort:", effortStatusText(c)},
 	}
+	width := 9
+	for _, name := range provider.Names {
+		width = max(width, len(name))
+	}
 	for _, name := range provider.Names {
 		origin := credentialOrigin(name)
+		entry, isEntry := provider.LookupEntry(name)
 		switch err := provider.Unavailable(name); {
-		case origin == "":
-			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
+		case err != nil && isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
+		case origin == "" && !isEntry:
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + strings.Join(provider.CredentialVars[name], " or ") + " not set)")})
 		case err != nil:
-			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, 9) + " unavailable (" + err.Error() + ")")})
+			rows = append(rows, [2]string{"Provider:", style.Muted.Render(style.PadRight(name, width) + " unavailable (" + err.Error() + ")")})
 		default:
-			if endpoint, _ := provider.ResolveEndpoint(name); endpoint.Custom {
-				origin += "; requests go to " + endpoint.Origin() + unencryptedNote(endpoint)
+			endpoint, _ := provider.ResolveEndpoint(name)
+			if isEntry && entry.Keyless() {
+				origin = "no key"
 			}
-			rows = append(rows, [2]string{"Provider:", style.PadRight(name, 9) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
+			if endpoint.Custom {
+				origin += "; requests go to " + endpoint.Origin()
+				if !isEntry || !entry.Keyless() {
+					origin += unencryptedNote(endpoint)
+				}
+			}
+			rows = append(rows, [2]string{"Provider:", style.PadRight(name, width) + " " + style.Success.Render("available") + style.Muted.Render(" ("+origin+")")})
 		}
 	}
 
@@ -604,6 +618,10 @@ func liveModels(ctx context.Context, c *config) map[string][]string {
 	startSpinner("Listing models")
 	defer stopSpinner()
 	for _, name := range provider.AvailableNames() {
+		if entry, ok := provider.LookupEntry(name); ok && len(entry.Models) > 0 {
+			// The picker offers only the models the entry lists.
+			continue
+		}
 		provider, err := c.provider(name)
 		if err != nil {
 			continue
