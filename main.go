@@ -360,7 +360,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 			// The footer under the input catches up with the turn: context used, commands
 			// left running.
 			if cfg.interactive && style.Enabled() {
-				setTurnFooter(turnFooterParts(cfg))
+				setTurnFooter(turnFooterParts(cfg, true))
 			}
 		},
 	}
@@ -413,7 +413,11 @@ func handleInput(cfg *config, text string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	shellCommand, isShell := shellEscapeText(cfg, text)
+	shellCommand, afterShell, isShell := shellEscapeText(cfg, text)
+	if isShell && afterShell != "" {
+		// Only the first line is the command; the rest run after it.
+		requeueLines(afterShell)
+	}
 	var cmd *cliCommand
 	var args []string
 	if !isShell {
@@ -431,7 +435,7 @@ func handleInput(cfg *config, text string) error {
 		if queueing {
 			fmt.Print(bracketedPasteOn)
 			defer fmt.Print(bracketedPasteOff)
-			setTurnFooter(turnFooterParts(cfg))
+			setTurnFooter(turnFooterParts(cfg, !isShell && cmd == nil))
 			startKeyCapture(ctx, cfg.input)
 			defer stopKeyCapture()
 		}
@@ -522,15 +526,16 @@ func footerParts(cfg *config) []string {
 const shortcutsFooterPart = "? for shortcuts"
 
 // turnFooterParts is the footer under the input while a turn runs: the prompt's,
-// without the shortcuts hint, since "?" is just text there, and without the ! output
-// waiting, which this turn is about to send or has sent.
-func turnFooterParts(cfg *config) []string {
+// without the shortcuts hint, since "?" is just text there. A prompt's turn also leaves
+// out the ! output waiting, which it is about to send or has sent.
+func turnFooterParts(cfg *config, prompt bool) []string {
 	pending := pendingShellFooterPart(cfg)
 	var parts []string
 	for _, part := range footerParts(cfg) {
-		if part != pending && part != shortcutsFooterPart {
-			parts = append(parts, part)
+		if (prompt && part == pending) || part == shortcutsFooterPart {
+			continue
 		}
+		parts = append(parts, part)
 	}
 	return parts
 }

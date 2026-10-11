@@ -147,16 +147,12 @@ func stopBackgroundOnExit(out io.Writer) {
 // stopBackgroundOnSignal stops the background commands, and a command still running,
 // when goat is closed by a hangup, such as its terminal window closing, or by SIGTERM:
 // they run in sessions of their own, away from the terminal, so nothing else would. A
-// signal goat started with ignored, as under nohup, stays ignored.
+// hangup goat started with ignored, as under nohup, stays ignored. (Go cannot tell
+// whether SIGTERM was ignored when goat started.)
 func stopBackgroundOnSignal() {
-	var watched []os.Signal
-	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGTERM} {
-		if !signal.Ignored(sig) {
-			watched = append(watched, sig)
-		}
-	}
-	if len(watched) == 0 {
-		return
+	watched := []os.Signal{syscall.SIGTERM}
+	if !signal.Ignored(syscall.SIGHUP) {
+		watched = append(watched, syscall.SIGHUP)
 	}
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, watched...)

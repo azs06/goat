@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +148,42 @@ func TestShellOutputIsNotSentTwiceAfterAStoppedReply(t *testing.T) {
 	})
 	if n := strings.Count(fake.request(1).raw, "ran these shell commands"); n != 1 {
 		t.Fatalf("expected the note once, in the replayed first message; found %d", n)
+	}
+}
+
+func TestShellEscapeRunsOnlyItsFirstLine(t *testing.T) {
+	resetTurnQueue(t)
+	cfg := seamConfig(t, newFakeAnthropic(t).provider(true))
+	withColor(t, false)
+	cfg.interactive = true
+	// A queue put back after Ctrl-C: a shell command, then a message for the model.
+	out := captureStdout(t, func() {
+		if err := handleInput(cfg, "!echo first-line\ntouch was_run\n/status"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "first-line") {
+		t.Fatalf("got %q", out)
+	}
+	if _, err := os.Stat("was_run"); err == nil {
+		t.Fatal("the line after the command must not run in the shell")
+	}
+	if text, ok := nextQueuedInput(); !ok || text != "touch was_run" {
+		t.Fatalf("expected the message queued for the model, got %q %v", text, ok)
+	}
+	if text, ok := nextQueuedInput(); !ok || text != "/status" {
+		t.Fatalf("expected the command queued on its own, got %q %v", text, ok)
+	}
+}
+
+func TestTurnFooterKeepsWaitingShellOutputUntilAPromptSendsIt(t *testing.T) {
+	cfg := seamConfig(t, newFakeAnthropic(t).provider(true))
+	cfg.pendingShell = []string{"output"}
+	pending := pendingShellFooterPart(cfg)
+	if !slices.Contains(turnFooterParts(cfg, false), pending) || slices.Contains(turnFooterParts(cfg, true), pending) {
+		t.Fatalf("got %q and %q", turnFooterParts(cfg, false), turnFooterParts(cfg, true))
+	}
+	if slices.Contains(turnFooterParts(cfg, false), shortcutsFooterPart) {
+		t.Fatal("the shortcuts hint does not belong under a turn")
 	}
 }

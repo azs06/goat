@@ -1,6 +1,9 @@
 package style
 
 import (
+	"unicode"
+
+	"golang.org/x/text/width"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -95,6 +98,57 @@ func TruncateToWidth(text string, width int) string {
 		return string([]rune(text)[:width])
 	}
 	return string([]rune(text)[:keep]) + ellipsis
+}
+
+// CellWidth is how many terminal cells text takes, styles aside: two for wide
+// characters, such as CJK ideographs and most emoji, none for combining marks, one for
+// the rest. VisibleWidth counts every rune as one cell; this is for lines whose rows
+// must not wrap, such as the spinner's.
+func CellWidth(text string) int {
+	cells := 0
+	for _, r := range StripANSI(text) {
+		cells += runeCells(r)
+	}
+	return cells
+}
+
+func runeCells(r rune) int {
+	switch {
+	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || r == 0x200D:
+		return 0
+	case r >= 0x1F300 && r <= 0x1FAFF:
+		return 2
+	}
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
+	}
+	return 1
+}
+
+// TruncateToCells is TruncateToWidth counting terminal cells, as CellWidth does.
+func TruncateToCells(text string, cells int) string {
+	if cells <= 0 {
+		return ""
+	}
+	if CellWidth(text) <= cells {
+		return text
+	}
+	ellipsis := Glyphs().Ellipsis
+	room := cells - CellWidth(ellipsis)
+	if room < 0 {
+		room, ellipsis = cells, ""
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range text {
+		if used+runeCells(r) > room {
+			break
+		}
+		used += runeCells(r)
+		b.WriteRune(r)
+	}
+	return b.String() + ellipsis
 }
 
 // Wrap word-wraps styled text to width visible cells. The first row starts with

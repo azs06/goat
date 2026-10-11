@@ -280,7 +280,7 @@ line breaks and is never sent before you press Enter.
 ### Shell commands
 
 A line starting with `!` runs in the shell instead of going to the model: `!git status`,
-`!npm test`. It runs the way `run_bash` runs commands (with `bash -lc` in the workspace,
+`!npm test`. Only that line is the command; lines after it are sent as usual. It runs the way `run_bash` runs commands (with `bash -lc` in the workspace,
 without the API keys in its environment and without a terminal to read from), but it is
 not confirmed, since you typed it, and has no time limit: Ctrl-C stops it. Up to 40 lines of
 its output are shown and `/output` shows the rest. The output also goes to the model with

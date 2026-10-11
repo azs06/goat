@@ -25,14 +25,27 @@ const shellResultPreviewLines = 40
 // maxPendingShellRuns is how many ! runs wait for the next message; older ones drop.
 const maxPendingShellRuns = 5
 
-// shellEscapeText returns the command of a "!command" line. A -p run never treats its
-// prompt as a command: it may come from a file.
-func shellEscapeText(cfg *config, text string) (string, bool) {
+// shellEscapeText returns the command of a "!command" line, and the lines after it,
+// which are not part of the command: a queue put back in the prompt after Ctrl-C holds
+// one message per line. A -p run never treats its prompt as a command: it may come from
+// a file.
+func shellEscapeText(cfg *config, text string) (command, rest string, ok bool) {
 	if cfg.oneShot {
-		return "", false
+		return "", "", false
 	}
-	command, ok := strings.CutPrefix(strings.TrimSpace(text), "!")
-	return strings.TrimSpace(command), ok
+	command, ok = strings.CutPrefix(strings.TrimSpace(text), "!")
+	command, rest, _ = strings.Cut(command, "\n")
+	return strings.TrimSpace(command), strings.TrimSpace(rest), ok
+}
+
+// requeueLines queues each line on its own, so the queue joins plain messages into one
+// and runs commands on their own, as if they had been queued during a turn.
+func requeueLines(text string) {
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			enqueue(line)
+		}
+	}
 }
 
 // runShellEscape runs a command the user typed after "!".

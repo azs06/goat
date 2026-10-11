@@ -203,8 +203,9 @@ func (s *spinner) render() string {
 	// \r and erase-line redraw in place; the line is cut to the terminal width so it
 	// never wraps, which would leave stale copies behind.
 	width := terminalWidth()
-	if style.VisibleWidth(line) >= width {
-		line = style.Accent.Render(style.TruncateToWidth(glyph+" "+s.label+style.Glyphs().Ellipsis, width-1))
+	// Cells, not runes: a label with wide characters, such as a ! command, must not wrap.
+	if style.CellWidth(line) >= width {
+		line = style.Accent.Render(style.TruncateToCells(glyph+" "+s.label+style.Glyphs().Ellipsis, width-1))
 	}
 	// The block, status line included, has to fit on the screen to be erased in place.
 	below, inputRow, cursor := turnFrameLines(width, terminalRows()-2)
