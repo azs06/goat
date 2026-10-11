@@ -22,6 +22,10 @@ type queueState struct {
 	editor promptEditor
 	// capturing is true while keys are read into editor, which is when it is drawn.
 	capturing bool
+	// footer is the status under the input while a turn runs, taken when it starts:
+	// building it runs git, too slow for every redraw. Without it the input is drawn
+	// without its frame.
+	footer []string
 }
 
 var turnQueue queueState
@@ -158,6 +162,36 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 	return lines, prefixWidth + editor.pos - start + 1
 }
 
+// setTurnFooter sets the status shown under the input while the turn runs.
+func setTurnFooter(parts []string) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.footer = parts
+}
+
+// turnFrameLines is the live block under the status line while keys are captured: the
+// queued messages, then the input in the same frame as the prompt has between turns
+// (a rule, the input line, a rule and the footer), so the bottom of the screen keeps
+// its shape while goat works. cursorRow is the index of the input line in lines and
+// cursor its 1-based column. When the footer is unknown or the frame would not fit in
+// maxRows, the input is drawn on its own as the last line.
+func turnFrameLines(width, maxRows int) (lines []string, cursorRow, cursor int) {
+	lines, cursor = queuedInputLines(width)
+	if len(lines) == 0 {
+		return nil, 0, 0
+	}
+	turnQueue.mu.Lock()
+	footer := turnQueue.footer
+	turnQueue.mu.Unlock()
+	if footer == nil || len(lines)+3 > maxRows {
+		return lines, len(lines) - 1, cursor
+	}
+	queued, input := lines[:len(lines)-1], lines[len(lines)-1]
+	rule := renderRule(width - 1)
+	framed := append(append([]string{}, queued...), rule, input, rule, renderFooter(footer, width))
+	return framed, len(queued) + 1, cursor
+}
+
 // flattenBreaks shows a message with line breaks on a single line, one cell per break so
 // cursor positions still match.
 func flattenBreaks(text string) string {
@@ -240,5 +274,6 @@ func stopKeyCapture() {
 	turnQueue.mu.Lock()
 	c.input.partial = turnQueue.editorText()
 	turnQueue.editor.setText("")
+	turnQueue.footer = nil
 	turnQueue.mu.Unlock()
 }

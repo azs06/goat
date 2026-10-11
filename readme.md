@@ -293,13 +293,14 @@ goes to the model as it is.
 
 ### Typing while goat works
 
-The line under the spinner takes a message while a turn runs, and Enter queues it. Queued
+While a turn runs the prompt stays at the bottom of the screen, in the same frame as
+between turns, under the spinner and above the footer; the reply streams in above it. It
+takes a message, and Enter queues it. Queued
 text goes to the model with the next tool results, so it can change course mid-turn;
 anything still queued when the turn ends is sent as the next prompt. Slash commands and
 `!` commands wait until the turn is over. Up on an empty line takes the last queued message back to edit.
 After Ctrl-C or a failed turn nothing queued is sent; it is put back in the prompt
-instead. While the reply is streaming the line is hidden, but what you type is kept.
-Queueing needs an interactive color terminal.
+instead. Queueing needs an interactive color terminal.
 
 ### Command line
 

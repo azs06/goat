@@ -16,6 +16,7 @@ func resetTurnQueue(t *testing.T) {
 		turnQueue.items = nil
 		turnQueue.editor = promptEditor{}
 		turnQueue.capturing = false
+		turnQueue.footer = nil
 		turnQueue.mu.Unlock()
 	}
 	reset()
@@ -193,5 +194,46 @@ func TestQueuedPasteStaysOneMessage(t *testing.T) {
 	typeQueueKeys("\r")
 	if len(turnQueue.items) != 1 || turnQueue.items[0] != "line one\nline two" {
 		t.Fatalf("expected the paste queued as one message, got %q", turnQueue.items)
+	}
+}
+
+func TestTurnFrameLinesFrameTheInputLikeThePrompt(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	if lines, _, _ := turnFrameLines(80, 20); lines != nil {
+		t.Fatalf("expected nothing while keys are not captured, got %q", lines)
+	}
+	turnQueue.capturing = true
+
+	// Without a footer the input is drawn on its own.
+	lines, row, _ := turnFrameLines(80, 20)
+	if len(lines) != 1 || row != 0 {
+		t.Fatalf("got %q, row %d", lines, row)
+	}
+
+	setTurnFooter([]string{"anthropic:claude-opus-5-5", "effort high"})
+	turnQueue.items = []string{"queued one"}
+	turnQueue.editor.setText("typing")
+	for _, width := range []int{20, 40, 120} {
+		lines, row, cursor := turnFrameLines(width, 20)
+		plain := make([]string, len(lines))
+		for i, line := range lines {
+			plain[i] = style.StripANSI(line)
+			if w := style.VisibleWidth(line); w >= width {
+				t.Errorf("width %d: line %d is %d wide", width, i, w)
+			}
+		}
+		if len(lines) != 5 || row != 2 || !strings.Contains(plain[0], "queued") || !strings.HasPrefix(plain[1], style.Glyphs().HLine) ||
+			!strings.Contains(plain[2], "typing") || !strings.HasPrefix(plain[3], style.Glyphs().HLine) || !strings.Contains(plain[4], "anthropic") {
+			t.Fatalf("width %d: got %q, row %d", width, plain, row)
+		}
+		if cursor != style.VisibleWidth(promptPrefix())+len("typing")+1 {
+			t.Errorf("width %d: cursor %d", width, cursor)
+		}
+	}
+
+	// Too short a screen for the frame: the input on its own again.
+	if lines, row, _ := turnFrameLines(80, 4); len(lines) != 2 || row != 1 {
+		t.Fatalf("got %q, row %d", lines, row)
 	}
 }

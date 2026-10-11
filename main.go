@@ -417,6 +417,7 @@ func handleInput(cfg *config, text string) error {
 		if queueing {
 			fmt.Print(bracketedPasteOn)
 			defer fmt.Print(bracketedPasteOff)
+			setTurnFooter(turnFooterParts(cfg))
 			startKeyCapture(ctx, cfg.input)
 			defer stopKeyCapture()
 		}
@@ -502,6 +503,13 @@ func footerParts(cfg *config) []string {
 		parts = append(parts, "auto-approve on")
 	}
 	return append(parts, "? for shortcuts")
+}
+
+// turnFooterParts is the footer under the input while a turn runs: the prompt's,
+// without the shortcuts hint, since "?" is just text there.
+func turnFooterParts(cfg *config) []string {
+	parts := footerParts(cfg)
+	return parts[:len(parts)-1]
 }
 
 // readPrompt shows the prompt and reads one line. On an interactive color terminal the

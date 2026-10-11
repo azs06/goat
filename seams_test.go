@@ -124,6 +124,41 @@ func TestSpinnerDrawsTheQueuedInput(t *testing.T) {
 	if !strings.Contains(out, "\x1b[2A\r\x1b[J") || !strings.HasSuffix(out, "\x1b[2A\r\x1b[J") {
 		t.Errorf("expected the block to be erased in place: %q", out)
 	}
+
+	// With the turn's footer the input sits in its frame: status, queued, rule, input,
+	// rule, footer. The cursor is left on the input line, two lines above the bottom,
+	// and erasing moves up from there.
+	setTurnFooter([]string{"FOOTER"})
+	out = captureStdout(t, func() {
+		startSpinner("Thinking")
+		time.Sleep(30 * time.Millisecond)
+		redrawSpinner()
+		stopSpinner()
+	})
+	if !strings.Contains(style.StripANSI(out), "FOOTER") || !strings.Contains(out, "\x1b[2A\x1b[") || !strings.HasSuffix(out, "\x1b[3A\r\x1b[J") {
+		t.Errorf("expected the framed block, erased from the input line: %q", out)
+	}
+}
+
+func TestPrintAboveSpinnerKeepsTheBlockUnderTheText(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	turnQueue.capturing = true
+	setTurnFooter([]string{"FOOTER"})
+
+	out := captureStdout(t, func() {
+		printAboveSpinner("no spinner\n")
+		startSpinner("Thinking")
+		time.Sleep(30 * time.Millisecond)
+		relabelSpinner("Writing")
+		printAboveSpinner("a streamed line\n")
+		stopSpinner()
+	})
+	plain := style.StripANSI(out)
+	line := strings.Index(plain, "a streamed line")
+	if !strings.HasPrefix(plain, "no spinner\n") || line < 0 || !strings.Contains(plain[line:], "Writing") || !strings.Contains(plain[line:], "FOOTER") {
+		t.Fatalf("expected the block drawn again under the line: %q", plain)
+	}
 }
 
 func TestRunPromptAsksTheApproverBeforeRunBash(t *testing.T) {
