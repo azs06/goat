@@ -14,13 +14,22 @@ const (
 	maxCompactionSourceChars  = 60000
 	maxCompactionEntryChars   = 2000
 
-	// defaultAutoCompactTokens is the conversation size, in tokens as reported by the
-	// API, at which the next turn first compacts the session. GOAT_AUTO_COMPACT_TOKENS
-	// overrides it; lower it when the account's tokens-per-minute limit is small.
-	defaultAutoCompactTokens = 80000
-	// defaultAnthropicAutoCompactTokens applies to Claude models, whose cached
-	// transcripts make long conversations cheaper.
-	defaultAnthropicAutoCompactTokens = 150000
+	// The default cost limits: the conversation size, in tokens as the API reports them,
+	// at which goat compacts, since every request sends the whole conversation again.
+	// They are set by how cheap a cached conversation is: DeepSeek's cache hits cost a
+	// fraction of a cent per million tokens and Claude's a tenth of the input price or
+	// less, so those conversations may grow longer than others before it pays to
+	// compact. GOAT_AUTO_COMPACT_TOKENS replaces them; lower it when the account's
+	// tokens-per-minute limit is small.
+	defaultAutoCompactTokens         = 60000
+	defaultClaudeAutoCompactTokens   = 120000
+	defaultDeepSeekAutoCompactTokens = 200000
+
+	// maxContextReserve is the most of a model's window kept free for the reply and for
+	// the error in the size estimate; a smaller window keeps a quarter of itself free. It
+	// covers the 128Ki tokens goat asks DeepSeek for at effort max, since DeepSeek's
+	// window counts the reply too.
+	maxContextReserve = 160000
 
 	// charsPerTokenEstimate sizes history recorded without token usage.
 	charsPerTokenEstimate = 4
@@ -105,9 +114,17 @@ func buildCompactionSource(entries []historyEntry) string {
 	return truncateToolOutputCharsForModel(strings.Join(blocks, "\n\n"), maxCompactionSourceChars)
 }
 
+// applyCompactedConversation switches to the conversation seeded from summary. Only a
+// /compact keeps the full conversation for /resume: one compacted automatically was too
+// big to go on with and would only be compacted again, one compacted to recover was
+// refused by the API, and either would push out the conversation session.prev.json holds.
 func applyCompactedConversation(cfg *config, next provider.Conversation, summary, mode string) {
 	recordCompactionSummary(cfg, summary, mode)
-	replaceConversation(cfg, conversationState{conversation: next})
+	if mode == "manual" {
+		replaceConversation(cfg, conversationState{conversation: next})
+	} else {
+		startConversation(cfg, conversationState{conversation: next})
+	}
 	recordCompactionSeed(cfg, next, summary)
 }
 
@@ -181,20 +198,63 @@ func shouldAutoCompactConversation(entries []historyEntry, tokenThreshold int64)
 	return false, ""
 }
 
-// autoCompactThreshold is the conversation size that triggers compaction. Models behind
-// the Anthropic API get a larger default: their transcripts are cached, so a long
-// conversation costs less there.
-func autoCompactThreshold(cfg *config) int64 {
-	if cfg.autoCompactTokens > 0 {
-		return cfg.autoCompactTokens
+// autoCompactThreshold is the conversation size that triggers compaction, and what set
+// it. It is the cost limit, lowered to stay under a size past which the model costs
+// more, and under the model's context window less a reserve. A cost limit set with
+// GOAT_AUTO_COMPACT_TOKENS also replaces the price step: the user chose the size.
+func autoCompactThreshold(cfg *config) (int64, string) {
+	threshold, why := cfg.autoCompactTokens, "the configured limit"
+	if threshold <= 0 {
+		threshold, why = defaultCostLimit(cfg.model.Provider), "the cost limit"
 	}
-	if provider.SpeaksAnthropic(cfg.model.Provider) {
-		return defaultAnthropicAutoCompactTokens
+
+	limits := modelLimits(cfg)
+	if step := limits.PriceStep; step > 0 && cfg.autoCompactTokens <= 0 && step-step/10 < threshold {
+		threshold, why = step-step/10, fmt.Sprintf("below the %d-token price step", step)
+	}
+	if budget := contextBudget(cfg); budget < threshold {
+		threshold, why = budget, fmt.Sprintf("short of the %d-token context window", limits.ContextWindow)
+	}
+	return threshold, why
+}
+
+// modelLimits returns the current model's limits, without asking the network.
+func modelLimits(cfg *config) provider.Limits {
+	if p, err := cfg.currentProvider(); err == nil {
+		return provider.ModelLimits(p, cfg.model.ID)
+	}
+	limits := provider.KnownLimitsFor(cfg.model.Provider, cfg.model.ID)
+	if limits.ContextWindow <= 0 {
+		limits.ContextWindow = provider.DefaultContextWindow
+	}
+	return limits
+}
+
+// contextBudget is the most a conversation may hold before a request: the model's window
+// less the reserve for the reply.
+func contextBudget(cfg *config) int64 {
+	window := modelLimits(cfg).ContextWindow
+	return window - min(window/4, maxContextReserve)
+}
+
+// defaultCostLimit is the cost limit for a provider's models.
+func defaultCostLimit(providerName string) int64 {
+	switch providerName {
+	case provider.DeepSeek:
+		return defaultDeepSeekAutoCompactTokens
+	case provider.Anthropic:
+		return defaultClaudeAutoCompactTokens
 	}
 	return defaultAutoCompactTokens
 }
 
-func maybeAutoCompactConversation(ctx context.Context, cfg *config) (bool, error) {
+// maybeAutoCompactConversation compacts the conversation once it has grown past the
+// threshold or was built with another prompt. focus, when set, tells the summary what
+// to keep.
+//
+// pending is text about to be sent that the history does not hold yet, such as the
+// prompt that starts a turn; it counts toward the size.
+func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus, pending string) (bool, error) {
 	if cfg == nil || cfg.conversation.conversation.IsEmpty() {
 		return false, nil
 	}
@@ -207,24 +267,29 @@ func maybeAutoCompactConversation(ctx context.Context, cfg *config) (bool, error
 		if err != nil {
 			return false, err
 		}
-		shouldCompact, why := shouldAutoCompactConversation(entries, autoCompactThreshold(cfg))
+		threshold, thresholdWhy := autoCompactThreshold(cfg)
+		// A big prompt brings compaction forward, but at most halfway: a summary cannot
+		// shrink the prompt itself.
+		pendingTokens := int64(len([]rune(pending))) / charsPerTokenEstimate
+		shouldCompact, why := shouldAutoCompactConversation(entries, max(threshold-pendingTokens, threshold/2))
 		if !shouldCompact {
 			return false, nil
 		}
-		reason = why
+		reason = fmt.Sprintf("%s; it compacts at %d, %s", why, threshold, thresholdWhy)
 	}
 
 	provider, err := cfg.currentProvider()
 	if err != nil {
 		return false, err
 	}
-	next, summary, err := compactConversation(ctx, provider, cfg.model.ID, "")
+	next, summary, err := compactConversation(ctx, provider, cfg.model.ID, focus)
 	if err != nil {
 		return false, fmt.Errorf("auto compact conversation: %w", err)
 	}
 
 	applyCompactedConversation(cfg, next, summary, "auto")
-	fmt.Println(formatNotice(fmt.Sprintf("Conversation auto-compacted (%s).", reason)))
+	// A -p run keeps stdout for the reply.
+	fmt.Fprintln(activityOut, formatNotice(fmt.Sprintf("Conversation auto-compacted (%s).", reason)))
 	return true, nil
 }
 

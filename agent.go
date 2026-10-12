@@ -57,6 +57,11 @@ type turnOptions struct {
 	// checkpoint, when set, receives the state after every tool round so it can be
 	// saved before the turn finishes.
 	checkpoint func(conversationState)
+	// compact, when set, is asked after every tool round's checkpoint whether the
+	// conversation was compacted. If it was, it returns the conversation started from
+	// the summary, and the turn goes on there; the round's tool results answer calls of
+	// the old conversation, so they go as text.
+	compact func(ctx context.Context) (provider.Conversation, bool)
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	approveBash func(ctx context.Context, command, workdir string) error
@@ -315,12 +320,52 @@ func notRunResults(calls []provider.ToolCall, reason string) []provider.ToolResu
 	return results
 }
 
-var errContextExceeded = errors.New("the conversation no longer fits in the model's context window; run /compact")
+// midTurnCompactionFocus steers the summary made partway through a turn toward the
+// work in flight, which the turn continues from.
+const midTurnCompactionFocus = "the task in progress and what was about to be done next"
 
-// isContextOverflowError recognises both APIs' "prompt is too long" errors.
+// continueAfterCompactionNote goes to the model, followed by the latest tool results,
+// after the conversation was compacted partway through a turn.
+const continueAfterCompactionNote = "[The conversation was compacted partway through this task. The results of your latest tool calls follow. Carry on with the task from where you left off.]"
+
+// compactedToolResultsText carries tool results over to a conversation compacted
+// partway through a turn. They answer calls the new conversation does not have, so they
+// go as text, in full: the summary keeps only part of each.
+func compactedToolResultsText(results []provider.ToolResult) string {
+	var b strings.Builder
+	b.WriteString(continueAfterCompactionNote)
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		fmt.Fprintf(&b, "\n\nResult of %s (%s):\n%s", result.Name, status, result.Output)
+	}
+	return b.String()
+}
+
+var errContextExceeded = errors.New("the conversation no longer fits in the model's context window")
+
+// isContextOverflowError recognises both APIs' "prompt is too long" errors, and the
+// "maximum context length" wording of OpenAI-compatible servers.
 func isContextOverflowError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "context_length_exceeded") || strings.Contains(message, "prompt is too long") || strings.Contains(message, "context window")
+	return strings.Contains(message, "context_length_exceeded") || strings.Contains(message, "prompt is too long") || strings.Contains(message, "context window") || strings.Contains(message, "maximum context length")
+}
+
+// continueAfterRecoveryNote goes to the model, followed by any tool results it was
+// owed, when a turn that had already started is retried in a compacted conversation.
+const continueAfterRecoveryNote = "[The conversation was compacted partway through this task because it could not be continued as it was. Carry on with the task from where you left off.]"
+
+// recoveryPromptText is what a retry in a compacted conversation sends: the prompt
+// again when the model never saw it, or a note and the owed tool results when the turn
+// was already underway.
+func recoveryPromptText(prompt string, moved bool, owed []provider.ToolResult) string {
+	if !moved {
+		return prompt
+	}
+	text := compactedToolResultsText(owed)
+	return continueAfterRecoveryNote + strings.TrimPrefix(text, continueAfterCompactionNote)
 }
 
 // sendPromptStream runs one user turn: it streams the reply and keeps executing tool
@@ -416,10 +461,26 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		if opts.compact != nil {
+			if compacted, ok := opts.compact(ctx); ok {
+				req.Conversation = compacted
+				req.ToolResults = nil
+				req.UserText = compactedToolResultsText(next.pendingToolResults)
+				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				// The summary's conversation has not been told the model yet.
+				req.UserText = modelNote(opts.model, providerName) + req.UserText
+				if opts.planMode {
+					req.UserText = planModeNote + req.UserText
+				}
+			}
+		}
 		if opts.takeSteering != nil {
 			if text := opts.takeSteering(); text != "" {
 				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
 				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
+				if req.UserText != "" {
+					text = req.UserText + "\n\n" + text
+				}
 				req.UserText = text
 			}
 		}

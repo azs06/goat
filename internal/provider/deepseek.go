@@ -98,6 +98,8 @@ func applyDeepSeekReasoning(params *anthropic.BetaMessageNewParams, effort Effor
 type deepSeekModel struct {
 	ID              string `json:"id"`
 	MaxOutputTokens int64  `json:"max_output_tokens"`
+	// ContextWindow counts input and output tokens together.
+	ContextWindow int64 `json:"context_window"`
 }
 
 func (p *anthropicProvider) deepSeekModels(ctx context.Context) ([]deepSeekModel, error) {
@@ -176,6 +178,7 @@ func (p *anthropicProvider) deepSeekCapabilities(ctx context.Context, model stri
 	for _, info := range models {
 		if info.ID == model {
 			caps.maxTokens = info.MaxOutputTokens
+			caps.contextWindow = info.ContextWindow
 			return caps, true
 		}
 	}

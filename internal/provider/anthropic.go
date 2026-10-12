@@ -56,6 +56,8 @@ type anthropicModelCapabilities struct {
 	adaptiveThinking bool
 	efforts          map[Effort]bool
 	maxTokens        int64
+	// contextWindow is the window the API reported; 0 when it reported none.
+	contextWindow int64
 }
 
 // NewAnthropicWith talks to the endpoint the client options name instead of the one in
@@ -209,7 +211,8 @@ func (p *anthropicProvider) modelCapabilities(ctx context.Context, model string)
 				EffortXhigh:  info.Capabilities.Effort.Xhigh.Supported,
 				EffortMax:    info.Capabilities.Effort.Max.Supported,
 			},
-			maxTokens: min(int64(anthropicMaxTokens), info.MaxTokens),
+			maxTokens:     min(int64(anthropicMaxTokens), info.MaxTokens),
+			contextWindow: info.MaxInputTokens,
 		}
 		if caps.maxTokens <= 0 {
 			caps.maxTokens = anthropicMaxTokens
@@ -226,6 +229,15 @@ func (p *anthropicProvider) modelCapabilities(ctx context.Context, model string)
 	p.capabilities[model] = caps
 	p.mu.Unlock()
 	return caps
+}
+
+// contextWindow is the window the Models API, or DeepSeek's model list, reported for
+// model when goat first sent it a request. It never asks itself, so /status and the
+// compaction check do not wait on the network; until then the published window applies.
+func (p *anthropicProvider) contextWindow(model string) int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.capabilities[model].contextWindow
 }
 
 // anthropicEffort picks the requested effort, or the closest lower level the model

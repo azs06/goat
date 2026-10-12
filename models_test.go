@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +19,11 @@ import (
 
 // fakeProvider is a scripted Provider for tests that do not care about the wire format.
 type fakeProvider struct {
-	name        string
-	responses   []*provider.Response
+	name      string
+	responses []*provider.Response
+	// sendErrs, when set, are returned by the first Send calls in order; a nil one lets
+	// that call take the next response.
+	sendErrs    []error
 	requests    []provider.Request
 	completeErr error
 	// completeFailures makes the first Complete calls fail with a retryable error.
@@ -33,6 +38,13 @@ func (f *fakeProvider) Name() string { return f.name }
 
 func (f *fakeProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, bool, error) {
 	f.requests = append(f.requests, req)
+	if len(f.sendErrs) > 0 {
+		err := f.sendErrs[0]
+		f.sendErrs = f.sendErrs[1:]
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	if len(f.responses) == 0 {
 		return nil, false, errors.New("no scripted response")
 	}
@@ -296,25 +308,25 @@ func TestLoadConfigRestoresMatchingSessionAndSetsAsideOthers(t *testing.T) {
 	if err := writeSessionFile(sessionPath, session); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	cfg := loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
 	if cfg.model.Provider != provider.Anthropic || len(cfg.conversation.conversation.Messages) != 1 || cfg.staleConversation {
 		t.Fatalf("expected the saved conversation, got %v %+v stale=%v", cfg.model, cfg.conversation, cfg.staleConversation)
 	}
 
 	session.PromptFingerprint = promptFingerprint(true)
 	writeSessionFile(sessionPath, session)
-	if cfg := loadConfig(cliOptions{}); cfg.staleConversation {
+	if cfg := loadConfig(cliOptions{continueSession: true}); cfg.staleConversation {
 		t.Fatal("a conversation built in code mode is not stale")
 	}
 
 	session.PromptFingerprint = "older-goat"
 	writeSessionFile(sessionPath, session)
-	if cfg := loadConfig(cliOptions{}); !cfg.staleConversation {
+	if cfg := loadConfig(cliOptions{continueSession: true}); !cfg.staleConversation {
 		t.Fatal("expected a conversation from a different prompt to be marked stale")
 	}
 
 	t.Setenv("GOAT_MODEL", "gpt-6-luna")
-	cfg = loadConfig(cliOptions{})
+	cfg = loadConfig(cliOptions{continueSession: true})
 	if cfg.model.Provider != provider.OpenAI || !cfg.conversation.conversation.IsEmpty() {
 		t.Fatalf("expected a fresh OpenAI conversation, got %v %+v", cfg.model, cfg.conversation)
 	}
@@ -344,7 +356,7 @@ func TestStaleConversationIsCompactedBeforeUse(t *testing.T) {
 	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"old":true}`)}}}
 	cfg.staleConversation = true
 
-	compacted, err := maybeAutoCompactConversation(context.Background(), cfg)
+	compacted, err := maybeAutoCompactConversation(context.Background(), cfg, "", "")
 	if err != nil || !compacted {
 		t.Fatalf("expected compaction, got %v %v", compacted, err)
 	}
@@ -444,7 +456,7 @@ func TestStartupSwapsInThePreviousConversationForTheProvider(t *testing.T) {
 	writeSessionFile(sessionPath, openAISession)
 
 	t.Setenv("GOAT_MODEL", "claude-opus-5-5")
-	cfg := loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
 	if len(cfg.conversation.conversation.Messages) != 1 || activeConversationID != "cA" {
 		t.Fatalf("expected the earlier Anthropic conversation to be restored, got %+v (%s)", cfg.conversation, activeConversationID)
 	}
@@ -466,7 +478,7 @@ func TestStartupMismatchStartsASeparateConversation(t *testing.T) {
 	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cA", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
 
 	t.Setenv("GOAT_MODEL", "gpt-6-luna")
-	loadConfig(cliOptions{})
+	loadConfig(cliOptions{continueSession: true})
 	recordHistory(historyEntry{Type: "user", Content: "B prompt"})
 	entries, _ := loadConversationHistoryEntries()
 	if source := buildCompactionSource(entries); strings.Contains(source, "SECRET-A") {
@@ -569,14 +581,14 @@ func TestSavingKeepsAStaleConversationStale(t *testing.T) {
 	setCredentials(t, false, true)
 
 	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "c1", Model: "anthropic:claude-opus-5-5", PromptFingerprint: "older", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
-	cfg := loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
 	if !cfg.staleConversation {
 		t.Fatal("expected the conversation to be stale")
 	}
 	if err := commandEffort(context.Background(), cfg, []string{"high"}); err != nil {
 		t.Fatalf("effort: %v", err)
 	}
-	if cfg := loadConfig(cliOptions{}); !cfg.staleConversation {
+	if cfg := loadConfig(cliOptions{continueSession: true}); !cfg.staleConversation {
 		t.Fatal("expected the conversation to stay stale after a save")
 	}
 }
@@ -632,7 +644,7 @@ func TestLegacyResumeUsesTheResponsesOwnHistory(t *testing.T) {
 	recordHistory(historyEntry{Type: "assistant", Content: "new answer", ResponseID: "resp-new", ContextTokens: 120000, Provider: provider.OpenAI})
 	activeConversationID = ""
 
-	cfg := loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
 	if cfg.conversation.conversation.ResponseID != "resp-new" || activeConversationID != "c1" {
 		t.Fatalf("expected to continue resp-new in its own scope, got %q in %q", cfg.conversation.conversation.ResponseID, activeConversationID)
 	}
@@ -661,5 +673,343 @@ func TestResumeSaysWhenItRestoresAnotherEffort(t *testing.T) {
 	})
 	if cfg.reasoningEffort != provider.EffortLow || !strings.Contains(out, "at effort low") {
 		t.Fatalf("effort %s, output:\n%s", cfg.reasoningEffort, out)
+	}
+}
+
+func TestStartBeginsANewConversationAndKeepsTheSavedOneForResume(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	saved := savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Effort: "high", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"old":true}`)}}, PromptFingerprint: promptFingerprint(false)}
+	writeSessionFile(sessionPath, saved)
+
+	cfg := loadConfig(cliOptions{})
+	if cfg.model.Provider != provider.Anthropic || cfg.reasoningEffort != provider.EffortHigh {
+		t.Fatalf("expected the saved model and effort to carry over, got %v %s", cfg.model, cfg.reasoningEffort)
+	}
+	if !cfg.conversation.conversation.IsEmpty() || activeConversationID == "cOld" || !cfg.keptPrevious {
+		t.Fatalf("expected a new conversation, got %+v (%s)", cfg.conversation, activeConversationID)
+	}
+	if current, _ := loadSessionFile(sessionPath); current == nil || !current.Conversation.IsEmpty() {
+		t.Fatalf("expected the session file to hold the new conversation, got %+v", current)
+	}
+	if previous, _ := loadSessionFile(previousSessionPath); previous == nil || previous.ConversationID != "cOld" {
+		t.Fatalf("expected the saved conversation to be kept for /resume, got %+v", previous)
+	}
+
+	if err := commandResume(context.Background(), cfg, nil); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(cfg.conversation.conversation.Messages) != 1 || activeConversationID != "cOld" {
+		t.Fatalf("expected /resume to bring the saved conversation back, got %+v (%s)", cfg.conversation, activeConversationID)
+	}
+}
+
+func TestStartingTwiceKeepsTheConversationBeforeAnEmptyOne(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	loadConfig(cliOptions{})
+	// A start that sent nothing leaves an empty conversation behind; the next start must
+	// not let it push out the one /resume brings back.
+	if cfg := loadConfig(cliOptions{}); cfg.keptPrevious {
+		t.Fatal("expected an empty conversation not to be kept")
+	}
+	if previous, _ := loadSessionFile(previousSessionPath); previous == nil || previous.ConversationID != "cOld" {
+		t.Fatalf("expected the earlier conversation to stay for /resume, got %+v", previous)
+	}
+}
+
+func TestOneShotStartWritesNoSessionFiles(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, true, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	var writes []string
+	previous := sessionSaver
+	sessionSaver = func(path string, _ savedSession) error { writes = append(writes, path); return nil }
+	t.Cleanup(func() { sessionSaver = previous })
+
+	// Even with another provider's model, which -c would swap conversations for.
+	t.Setenv("GOAT_MODEL", "gpt-6-luna")
+	if cfg := loadConfig(cliOptions{print: true}); !cfg.conversation.conversation.IsEmpty() {
+		t.Fatalf("expected no conversation, got %+v", cfg.conversation)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("expected a -p start to leave the session files alone, wrote %v", writes)
+	}
+}
+
+func TestAutoCompactThresholdDefaultsAndOverride(t *testing.T) {
+	for _, tc := range []struct {
+		model    provider.Model
+		override int64
+		want     int64
+		why      string
+	}{
+		{provider.Model{Provider: provider.OpenAI, ID: "gpt-6-luna"}, 0, defaultAutoCompactTokens, "cost limit"},
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, 0, defaultClaudeAutoCompactTokens, "cost limit"},
+		{provider.Model{Provider: provider.DeepSeek, ID: "deepseek-v4-pro"}, 0, defaultDeepSeekAutoCompactTokens, "cost limit"},
+		// Claude Haiku 5.5 costs five times as much past 100K prompt tokens.
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}, 0, 90000, "price step"},
+		// A chosen size wins over the price step, but not over the window.
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}, 150000, 150000, "configured"},
+		{provider.Model{Provider: provider.OpenAI, ID: "gpt-6-luna"}, 2_000_000, 922_000 - maxContextReserve, "context window"},
+		// A model goat knows nothing about is assumed to have a 128K window.
+		{provider.Model{Provider: "ollama", ID: "qwen3:8b"}, 200000, provider.DefaultContextWindow * 3 / 4, "context window"},
+	} {
+		cfg := &config{model: tc.model, autoCompactTokens: tc.override}
+		got, why := autoCompactThreshold(cfg)
+		if got != tc.want || !strings.Contains(why, tc.why) {
+			t.Errorf("%s with override %d: got %d (%s), want %d (%s)", tc.model, tc.override, got, why, tc.want, tc.why)
+		}
+	}
+}
+
+func TestLongTurnIsCompactedBetweenToolRounds(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	p := &fakeProvider{name: provider.Anthropic, summary: "MIDSUMMARY", responses: []*provider.Response{
+		{ID: "r1", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "t1", Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: defaultClaudeAutoCompactTokens + 1}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}},
+		{ID: "r2", Stop: provider.StopEndTurn, Text: "done", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":2}`)}}},
+	}}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	cfg.planMode = true
+
+	if err := runPrompt(context.Background(), cfg, "look around"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 1 || len(p.requests) != 2 {
+		t.Fatalf("expected one compaction between the two requests, got %d summaries and %d requests", p.completeCalls, len(p.requests))
+	}
+	next := p.requests[1]
+	if len(next.Conversation.Messages) != 1 || string(next.Conversation.Messages[0]) != `{"seed":true}` || len(next.ToolResults) != 0 {
+		t.Fatalf("expected the second round to continue from the summary without the old tool results, got %+v", next)
+	}
+	if !strings.HasPrefix(next.UserText, planModeNote+modelNote("claude-opus-5-5", provider.Anthropic)) || !strings.Contains(next.UserText, continueAfterCompactionNote) || !strings.Contains(next.UserText, "Result of read_dir (ok):") {
+		t.Fatalf("expected the model to get the tool results and be told to carry on, in plan mode, got %q", next.UserText)
+	}
+	if string(cfg.conversation.conversation.Messages[0]) != `{"n":2}` {
+		t.Fatalf("expected the turn to end on the compacted conversation, got %+v", cfg.conversation)
+	}
+	if previous, _ := loadSessionFile(previousSessionPath); previous != nil {
+		t.Fatalf("expected auto-compaction to leave session.prev.json to the conversation /resume brings back, got %+v", previous)
+	}
+}
+
+// toolRounds scripts n tool rounds that each report usage tokens, then a final answer.
+func toolRounds(n int, usage int64) []*provider.Response {
+	var responses []*provider.Response
+	for i := 1; i <= n; i++ {
+		responses = append(responses, &provider.Response{ID: fmt.Sprintf("r%d", i), Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: fmt.Sprintf("t%d", i), Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: usage}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	}
+	return append(responses, &provider.Response{ID: "end", Stop: provider.StopEndTurn, Text: "done", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+}
+
+func TestMidTurnCompactionStopsWhenItCannotHelp(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// Every round stays over the threshold, even right after compacting.
+	p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: toolRounds(4, defaultClaudeAutoCompactTokens+1)}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 1 {
+		t.Fatalf("expected one compaction for the turn, got %d", p.completeCalls)
+	}
+
+	// A failed summary is not retried every round either.
+	p = &fakeProvider{name: provider.Anthropic, completeErr: errors.New("summary refused"), responses: toolRounds(4, defaultClaudeAutoCompactTokens+1)}
+	cfg = newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 1 {
+		t.Fatalf("expected one failed compaction attempt for the turn, got %d", p.completeCalls)
+	}
+}
+
+func TestContinueAfterAnEmptyStartPicksUpTheLastConversation(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
+	if len(cfg.conversation.conversation.Messages) != 1 || activeConversationID != "cOld" {
+		t.Fatalf("expected -c to continue the last conversation with something in it, got %+v (%s)", cfg.conversation, activeConversationID)
+	}
+}
+
+func TestStartLeavesTheSessionAloneWhenItCannotKeepIt(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	var writes []string
+	previous := sessionSaver
+	sessionSaver = func(path string, _ savedSession) error {
+		writes = append(writes, path)
+		if path == previousSessionPath {
+			return errors.New("disk trouble")
+		}
+		return nil
+	}
+	t.Cleanup(func() { sessionSaver = previous })
+
+	cfg := loadConfig(cliOptions{})
+	saveSession(cfg)
+	if !cfg.conversation.conversation.IsEmpty() || slices.Contains(writes, sessionPath) {
+		t.Fatalf("expected a new conversation that leaves session.json alone, got writes %v", writes)
+	}
+}
+
+func TestShortTurnIsNotCompactedBetweenToolRounds(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: []*provider.Response{
+		{ID: "r1", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "t1", Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: 1000}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}},
+		{ID: "r2", Stop: provider.StopEndTurn, Text: "done", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":2}`)}}},
+	}}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+
+	if err := runPrompt(context.Background(), cfg, "look around"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 0 || len(p.requests[1].ToolResults) != 1 || p.requests[1].UserText != "" {
+		t.Fatalf("expected the tool results to go straight back, got %d summaries and %+v", p.completeCalls, p.requests[1])
+	}
+}
+
+func TestOverflowingPromptIsCompactedAndSentAgain(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	recordHistory(historyEntry{Type: "user", Content: "earlier work"})
+
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		sendErrs:  []error{errors.New("400 invalid_request_error: prompt is too long: 1000500 tokens > 1000000 maximum")},
+		responses: []*provider.Response{{ID: "r1", Stop: provider.StopEndTurn, Text: "ok", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}},
+	}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"old":true}`)}}}
+
+	if err := runPrompt(context.Background(), cfg, "next step"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if p.completeCalls != 1 || len(p.requests) != 2 {
+		t.Fatalf("expected one compaction and one retry, got %d summaries and %d requests", p.completeCalls, len(p.requests))
+	}
+	if retry := p.requests[1]; retry.UserText != modelNote("claude-opus-5-5", provider.Anthropic)+"next step" || string(retry.Conversation.Messages[0]) != `{"seed":true}` {
+		t.Fatalf("expected the prompt again in the compacted conversation, got %+v", retry)
+	}
+}
+
+func TestOverflowPartwayThroughATurnCarriesOnInsteadOfStartingOver(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	rounds := toolRounds(1, 1000)
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		sendErrs:  []error{nil, errors.New("400: This model's maximum context length is 128000 tokens")},
+		responses: rounds,
+	}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+
+	if err := runPrompt(context.Background(), cfg, "do the work"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if len(p.requests) != 3 {
+		t.Fatalf("expected the turn, the failed round and the retry, got %d requests", len(p.requests))
+	}
+	retry := p.requests[2]
+	if strings.Contains(retry.UserText, "do the work") || !strings.Contains(retry.UserText, continueAfterRecoveryNote) || !strings.Contains(retry.UserText, "Result of read_dir (ok):") || len(retry.ToolResults) != 0 {
+		t.Fatalf("expected the retry to carry on with the owed tool results, got %+v", retry)
+	}
+}
+
+func TestTurnStartCountsThePromptAboutToBeSent(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// Claude Haiku 5.5 compacts at 90K, under its 100K price step.
+	model := provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}
+	setup := func() (*fakeProvider, *config) {
+		startConversation(&config{model: model}, conversationState{})
+		recordHistory(historyEntry{Type: "assistant", Content: "earlier", ResponseID: "r0", ContextTokens: 85000})
+		p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: []*provider.Response{{ID: "r1", Stop: provider.StopEndTurn, Text: "ok", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}}}
+		cfg := newModelTestConfig(t, model, p)
+		cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}
+		return p, cfg
+	}
+
+	p, cfg := setup()
+	if err := runPrompt(context.Background(), cfg, "short"); err != nil || p.completeCalls != 0 {
+		t.Fatalf("expected a short prompt to go without compacting, got %v after %d summaries", err, p.completeCalls)
+	}
+	p, cfg = setup()
+	if err := runPrompt(context.Background(), cfg, strings.Repeat("log line\n", 4000)); err != nil || p.completeCalls != 1 {
+		t.Fatalf("expected a 10K-token prompt to bring compaction forward, got %v after %d summaries", err, p.completeCalls)
+	}
+}
+
+func TestPromptTooBigByItselfIsRefusedWithoutCompacting(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	p := &fakeProvider{name: "ollama", summary: "s", sendErrs: []error{errors.New("400: This model's maximum context length is 131072 tokens")}}
+	cfg := newModelTestConfig(t, provider.Model{Provider: "ollama", ID: "deepseek-r1:8b"}, p)
+	err := runPrompt(context.Background(), cfg, strings.Repeat("x", 4*provider.DefaultContextWindow))
+	if err == nil || !strings.Contains(err.Error(), "prompt itself is too big") || p.completeCalls != 0 {
+		t.Fatalf("expected the prompt to be refused without a summary, got %v after %d summaries", err, p.completeCalls)
+	}
+}
+
+func TestRecoveryAfterCompactingPartwayCarriesOnFromTheTurn(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// The conversation starts in the same shape a compaction leaves, so only the turn
+	// itself shows that the model had already started.
+	seeded := provider.Conversation{Provider: provider.Anthropic, ResponseID: "seeded-claude-opus-5-5", Messages: []json.RawMessage{json.RawMessage(`{"seed":true}`)}}
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		responses: toolRounds(1, defaultClaudeAutoCompactTokens+1),
+		sendErrs:  []error{nil, errors.New("prompt is too long")},
+	}
+	p.responses[0].Conversation = seeded
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	cfg.conversation = conversationState{conversation: seeded}
+
+	if err := runPrompt(context.Background(), cfg, "do the work"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	retry := p.requests[len(p.requests)-1]
+	if strings.Contains(retry.UserText, "do the work") || !strings.Contains(retry.UserText, "Result of read_dir (ok):") {
+		t.Fatalf("expected the retry to carry on with the owed results, got %q", retry.UserText)
+	}
+}
+
+func TestResumeIsRefusedInARunThatIsNotSaved(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(previousSessionPath, savedSession{Version: sessionVersion, ConversationID: "cLatest", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	cfg := loadConfig(cliOptions{print: true})
+	cfg.ephemeral = true
+	if err := commandResume(context.Background(), cfg, nil); err == nil {
+		t.Fatal("expected /resume to be refused")
+	}
+	if previous, _ := loadSessionFile(previousSessionPath); previous == nil || previous.ConversationID != "cLatest" {
+		t.Fatalf("expected session.prev.json to be left alone, got %+v", previous)
 	}
 }

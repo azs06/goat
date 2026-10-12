@@ -27,8 +27,9 @@ type config struct {
 	reasoningEffort   provider.Effort
 	autoCompactTokens int64
 	conversation      conversationState
-	// ephemeral is set for a -p run that does not continue the saved conversation; its
-	// session is never written.
+	// ephemeral is set for a -p run that does not continue the saved conversation, and
+	// for a start that could not keep the saved one for /resume; its session is never
+	// written.
 	ephemeral bool
 	// staleConversation is set when the saved conversation was built with a different
 	// system prompt or tool set; it is compacted before it is used again.
@@ -60,6 +61,12 @@ type config struct {
 	// pendingSaved is the saved session goat started without a model to continue it
 	// on. It is left on disk untouched, and restored once /login or /model picks a model.
 	pendingSaved *savedSession
+	// continueSaved, set by -c, makes goat continue the saved conversation. Otherwise
+	// each start begins a new one and keeps the saved one for /resume, so an old
+	// conversation is not sent again, and paid for again, with every request.
+	continueSaved bool
+	// keptPrevious is set when this start set the saved conversation aside for /resume.
+	keptPrevious bool
 	// oneShot is set for a -p run, whose prompt is never a "!" command.
 	oneShot bool
 	// pendingShell holds the output of the "!" commands run since the last message,
@@ -194,17 +201,36 @@ func loadConfig(opts cliOptions) *config {
 		autoCompactTokens = 0
 	}
 
-	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan, codeMode: opts.codeMode || envFlag("GOAT_CODEMODE")}
+	cfg := &config{model: model, reasoningEffort: startupEffort(saved, opts.effort), autoCompactTokens: autoCompactTokens, planMode: opts.plan, codeMode: opts.codeMode || envFlag("GOAT_CODEMODE"), continueSaved: opts.continueSession}
+	if opts.print && !opts.continueSession {
+		// runOneShot gives the run a conversation of its own; the saved one is left as it is.
+		activeConversationID = newConversationID()
+		return cfg
+	}
 	restoreSavedConversation(cfg, saved)
 	return cfg
 }
 
-// restoreSavedConversation continues the saved conversation when it belongs to the
-// active model's provider. Otherwise the previous conversation is tried, and if neither
-// fits a new conversation starts with the saved one kept for /resume. Without a session
-// file it falls back to the response ID in the history log, which is how OpenAI
-// conversations were resumed before.
+// restoreSavedConversation sets up the conversation a start begins with. Unless -c
+// asked to continue, that is a new one, with the saved one kept for /resume.
+//
+// With -c the saved conversation continues when it belongs to the active model's
+// provider. Otherwise the previous conversation is tried, and if neither fits a new
+// conversation starts with the saved one kept for /resume. Without a session file it
+// falls back to the response ID in the history log, which is how OpenAI conversations
+// were resumed before.
 func restoreSavedConversation(cfg *config, saved *savedSession) {
+	if saved != nil && cfg.model.IsZero() {
+		// Without a key there is no model yet; the session files wait for one.
+		activeConversationID = newConversationID()
+		cfg.pendingSaved = saved
+		return
+	}
+	if !cfg.continueSaved {
+		startNewConversation(cfg, saved)
+		return
+	}
+
 	if saved == nil {
 		if cfg.model.Provider == provider.OpenAI {
 			if responseID, conversationID, err := latestResumableConversation(); err != nil {
@@ -221,11 +247,14 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
-	if cfg.model.IsZero() {
-		// Without a key there is no model yet; the session files wait for one.
-		activeConversationID = newConversationID()
-		cfg.pendingSaved = saved
-		return
+	if saved.Conversation.IsEmpty() && len(saved.PendingToolResults) == 0 {
+		// A start that sent nothing leaves an empty session behind; -c means the last
+		// conversation that had something in it.
+		if previous, _ := loadSessionFile(previousSessionPath); previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
+			adoptSavedConversation(cfg, previous)
+			saveSession(cfg)
+			return
+		}
 	}
 	if saved.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, saved)
@@ -252,6 +281,26 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	} else {
 		fmt.Println(formatNotice(fmt.Sprintf("The saved %s conversation was kept; /resume restores it once %s can be used (%v).", saved.Model, saved.Conversation.Provider, err)))
 	}
+}
+
+// startNewConversation begins a new conversation at startup. A saved conversation
+// with anything in it moves to session.prev.json, where /resume finds it; an empty one
+// is not worth keeping and would push out the conversation before it.
+func startNewConversation(cfg *config, saved *savedSession) {
+	if saved == nil || (saved.Conversation.IsEmpty() && len(saved.PendingToolResults) == 0) {
+		activeConversationID = newConversationID()
+		return
+	}
+	if err := sessionSaver(previousSessionPath, *saved); err != nil {
+		// session.json is then the only copy; this run leaves it be, and -c continues it.
+		warnf("failed to keep the saved conversation for /resume: %v; this run will not be saved, and goat -c continues the saved one", err)
+		activeConversationID = newConversationID()
+		cfg.ephemeral = true
+		return
+	}
+	cfg.keptPrevious = true
+	startConversation(cfg, conversationState{})
+	recordHistory(historyEntry{Type: "reset", Provider: cfg.model.Provider})
 }
 
 func parseAutoCompactTokens(raw string) (int64, error) {
@@ -340,13 +389,25 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return err
 	}
 
-	if _, err := maybeAutoCompactConversation(ctx, cfg); err != nil {
+	// Compaction is tried again between tool rounds, but after a failure, or a round
+	// that is still too big right after compacting, not again this turn: each attempt
+	// costs a summary request.
+	midTurnCompaction, justCompacted := true, false
+	// The prompt goes with the turn's first request, so it counts toward the size.
+	if compacted, err := maybeAutoCompactConversation(ctx, cfg, "", prompt); err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
+		midTurnCompaction = false
 		warnf("%v; continuing with the full conversation", err)
+	} else {
+		justCompacted = compacted
 	}
 
+	// turnStarted is set once the model has answered this turn's first request; lastOwed
+	// are the tool results the latest round produced. Recovery needs both, and after a
+	// compaction partway through the turn the conversation's shape no longer shows them.
+	turnStarted, lastOwed := false, []provider.ToolResult(nil)
 	opts := turnOptions{
 		model:       cfg.model.ID,
 		effort:      cfg.reasoningEffort,
@@ -356,6 +417,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
+			turnStarted, lastOwed = true, state.pendingToolResults
 			cfg.conversation = state
 			cfg.pendingShell = nil
 			saveSession(cfg)
@@ -364,6 +426,34 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 			if cfg.interactive && style.Enabled() {
 				setTurnFooter(turnFooterParts(cfg, true))
 			}
+		},
+		// A long tool loop can outgrow the threshold before the turn ends; checked after
+		// each round's checkpoint, so cfg holds the round's state.
+		compact: func(ctx context.Context) (provider.Conversation, bool) {
+			if !midTurnCompaction {
+				return provider.Conversation{}, false
+			}
+			if justCompacted {
+				justCompacted = false
+				if entries, err := loadConversationHistoryEntries(); err == nil {
+					threshold, _ := autoCompactThreshold(cfg)
+					if over, _ := shouldAutoCompactConversation(entries, threshold); over {
+						midTurnCompaction = false
+						warnf("the conversation is still over the auto-compact threshold right after compacting; not compacting again this turn")
+						return provider.Conversation{}, false
+					}
+				}
+			}
+			compacted, err := maybeAutoCompactConversation(ctx, cfg, midTurnCompactionFocus, "")
+			if err != nil {
+				midTurnCompaction = false
+				if ctx.Err() == nil {
+					warnf("%v; continuing with the full conversation", err)
+				}
+				return provider.Conversation{}, false
+			}
+			justCompacted = compacted
+			return cfg.conversation.conversation, compacted
 		},
 	}
 	defer saveSession(cfg)
@@ -383,23 +473,41 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		// that failed outright keeps it for /retry.
 		cfg.pendingShell = nil
 	}
-	if err == nil || !provider.IsThinkingBindingError(err) {
+	if err == nil || !provider.IsThinkingBindingError(err) && !errors.Is(err, errContextExceeded) {
 		return err
 	}
 
-	// The API no longer accepts this conversation's thinking blocks. Carry it over in a
-	// summary and try once more.
-	fmt.Println(formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
+	// The API no longer accepts this conversation's thinking blocks, or it outgrew the
+	// model's window. Carry it over in a summary and try once more. A turn the model had
+	// already started goes on from where it was instead of starting over.
+	moved := turnStarted || conversationMoved(sent, next.conversation)
+	owed := next.pendingToolResults
+	if len(owed) == 0 && turnStarted {
+		// A request after compacting partway through carried them as text.
+		owed = lastOwed
+	}
+	if errors.Is(err, errContextExceeded) && !moved && int64(len([]rune(prompt)))/charsPerTokenEstimate >= contextBudget(cfg) {
+		// No summary makes room for a prompt that does not fit by itself.
+		return fmt.Errorf("%w: the prompt itself is too big for this model; shorten it", err)
+	}
+	fmt.Fprintln(activityOut, formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
 	summaryConversation, summary, compactErr := compactConversation(ctx, p, cfg.model.ID, "")
 	if compactErr != nil {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
+	if moved {
+		// The note and any ! output went with the turn's first request.
+		opts.contextNote = ""
+	}
 	sent = cfg.conversation.conversation
-	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
+	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || conversationMoved(sent, next.conversation) {
 		cfg.pendingShell = nil
+	}
+	if errors.Is(err, errContextExceeded) {
+		return fmt.Errorf("%w even after compacting; shorten the prompt, or start over with /clear", err)
 	}
 	return err
 }
@@ -489,8 +597,11 @@ func migrateLegacyState(oneShot bool) {
 // printWelcome shows the banner and the notices about the restored state.
 func printWelcome(cfg *config) {
 	printBanner(cfg)
-	if !cfg.conversation.conversation.IsEmpty() {
-		fmt.Println(formatNotice("Resumed saved conversation context."))
+	switch {
+	case !cfg.conversation.conversation.IsEmpty():
+		fmt.Println(formatNotice("Continuing the saved conversation."))
+	case cfg.keptPrevious:
+		fmt.Println(formatNotice("New conversation; /resume brings back the previous one."))
 	}
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		fmt.Println(formatNotice("Project instructions: " + strings.Join(sources, ", ") + " (sent with each new conversation)."))
@@ -730,10 +841,6 @@ func main() {
 		code := runOneShot(cfg, opts)
 		stopBackgroundOnExit(os.Stderr)
 		os.Exit(code)
-	}
-	if opts.newConversation && !cfg.conversation.conversation.IsEmpty() {
-		replaceConversation(cfg, conversationState{})
-		recordHistory(historyEntry{Type: "reset", Provider: cfg.model.Provider})
 	}
 	if opts.prompt != "" {
 		// A prompt on the command line runs first, as if it had been queued.

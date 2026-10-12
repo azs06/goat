@@ -153,6 +153,11 @@ func commandClear(ctx context.Context, c *config, args []string) error {
 
 // commandResume swaps the current conversation with the one kept in session.prev.json.
 func commandResume(ctx context.Context, c *config, args []string) error {
+	if c.ephemeral {
+		// Swapping would write over session.prev.json, which may hold the latest
+		// conversation, while the one resumed here is never saved.
+		return fmt.Errorf("/resume is not available in a run that is not saved; start goat with -c, or without -p")
+	}
 	previous, err := loadSessionFile(previousSessionPath)
 	if err != nil {
 		return err
@@ -419,7 +424,8 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	}
 	rows = append(rows, [2]string{"Session:", conversation})
 	if entries, err := loadConversationHistoryEntries(); err == nil {
-		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d", estimateConversationTokens(entries), autoCompactThreshold(c))})
+		threshold, why := autoCompactThreshold(c)
+		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d (%s)", estimateConversationTokens(entries), threshold, why)})
 		if cost, responses, known := usageCost(historyEntriesSinceLastReset(entries)); responses > 0 {
 			text := formatCost(cost) + " for this conversation"
 			if !known {
@@ -544,6 +550,9 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		}
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		if c.keptPrevious {
+			fmt.Println(formatNotice("New conversation; /resume brings back the previous one."))
+		}
 		printModelLine(c)
 		return nil
 	}

@@ -701,7 +701,7 @@ func TestMaybeAutoCompactConversationCompactsAndUpdatesResponseID(t *testing.T) 
 		providers:       map[string]provider.Provider{provider.OpenAI: provider.NewOpenAIWith(create, nil)},
 	}
 
-	compacted, err := maybeAutoCompactConversation(context.Background(), cfg)
+	compacted, err := maybeAutoCompactConversation(context.Background(), cfg, "", "")
 	if err != nil {
 		t.Fatalf("maybeAutoCompactConversation: %v", err)
 	}
