@@ -141,7 +141,7 @@ func loadSessionFile(path string) (*savedSession, error) {
 		if renameErr := os.Rename(resolvedPath, corruptPath); renameErr != nil {
 			return nil, fmt.Errorf("read %s: %w", path, decodeErr)
 		}
-		warnf("%s was unreadable (%v); moved it to %s", path, decodeErr, filepath.Base(corruptPath))
+		warnf("%s was unreadable (%v); moved it to %s", displayPath(resolvedPath), decodeErr, displayPath(corruptPath))
 		return nil, nil
 	}
 	return &session, nil

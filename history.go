@@ -146,7 +146,7 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 		}
 	}
 	if skipped > 0 {
-		warnf("skipped %d unreadable line(s) in %s", skipped, conversationHistoryPath())
+		warnf("skipped %d unreadable line(s) in %s", skipped, displayPath(resolvedPath))
 	}
 
 	return historyCache.entries[:len(historyCache.entries):len(historyCache.entries)], nil

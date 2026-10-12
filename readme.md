@@ -353,7 +353,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
 | `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2` (by number, or by the group ID it lists), `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
-| `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
+| `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands and keys. |
@@ -419,7 +419,7 @@ one round trip and keeps the intermediate text out of the conversation. The call
 script makes are shown indented under it as they run.
 
 - Every call goes through the same checks as a direct call: workspace paths, the `.env`
-  and `.goat` refusals, plan mode, and approval for each `run_bash` command. Each change is
+  and state directory refusals, plan mode, and approval for each `run_bash` command. Each change is
   its own `/undo` step.
 - The script runs in an embedded JavaScript engine ([goja](https://github.com/dop251/goja))
   with nothing but `goat` and `console`: no file, network, environment or process access,
@@ -557,7 +557,14 @@ Ollama's, not Mistral's.
 
 ## Conversations and state
 
-goat keeps its state in `.goat/` inside the workspace:
+goat keeps each workspace's state outside it, the way other coding agents do, in a
+directory of its own under your state directory:
+`~/.local/state/goat/projects/<workspace>/` (`$XDG_STATE_HOME/goat/projects/<workspace>/`
+when that is set). `<workspace>` is the workspace's path with `/` turned into `-` and a
+short hash added, such as `-Users-you-code-app-1a2b3c4d`, with symlinks resolved (and,
+on macOS and Windows, in lower case), so the same folder reached by another path keeps
+its state. `/history` shows where. The directory is readable only by you. Without a home
+directory, goat keeps it in the temporary directory.
 
 | File | |
 | --- | --- |
@@ -593,10 +600,14 @@ prompt too big for the model by itself is refused instead. If
 `session.json` or `operations.json` cannot be read, goat moves it aside with a
 `.corrupt-<time>` suffix, warns, and starts fresh.
 
+Older versions kept these files in a `.goat/` directory in the workspace. goat moves them
+the first time it starts there and removes `.goat/`, saying so. A file the state
+directory already has is left in `.goat/` instead, with a warning.
+
 ## Safety
 
 - File tools only accept paths inside the workspace, refuse symlinks that lead outside it,
-  and cannot touch `.goat/`. They also refuse `.env`, `.env.*` and `.envrc` (templates such
+  and cannot touch goat's state directory, or a `.goat/` an older goat left. They also refuse `.env`, `.env.*` and `.envrc` (templates such
   as `.env.example` stay readable), and `grep_files` skips them, so credentials never reach
   the model through a file tool.
 - A provider's key goes to its own API unless its base URL says otherwise, and only your
@@ -641,7 +652,8 @@ prompt too big for the model by itself is refused instead. If
   every command for the rest of the session, or type feedback to decline with a reason the
   model sees. Commands time out after 30 seconds, and everything a command started is
   killed with it. Changes made through `run_bash` are not snapshotted. A command that
-  mentions `.goat` is always confirmed, even when commands otherwise run without asking.
+  mentions goat's state directory (or `.goat`) is always confirmed, even when commands
+  otherwise run without asking.
 - What a command leaves running in the background, such as a server started with `&`
   (with its output redirected to a file, or it stops at its next write), keeps running
   after the command returns. goat keeps track of it by process group: `/ps` lists and
@@ -658,9 +670,12 @@ theme, after Atom's: blue accents and borders, red headings, green and red for s
 errors and diffs, yellow for warnings and approvals.
 
 ```sh
-/theme one-dark        # switch for this session; /theme default switches back
-"theme": "one-dark"    # in ~/.config/goat/config.json, to start with it
+/theme                 # pick a theme with the arrow keys
+/theme one-dark        # or name it; /theme default switches back
 ```
+
+Either way the choice is saved as `"theme": "one-dark"` in `~/.config/goat/config.json`,
+so goat starts with it next time (unless `GOAT_THEME` is set in your shell, which wins).
 
 Case, spaces, hyphens and underscores in a built-in theme's name do not matter, so
 `onedark` and `One Dark` are one-dark too. A misspelled name is not applied; `/theme` and
@@ -691,7 +706,7 @@ property, the way CSS cascades: roles you leave out keep their defaults, and
 `font-weight: normal` turns a default bold off. To adjust a built-in theme instead, name
 it in `"extends"`, e.g. `{"extends": "one-dark", "styles": {"heading": "color: #61afef"}}`;
 the built-in themes are in [`internal/style/themes`](internal/style/themes). `/theme`
-reloads the file and lists the built-in themes.
+offers your file alongside the built-in themes; picking it again reloads it after an edit.
 
 - **Properties:** `color`, `background-color` (or `background`), `font-weight` (`bold`,
   `normal`, `lighter`, or 100-900; light weights draw faint), `font-style` (`italic`,

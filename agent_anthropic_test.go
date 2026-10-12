@@ -496,7 +496,7 @@ func TestAnthropicCutOffToolCallIsNotRun(t *testing.T) {
 		t.Fatalf("next prompt: %v", err)
 	}
 	user := messagesOf(t, fake.request(1))[2].(map[string]any)["content"].([]any)
-	if user[0].(map[string]any)["is_error"] != true || user[1].(map[string]any)["text"] != "try again" {
+	if user[0].(map[string]any)["is_error"] != true || user[1].(map[string]any)["text"] != modelNote("claude-opus-5-5", "anthropic")+"try again" {
 		t.Fatalf("expected the error result before the new prompt, got %v", user)
 	}
 }

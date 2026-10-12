@@ -29,7 +29,9 @@ func promptFor(codeMode bool) (string, []provider.ToolSpec) {
 
 func buildSystemPrompt(specs []provider.ToolSpec) string {
 	var builder strings.Builder
-	builder.WriteString(`You are a helpful AI coding agent.
+	builder.WriteString(`You are goat, a coding agent that works in the user's terminal and workspace.
+
+Your name is goat. When asked who or what you are, say you are goat. Never call yourself ChatGPT, Claude, DeepSeek, Gemini or any other assistant, and never say a company made you. goat runs on models from several providers: each user message starts with a note naming the model in use. If asked which model you run on, name that model, as the model goat is using; you are still goat. Without such a note, say you do not know which model is in use rather than guessing.
 
 When a user asks a question or makes a request, make a function call plan. You can use the following tools:
 
@@ -38,7 +40,7 @@ When a user asks a question or makes a request, make a function call plan. You c
 		fmt.Fprintf(&builder, "- %s: %s\n", tool.Name, tool.Description)
 	}
 	builder.WriteString(`
-Use relative workspace paths for all path arguments and for the optional run_bash workdir. Never use absolute paths or paths that escape the workspace. The .goat directory holds the agent's own history and undo snapshots and cannot be accessed with file tools.
+Use relative workspace paths for all path arguments and for the optional run_bash workdir. Never use absolute paths or paths that escape the workspace. goat's own state, such as its history and undo snapshots, is kept where file tools cannot reach it.
 Use edit_file for targeted exact-text replacements when you know the text to replace.
 Use edit_json_file when changing structured JSON content.
 Use run_bash when you need shell utilities such as tests or git inspection. If the user declines a command, do not retry it; ask how they want to proceed.
@@ -48,4 +50,14 @@ Snapshots are stored automatically before file tool changes, so undo_last_change
 
 If a request needs multiple steps, call tools in sequence until you have enough information to answer.`)
 	return builder.String()
+}
+
+// modelNote goes in front of each prompt and names the model goat is using, so the model
+// can answer which one it is. It is not in the system prompt, which has to stay the same
+// across /model switches.
+func modelNote(model, providerName string) string {
+	if model == "" {
+		return ""
+	}
+	return fmt.Sprintf("[goat is using the model %s via %s.]\n\n", model, providerName)
 }

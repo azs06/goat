@@ -136,14 +136,14 @@ type bashApprover struct {
 }
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
-	touchesState := workspace.MentionsStateDir(command)
+	touchesState := mentionsStateDir(command, workdir)
 	touchesKeys := mentionsConfigDir(command, workdir)
 	if a.autoApprove && !touchesState && !touchesKeys {
 		return nil
 	}
 	if !a.interactive {
 		if touchesState {
-			return fmt.Errorf("%w: commands that touch %s always need the user's approval", errBashCommandDeclined, workspace.StateDirName)
+			return fmt.Errorf("%w: commands that touch goat's state directory, with its history and undo snapshots, always need the user's approval", errBashCommandDeclined)
 		}
 		if touchesKeys {
 			return fmt.Errorf("%w: commands that mention goat's config directory, which holds the user's API keys, always need the user's approval", errBashCommandDeclined)
@@ -158,7 +158,7 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	defer resume()
 
 	if touchesState {
-		fmt.Println("\n" + formatWarning(fmt.Sprintf("This command touches %s, goat's history and undo snapshots; run_bash changes are not undoable.", workspace.StateDirName)))
+		fmt.Println("\n" + formatWarning("This command may touch goat's state directory, "+displayPath(workspace.StateHome())+", with the history and undo snapshots; run_bash changes are not undoable."))
 	}
 	if touchesKeys {
 		fmt.Println("\n" + formatWarning("This command mentions goat's config directory, where "+displayPath(globalEnvPath())+" may hold your API keys."))

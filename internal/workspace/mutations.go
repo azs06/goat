@@ -514,7 +514,7 @@ func loadOperationRecords(setAsideCorrupt bool) ([]operationRecord, error) {
 		if renameErr := os.Rename(resolvedPath, corruptPath); renameErr != nil {
 			return nil, fmt.Errorf("decode operations: %w", err)
 		}
-		Warnf("%s was unreadable (%v); moved it to %s and started a new operation log", defaultOperationsPath, err, filepath.Base(corruptPath))
+		Warnf("%s was unreadable (%v); moved it to %s and started a new operation log", resolvedPath, err, corruptPath)
 		return nil, nil
 	}
 
@@ -1049,6 +1049,9 @@ func ensureDirectoryPath(dirPath string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseProtectedWithin(resolvedPath, dirPath); err != nil {
+		return nil, err
+	}
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
@@ -1064,6 +1067,9 @@ func ensureDirectoryPath(dirPath string) (os.FileInfo, error) {
 func destinationPathAvailableForPath(filePath string, overwrite bool) error {
 	resolvedPath, _, err := ResolvePath(filePath)
 	if err != nil {
+		return err
+	}
+	if err := refuseProtectedWithin(resolvedPath, filePath); err != nil {
 		return err
 	}
 
@@ -1163,6 +1169,16 @@ func PreviewCopyDir(sourcePath, destinationPath string, overwrite bool) (string,
 
 	desiredState := transplantStateRoot(sourceState, sourcePath, destinationPath)
 	return fmt.Sprintf("Preview for copy_dir from %s to %s:\n%s", filepath.ToSlash(filepath.Clean(sourcePath)), filepath.ToSlash(filepath.Clean(destinationPath)), renderStateDiff(destinationState, desiredState)), nil
+}
+
+// refuseProtectedWithin refuses a directory holding a protected one, such as goat's
+// config or state directory in the home directory: copying, moving or deleting it would
+// take that along.
+func refuseProtectedWithin(resolvedPath, path string) error {
+	if dir, ok := protectedDirWithin(resolvedPath); ok {
+		return fmt.Errorf("%s holds %s, so file tools do not copy, move or delete it", filepath.ToSlash(filepath.Clean(path)), dir.what)
+	}
+	return nil
 }
 
 // MoveDir moves or renames a directory within the workspace and records the change

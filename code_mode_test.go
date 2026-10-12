@@ -76,9 +76,9 @@ func TestCodeModeOffersRunCodeOnlyWhenOn(t *testing.T) {
 			t.Errorf("%s is missing from the code mode tool list", spec.Name)
 		}
 	}
-	// The prompt itself is not touched either way.
+	// The prompt itself gets only the model note either way.
 	for _, req := range []recordedRequest{off, on} {
-		if text := messagesOf(t, req)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); text != "count TODOs" {
+		if text := messagesOf(t, req)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); text != modelNote("claude-opus-5-5", "anthropic")+"count TODOs" {
 			t.Errorf("got prompt %q", text)
 		}
 	}

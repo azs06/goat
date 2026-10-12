@@ -28,7 +28,7 @@ func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
 	}
 
 	// A replaced file is read again from the start.
-	if err := os.Remove(".goat/history.jsonl"); err != nil {
+	if err := os.Remove(statePath(t, "history.jsonl")); err != nil {
 		t.Fatal(err)
 	}
 	recordHistory(historyEntry{Type: "user", Content: "fresh"})
@@ -52,7 +52,7 @@ func TestHistorySurvivesHugeAndCorruptEntries(t *testing.T) {
 	recordHistory(historyEntry{Type: "tool_output", ToolName: "run_bash", Content: strings.Repeat("x", 2<<20)})
 	recordHistory(historyEntry{Type: "assistant", Content: "done", ResponseID: "resp-1"})
 
-	historyPath := filepath.Join(workDir, ".goat", "history.jsonl")
+	historyPath := filepath.Join(statePath(t, ""), "history.jsonl")
 	file, err := os.OpenFile(historyPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatalf("open history: %v", err)

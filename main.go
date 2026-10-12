@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -564,6 +566,34 @@ func handleInput(cfg *config, text string) error {
 	return err
 }
 
+// migrateLegacyState moves the .goat directory an older goat kept in the workspace to
+// goat's state directory, and says so. A -p run says it on stderr, keeping stdout for
+// the reply.
+func migrateLegacyState(oneShot bool) {
+	result, err := workspace.MigrateLegacyState()
+	if err != nil {
+		warnf("could not move %s out of the workspace: %v", workspace.StateDirName, err)
+		return
+	}
+	if len(result.Moved) > 0 {
+		message := fmt.Sprintf("Moved goat's files from %s to %s.", workspace.StateDirName, displayPath(result.Root))
+		switch {
+		case !oneShot:
+			fmt.Println(formatNotice(message))
+		case stderrColor():
+			fmt.Fprintln(os.Stderr, formatNotice(message))
+		default:
+			fmt.Fprintln(os.Stderr, message)
+		}
+	}
+	if len(result.Clashed) > 0 {
+		warnf("%s still holds %s: %s already has files of those names, so they were left; remove them from %s once you no longer need them", workspace.StateDirName, strings.Join(result.Clashed, ", "), displayPath(result.Root), workspace.StateDirName)
+	}
+	for _, name := range slices.Sorted(maps.Keys(result.Failed)) {
+		warnf("could not move %s/%s to %s: %v", workspace.StateDirName, name, displayPath(result.Root), result.Failed[name])
+	}
+}
+
 // printWelcome shows the banner and the notices about the restored state.
 func printWelcome(cfg *config) {
 	printBanner(cfg)
@@ -756,7 +786,7 @@ func main() {
 	// providers auth.json supplies.
 	// File tools stay out of the config directory, which a workspace such as the home
 	// directory contains.
-	workspace.ProtectDir(goatConfigDir())
+	workspace.ProtectDir(goatConfigDir(), "goat's config directory, which holds the user's keys")
 	authWarnings, err := loadAuthFile()
 	if err != nil {
 		log.Fatal(err)
@@ -770,6 +800,8 @@ func main() {
 	envWarnings = append(envWarnings, globalWarnings...)
 	// Before the terminal is set up, so a password manager can prompt on it.
 	envWarnings = append(envWarnings, runKeyCommands()...)
+	// Nor into goat's own state, once the global .env, which can set XDG_STATE_HOME, is in.
+	workspace.ProtectDir(workspace.StateHome(), "goat's state directory, with the history and undo snapshots")
 	// Read at package initialization, before the files loaded.
 	style.Detect()
 	reducedMotion = envFlag("GOAT_REDUCED_MOTION")
@@ -790,6 +822,8 @@ func main() {
 	for _, warning := range append(envWarnings, endpointNotices()...) {
 		warnf("%s", warning)
 	}
+	// Before the session is read: an older goat kept it in the workspace.
+	migrateLegacyState(opts.print)
 	cfg := loadConfig(opts)
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()

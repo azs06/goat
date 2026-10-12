@@ -56,7 +56,7 @@ func init() {
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
-		{name: "theme", usage: "/theme [name]", description: "Switch to a built-in theme, such as one-dark, or reload the theme file", callback: commandTheme},
+		{name: "theme", usage: "/theme [name]", description: "Pick the theme, or switch to a built-in one such as one-dark (saved in config.json)", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
 		{name: "undo", usage: "/undo [preview|skip]", description: "Undo the latest file change (/undo skip gives up on one that cannot be restored)", callback: commandUndo},
 	}
@@ -246,13 +246,13 @@ func commandHistory(ctx context.Context, c *config, args []string) error {
 	}
 
 	if info, err := os.Stat(resolvedPath); err == nil {
-		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", relPath, style.Muted.Render(fmt.Sprintf("(%d bytes)", info.Size())))}}))
+		fmt.Println(renderKeyValues([][2]string{{"Conversation history:", fmt.Sprintf("%s %s", displayPath(relPath), style.Muted.Render(fmt.Sprintf("(%d bytes)", info.Size())))}}))
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 
-	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", relPath + " " + style.Muted.Render("(not created yet)")}}))
+	fmt.Println(renderKeyValues([][2]string{{"Conversation history:", displayPath(relPath) + " " + style.Muted.Render("(not created yet)")}}))
 	return nil
 }
 
