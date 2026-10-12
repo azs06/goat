@@ -18,7 +18,8 @@ import (
 type Entry struct {
 	Name string
 	// API is the wire format the server speaks: APIAnthropic (the Messages API) or
-	// APIOpenAI (Chat Completions).
+	// APIOpenAI (Chat Completions), or APIOpenCode for the opencode-go preset, which
+	// speaks both.
 	API     string
 	BaseURL string
 	// KeyEnv names the variable that holds the key. KeyCommand is a command that prints
@@ -101,13 +102,16 @@ func NewEntry(name string) (Provider, error) {
 		return nil, unknownProviderError(name)
 	}
 	_, key, _ := Credential(name)
-	if entry.API == APIOpenAI {
+	switch entry.API {
+	case APIOpenAI:
 		return newChatProvider(name, entry.BaseURL, key), nil
+	case APIOpenCode:
+		return newOpenCode(name, entry.BaseURL, key), nil
 	}
 	return newAnthropicEntry(name, entry.BaseURL, key), nil
 }
 
-// SpeaksAnthropic reports a provider reached through the Anthropic Messages API:
+// SpeaksAnthropic reports a provider reached through the Anthropic Messages API alone:
 // Anthropic, DeepSeek and Anthropic-compatible entries.
 func SpeaksAnthropic(name string) bool {
 	if entry, ok := entries[name]; ok {

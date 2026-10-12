@@ -533,6 +533,7 @@ ones that have one. They list no models of their own: `/model` asks the provider
 | Name | Provider | Variable | Base URL |
 | --- | --- | --- | --- |
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
+| `opencode-go` | OpenCode Go | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1` |
 | `gemini` | Google Gemini | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `xai` | xAI (Grok) | `XAI_API_KEY` | `https://api.x.ai/v1` |
 | `meta` | Meta (Muse) | `META_API_KEY` | `https://api.meta.ai/v1` |
@@ -545,6 +546,16 @@ ones that have one. They list no models of their own: `/model` asks the provider
 | `zai` | Z.ai (GLM) | `ZAI_API_KEY` | `https://api.z.ai/api/paas/v4` |
 | `qwen` | Qwen (Alibaba Model Studio, international) | `DASHSCOPE_API_KEY` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | `minimax` | MiniMax | `MINIMAX_API_KEY` | `https://api.minimax.io/v1` |
+
+[OpenCode Go](https://opencode.ai/docs/go) is the exception to "OpenAI-compatible": one
+subscription serving open models through Chat Completions (Kimi, GLM, DeepSeek, MiMo and
+others) and the Anthropic Messages API (MiniMax, Qwen, Claude Haiku), and goat picks the
+API per model, as OpenCode's docs list it. The `/model` picker offers goat's list of its
+models, and `/model list` adds any others the server reports; they need the prefix, e.g. `/model opencode-go:kimi-k3`, so a bare
+`deepseek-v4-pro` stays DeepSeek's own. Its GPT, Grok and Muse models are served through
+OpenAI's Responses API, which goat speaks only to OpenAI, and are refused. Switching
+between a Chat Completions model and a Messages model carries the conversation over, as a
+switch of provider does.
 
 Like the built-in keys, these variables are kept from `run_bash` commands once goat
 knows them. A key for another region, such as Moonshot's or Qwen's mainland China API,

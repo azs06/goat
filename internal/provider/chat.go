@@ -33,11 +33,12 @@ type chatProvider struct {
 // newChatProvider creates the adapter. It does not use openai.NewClient, which adds
 // OPENAI_API_KEY, OPENAI_ORG_ID and OPENAI_PROJECT_ID from the environment: those belong
 // to OpenAI and must not reach another server.
-func newChatProvider(name, baseURL, apiKey string) *chatProvider {
+func newChatProvider(name, baseURL, apiKey string, extra ...option.RequestOption) *chatProvider {
 	opts := []option.RequestOption{option.WithHTTPClient(keyClient(0)), option.WithBaseURL(baseURL)}
 	if apiKey != "" {
 		opts = append(opts, option.WithAPIKey(apiKey))
 	}
+	opts = append(opts, extra...)
 	return &chatProvider{
 		name:        name,
 		completions: openai.NewChatCompletionService(opts...),

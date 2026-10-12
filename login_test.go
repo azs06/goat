@@ -217,7 +217,7 @@ func TestPresetsNeedOnlyAKey(t *testing.T) {
 		t.Fatalf("got %q, %q", loginStatus("gemini"), loginStatus("openrouter"))
 	}
 	completions := commandArgumentCompletions(&config{})("login", "open")
-	if len(completions) != 2 || completions[1].display != "openrouter" || !strings.Contains(completions[1].description, "OpenRouter") {
+	if len(completions) != 3 || completions[1].display != "openrouter" || !strings.Contains(completions[1].description, "OpenRouter") || completions[2].display != provider.OpenCodeGo {
 		t.Fatalf("got %+v", completions)
 	}
 }

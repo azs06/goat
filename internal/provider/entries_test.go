@@ -211,14 +211,14 @@ func TestMissingEntryKeyNamesTheVariable(t *testing.T) {
 func TestConversationFitsTheEntrysCurrentAPI(t *testing.T) {
 	entriesTest(t, `{"local": {"api": "anthropic", "base_url": "http://localhost:1"}}`)
 	chat := Conversation{Provider: "local", Format: FormatChat, Messages: []json.RawMessage{json.RawMessage(`{}`)}}
-	if chat.Fits("local") {
+	if chat.Fits(Model{Provider: "local", ID: "m"}) {
 		t.Fatal("a Chat Completions transcript must not continue on an Anthropic-format entry")
 	}
 	messages := Conversation{Provider: "local", Messages: chat.Messages}
-	if !messages.Fits("local") || messages.Fits("other") || !(Conversation{}).Fits("local") {
+	if !messages.Fits(Model{Provider: "local", ID: "m"}) || messages.Fits(Model{Provider: "other", ID: "m"}) || !(Conversation{}).Fits(Model{Provider: "local", ID: "m"}) {
 		t.Fatal("Fits")
 	}
-	if !(Conversation{Provider: Anthropic, Messages: chat.Messages}).Fits(Anthropic) {
+	if !(Conversation{Provider: Anthropic, Messages: chat.Messages}).Fits(Model{Provider: Anthropic, ID: DefaultAnthropicModel}) {
 		t.Fatal("built-in transcripts fit their provider")
 	}
 }

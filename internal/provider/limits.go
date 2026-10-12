@@ -58,11 +58,14 @@ func KnownLimits(model string) Limits {
 // KnownLimitsFor is KnownLimits for a model of the named provider. Only the built-in
 // providers serve the models the table describes: a providers.json entry's model that
 // shares a name, such as an Ollama build of a DeepSeek model, may have a far smaller
-// window.
+// window. OpenCode Go has a table of its own.
 func KnownLimitsFor(providerName, model string) Limits {
 	switch providerName {
 	case OpenAI, Anthropic, DeepSeek:
 		return KnownLimits(model)
+	}
+	if isOpenCode(providerName) {
+		return openCodeLimits(model)
 	}
 	return Limits{}
 }

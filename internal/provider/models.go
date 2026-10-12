@@ -206,6 +206,9 @@ func curatedModels(provider string) []string {
 	case DeepSeek:
 		return []string{DefaultDeepSeekModel, "deepseek-flash"}
 	default:
+		if isOpenCode(provider) {
+			return openCodeModels
+		}
 		return entries[provider].Models
 	}
 }
@@ -237,8 +240,9 @@ func ModelChoices(current Model, extra map[string][]string) []Model {
 }
 
 // pickerModels narrows a provider's models to the ones the picker offers: OpenAI's
-// GPT-5.6 and GPT-6 series, Claude's 5.5 models and Claude Fable 5.1, and DeepSeek's
-// newest pro and flash models. Any model can still be chosen by name.
+// GPT-5.6 and GPT-6 series, Claude's 5.5 models and Claude Fable 5.1, DeepSeek's
+// newest pro and flash models, and the OpenCode Go models off the Responses API. Any model can
+// still be chosen by name.
 func pickerModels(provider string, ids []string) []string {
 	switch provider {
 	case OpenAI:
@@ -257,6 +261,9 @@ func pickerModels(provider string, ids []string) []string {
 	case DeepSeek:
 		return newestDeepSeekModels(ids)
 	default:
+		if isOpenCode(provider) {
+			return filterModels(ids, func(id string) bool { return openCodeAPI(id) != apiResponses })
+		}
 		// An entry that lists models offers just those; one without offers whatever its
 		// server lists.
 		if listed := entries[provider].Models; len(listed) > 0 {
