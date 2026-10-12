@@ -39,12 +39,24 @@ func goatConfigDir() string {
 // boundary: it matches text, so quoting, globs, variables or a cd earlier in the
 // command get past it.
 func mentionsConfigDir(command, workdir string) bool {
+	return mentionsDir(command, workdir, goatConfigDir(), "config/goat", `config\goat`, "xdg_config_home")
+}
+
+// mentionsStateDir reports a command that may touch goat's state directory, with the
+// history and undo snapshots: by its path, relative or absolute, or by the usual ways
+// to spell it. A .goat directory left by an older goat counts too.
+func mentionsStateDir(command, workdir string) bool {
+	return workspace.MentionsStateDir(command) || mentionsDir(command, workdir, workspace.StateHome(), "state/goat", `state\goat`, "xdg_state_home")
+}
+
+// mentionsDir reports a command that names dir, by its path, relative to workdir or
+// absolute, or by one of the needles; a command run inside dir counts too.
+func mentionsDir(command, workdir, dir string, needles ...string) bool {
 	lower := strings.ToLower(command)
 	for strings.Contains(lower, "//") || strings.Contains(lower, "/./") {
 		lower = strings.ReplaceAll(strings.ReplaceAll(lower, "//", "/"), "/./", "/")
 	}
-	needles := []string{"config/goat", `config\goat`, "xdg_config_home"}
-	if dir := goatConfigDir(); dir != "" {
+	if dir != "" {
 		needles = append(needles, strings.ToLower(dir))
 		if abs, err := filepath.Abs(workdir); err == nil {
 			if within(abs, dir) {

@@ -83,9 +83,9 @@ func CommandEnvironment(environ []string) []string {
 	return kept
 }
 
-// MentionsStateDir reports a command that names goat's state directory. Such commands
-// are always confirmed, even when commands run without asking, since run_bash changes
-// are not snapshotted and .goat holds the history and undo snapshots.
+// MentionsStateDir reports a command that names a .goat directory, where an older goat
+// kept the history and undo snapshots. Such commands are always confirmed, even when
+// commands run without asking, since run_bash changes are not snapshotted.
 func MentionsStateDir(command string) bool {
 	return strings.Contains(strings.ToLower(command), strings.ToLower(StateDirName))
 }

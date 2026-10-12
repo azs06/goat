@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func runGoat(t *testing.T, workspace, stdin string, env []string, args ...string
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestMainProcess$")
 	cmd.Dir = workspace
-	cmd.Env = append(cleanGoatEnv(), "GOAT_TEST_MAIN=1", "GOAT_TEST_ARGS="+strings.Join(args, " "), "HOME="+workspace, "XDG_CONFIG_HOME="+workspace+"/config")
+	cmd.Env = append(cleanGoatEnv(), "GOAT_TEST_MAIN=1", "GOAT_TEST_ARGS="+strings.Join(args, " "), "HOME="+workspace, "XDG_CONFIG_HOME="+workspace+"/config", "XDG_STATE_HOME="+workspace+"/state")
 	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr strings.Builder
@@ -102,7 +103,7 @@ func TestProcessOneShot(t *testing.T) {
 	if code != 0 || strings.TrimSpace(out) != "The answer is 4." {
 		t.Fatalf("stdout %q stderr %q exit %d", out, errOut, code)
 	}
-	if _, err := os.Stat(workspace + "/.goat/session.json"); err == nil {
+	if matches, _ := filepath.Glob(workspace + "/state/goat/projects/*/session.json"); len(matches) != 0 {
 		t.Error("expected -p to leave the session alone")
 	}
 	if !strings.Contains(fake.request(0).raw, "what is 2+2") {
@@ -113,5 +114,22 @@ func TestProcessOneShot(t *testing.T) {
 	_, errOut, code = runGoat(t, workspace, "", []string{"ANTHROPIC_API_KEY=test", "ANTHROPIC_BASE_URL=http://127.0.0.1:1"}, "-p", "again")
 	if code != 1 || errOut == "" {
 		t.Fatalf("expected a failing run to exit 1 with an error, got %d %q", code, errOut)
+	}
+}
+
+func TestProcessMovesALegacyDotGoatOut(t *testing.T) {
+	workspace := t.TempDir()
+	os.MkdirAll(workspace+"/.goat", 0o755)
+	os.WriteFile(workspace+"/.goat/prompts.jsonl", []byte("\"an old prompt\"\n"), 0o600)
+	out, _, code := runGoat(t, workspace, "/exit\n", []string{"ANTHROPIC_API_KEY=test"})
+	if code != 0 || !strings.Contains(out, "Moved goat's files from .goat to") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if _, err := os.Stat(workspace + "/.goat"); !os.IsNotExist(err) {
+		t.Fatal("expected .goat to be gone")
+	}
+	matches, _ := filepath.Glob(workspace + "/state/goat/projects/*/prompts.jsonl")
+	if len(matches) != 1 {
+		t.Fatalf("expected the prompts in the state directory, found %v", matches)
 	}
 }

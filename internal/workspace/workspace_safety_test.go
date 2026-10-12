@@ -121,7 +121,7 @@ func TestDeleteDirRefusesWorkspaceRoot(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "a.txt")); err != nil {
 		t.Fatalf("expected workspace to be untouched, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, ".goat", "snapshots")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(statePath(t, ""), "snapshots")); !os.IsNotExist(err) {
 		t.Fatalf("expected no snapshot to be created, got %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestFailedSnapshotIsCleanedUp(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "dir", "a.txt")); err != nil {
 		t.Fatalf("expected directory to be untouched, got %v", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected failed snapshot to be removed, found %d entr(ies)", len(entries))
 	}
@@ -219,7 +219,7 @@ func TestOldSnapshotsArePruned(t *testing.T) {
 	if len(records) != maxRecordedOperations {
 		t.Fatalf("expected %d records, got %d", maxRecordedOperations, len(records))
 	}
-	entries, err := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, err := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if err != nil {
 		t.Fatalf("read snapshots: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestStateDirectoryCaseVariantsAreReserved(t *testing.T) {
 	if !shouldSkipDir(".GOAT") {
 		t.Error("expected searches to skip case variants of .goat")
 	}
-	if err := os.Symlink(filepath.Join(workspace, ".goat"), filepath.Join(workspace, "alias")); err != nil {
+	if err := os.Symlink(statePath(t, ""), filepath.Join(workspace, "alias")); err != nil {
 		t.Fatalf("create alias: %v", err)
 	}
 	if _, err := ReadFileForModel("alias/operations.json"); err == nil {
@@ -503,7 +503,7 @@ func TestFailedMutationRestoresPreviousState(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(workspace, "a.txt")); string(data) != "original" {
 		t.Fatalf("expected the file to be restored, got %q", data)
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected the snapshot to be cleaned up after restoring, found %d", len(entries))
 	}
@@ -632,8 +632,8 @@ func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 
-	os.MkdirAll(filepath.Join(workspace, ".goat"), 0755)
-	os.WriteFile(filepath.Join(workspace, ".goat", "operations.json"), []byte(`[{"id":"1","ki`), 0644)
+	os.MkdirAll(statePath(t, ""), 0755)
+	os.WriteFile(filepath.Join(statePath(t, ""), "operations.json"), []byte(`[{"id":"1","ki`), 0644)
 
 	if err := WriteFile("a.txt", "hello"); err != nil {
 		t.Fatalf("expected the write to succeed, got %v", err)
@@ -642,7 +642,7 @@ func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	if err != nil || len(records) != 1 {
 		t.Fatalf("expected a fresh log with one record, got %d (%v)", len(records), err)
 	}
-	matches, _ := filepath.Glob(filepath.Join(workspace, ".goat", "operations.json.corrupt-*"))
+	matches, _ := filepath.Glob(filepath.Join(statePath(t, ""), "operations.json.corrupt-*"))
 	if len(matches) != 1 {
 		t.Fatalf("expected the corrupt log to be kept aside, found %d", len(matches))
 	}
@@ -664,7 +664,7 @@ func TestSnapshotsHandleReadOnlyDirectories(t *testing.T) {
 	os.Chmod(readOnly, 0555)
 	t.Cleanup(func() {
 		os.Chmod(readOnly, 0755)
-		filepath.Walk(filepath.Join(workspace, ".goat"), func(path string, info os.FileInfo, err error) error {
+		filepath.Walk(statePath(t, ""), func(path string, info os.FileInfo, err error) error {
 			if err == nil && info.IsDir() {
 				os.Chmod(path, 0755)
 			}
@@ -801,7 +801,7 @@ func TestSnapshotsWithReadOnlyDirectoriesAreCleanedUp(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the mutation error")
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected the snapshot to be removed, found %d", len(entries))
 	}
@@ -814,7 +814,7 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 	if err := WriteFile("a.txt", "1"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	logPath := filepath.Join(workspace, ".goat", "operations.json")
+	logPath := filepath.Join(statePath(t, ""), "operations.json")
 	os.WriteFile(logPath, []byte("{not json"), 0644)
 
 	if _, err := PreviewUndoLastChange(); err == nil {
@@ -824,7 +824,7 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 		t.Fatalf("expected the preview to leave the log alone, got %q", data)
 	}
 
-	snapshots := filepath.Join(workspace, ".goat", "snapshots")
+	snapshots := filepath.Join(statePath(t, ""), "snapshots")
 	orphans, _ := os.ReadDir(snapshots)
 	old := time.Now().Add(-2 * unreferencedSnapshotGracePeriod)
 	for _, orphan := range orphans {
@@ -883,7 +883,7 @@ func TestUndoSkipsOperationWhoseSnapshotIsMissing(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	records, _ := loadOperationRecords(false)
-	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots", records[1].ID))
+	os.RemoveAll(filepath.Join(statePath(t, ""), "snapshots", records[1].ID))
 
 	if _, err := UndoLastChange(); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("expected a missing snapshot error, got %v", err)
@@ -1066,7 +1066,7 @@ func TestUndoPreviewIsAccurate(t *testing.T) {
 		t.Fatalf("expected only the file change in the preview, got\n%s", preview)
 	}
 
-	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots"))
+	os.RemoveAll(filepath.Join(statePath(t, ""), "snapshots"))
 	preview, err = PreviewUndoLastChange()
 	if err != nil || !strings.Contains(preview, "missing") || strings.Contains(preview, "/dev/null") {
 		t.Fatalf("expected the preview to report the missing snapshot, got %q (%v)", preview, err)
@@ -1077,7 +1077,7 @@ func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 
-	snapshot := filepath.Join(workspace, ".goat", "snapshots", "123")
+	snapshot := filepath.Join(statePath(t, ""), "snapshots", "123")
 	os.MkdirAll(filepath.Join(snapshot, "before", "dst"), 0755)
 	os.WriteFile(filepath.Join(snapshot, "before", "dst", "only-copy.txt"), []byte("precious"), 0644)
 	location := keepOperationSnapshot(operationRecord{ID: "123"})
@@ -1090,7 +1090,7 @@ func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(snapshot, "before", "dst", "only-copy.txt")); err != nil {
 		t.Fatalf("expected the kept snapshot to survive collection, got %v", err)
 	}
-	if !strings.Contains(location, ".goat/snapshots/123") {
+	if !strings.Contains(filepath.ToSlash(location), "snapshots/123") {
 		t.Fatalf("expected the snapshot location to be reported, got %q", location)
 	}
 }
@@ -1155,7 +1155,7 @@ func TestUndoWorksForRecordsFromOlderVersions(t *testing.T) {
 	}
 
 	// Older versions wrote neither field (and wrote snapshot_path, which is ignored now).
-	logPath := filepath.Join(workspace, ".goat", "operations.json")
+	logPath := filepath.Join(statePath(t, ""), "operations.json")
 	var raw []map[string]any
 	data, _ := os.ReadFile(logPath)
 	if err := json.Unmarshal(data, &raw); err != nil {
