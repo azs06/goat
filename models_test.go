@@ -791,7 +791,7 @@ func TestLongTurnIsCompactedBetweenToolRounds(t *testing.T) {
 	if len(next.Conversation.Messages) != 1 || string(next.Conversation.Messages[0]) != `{"seed":true}` || len(next.ToolResults) != 0 {
 		t.Fatalf("expected the second round to continue from the summary without the old tool results, got %+v", next)
 	}
-	if !strings.HasPrefix(next.UserText, planModeNote) || !strings.Contains(next.UserText, continueAfterCompactionNote) || !strings.Contains(next.UserText, "Result of read_dir (ok):") {
+	if !strings.HasPrefix(next.UserText, planModeNote+modelNote("claude-opus-5-5", provider.Anthropic)) || !strings.Contains(next.UserText, continueAfterCompactionNote) || !strings.Contains(next.UserText, "Result of read_dir (ok):") {
 		t.Fatalf("expected the model to get the tool results and be told to carry on, in plan mode, got %q", next.UserText)
 	}
 	if string(cfg.conversation.conversation.Messages[0]) != `{"n":2}` {
@@ -909,7 +909,7 @@ func TestOverflowingPromptIsCompactedAndSentAgain(t *testing.T) {
 	if p.completeCalls != 1 || len(p.requests) != 2 {
 		t.Fatalf("expected one compaction and one retry, got %d summaries and %d requests", p.completeCalls, len(p.requests))
 	}
-	if retry := p.requests[1]; retry.UserText != "next step" || string(retry.Conversation.Messages[0]) != `{"seed":true}` {
+	if retry := p.requests[1]; retry.UserText != modelNote("claude-opus-5-5", provider.Anthropic)+"next step" || string(retry.Conversation.Messages[0]) != `{"seed":true}` {
 		t.Fatalf("expected the prompt again in the compacted conversation, got %+v", retry)
 	}
 }

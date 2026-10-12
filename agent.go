@@ -467,6 +467,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				req.ToolResults = nil
 				req.UserText = compactedToolResultsText(next.pendingToolResults)
 				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				// The summary's conversation has not been told the model yet.
+				req.UserText = modelNote(opts.model, providerName) + req.UserText
 				if opts.planMode {
 					req.UserText = planModeNote + req.UserText
 				}
