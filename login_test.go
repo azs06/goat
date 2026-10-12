@@ -301,7 +301,7 @@ func TestAKeylessStartLeavesTheSessionFilesAlone(t *testing.T) {
 	t.Cleanup(func() { sessionSaver = previous })
 
 	saved := &savedSession{Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}}
-	cfg := &config{providers: map[string]provider.Provider{}}
+	cfg := &config{providers: map[string]provider.Provider{}, continueSaved: true}
 	restoreSavedConversation(cfg, saved)
 	if err := commandClear(context.Background(), cfg, nil); err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestAKeylessStartLeavesTheSessionFilesAlone(t *testing.T) {
 		t.Fatalf("wrote %v before there was a model", writes)
 	}
 
-	// The first model restores the saved session as a start with it would have.
+	// The first model restores the saved session as a start with -c would have.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	if err := switchModel(context.Background(), cfg, "anthropic:claude-sonnet-5-5"); err != nil {
 		t.Fatal(err)
@@ -501,5 +501,29 @@ func TestOnlySomeProvidersOfferSigningIn(t *testing.T) {
 	out = captureStdout(t, func() { pickLoginMethod(context.Background(), c, provider.Anthropic) })
 	if !strings.Contains(out, "Claude Pro/Max subscription is not available yet") {
 		t.Fatalf("got %q", out)
+	}
+}
+
+func TestAKeylessStartBeginsANewConversationOnceThereIsAModel(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	setCredentials(t, false, false)
+	var writes []string
+	previous := sessionSaver
+	sessionSaver = func(path string, _ savedSession) error { writes = append(writes, path); return nil }
+	t.Cleanup(func() { sessionSaver = previous })
+
+	saved := &savedSession{Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}}
+	cfg := &config{providers: map[string]provider.Provider{}}
+	restoreSavedConversation(cfg, saved)
+	if len(writes) != 0 || cfg.pendingSaved != saved {
+		t.Fatalf("wrote %v before there was a model", writes)
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	if err := switchModel(context.Background(), cfg, "anthropic:claude-sonnet-5-5"); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.conversation.conversation.IsEmpty() || !slices.Equal(writes, []string{previousSessionPath, sessionPath, sessionPath}) {
+		t.Fatalf("expected the saved conversation kept for /resume and a new one started, got writes %v, conversation %+v", writes, cfg.conversation)
 	}
 }

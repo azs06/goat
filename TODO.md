@@ -23,5 +23,5 @@ Deferred enhancements to implement later:
   - Considered and rejected: hiding plain `*_TOKEN` variables such as `GH_TOKEN` from run_bash. `gh` and similar tools read them, so the agent's `gh` commands would stop working.
 
 Notes:
-- Session compaction runs automatically once a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS` and is also available manually via `compact`.
+- Session compaction runs automatically, before a prompt or between tool rounds, once the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, and is also available manually via `compact`.
 - Keep preview-first workflows for mutating tools.

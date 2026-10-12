@@ -57,6 +57,11 @@ type turnOptions struct {
 	// checkpoint, when set, receives the state after every tool round so it can be
 	// saved before the turn finishes.
 	checkpoint func(conversationState)
+	// compact, when set, is asked after every tool round's checkpoint whether the
+	// conversation was compacted. If it was, it returns the conversation started from
+	// the summary, and the turn goes on there; the round's tool results answer calls of
+	// the old conversation, so they go as text.
+	compact func(ctx context.Context) (provider.Conversation, bool)
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	approveBash func(ctx context.Context, command, workdir string) error
@@ -315,6 +320,30 @@ func notRunResults(calls []provider.ToolCall, reason string) []provider.ToolResu
 	return results
 }
 
+// midTurnCompactionFocus steers the summary made partway through a turn toward the
+// work in flight, which the turn continues from.
+const midTurnCompactionFocus = "the task in progress and what was about to be done next"
+
+// continueAfterCompactionNote goes to the model, followed by the latest tool results,
+// after the conversation was compacted partway through a turn.
+const continueAfterCompactionNote = "[The conversation was compacted partway through this task. The results of your latest tool calls follow. Carry on with the task from where you left off.]"
+
+// compactedToolResultsText carries tool results over to a conversation compacted
+// partway through a turn. They answer calls the new conversation does not have, so they
+// go as text, in full: the summary keeps only part of each.
+func compactedToolResultsText(results []provider.ToolResult) string {
+	var b strings.Builder
+	b.WriteString(continueAfterCompactionNote)
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		fmt.Fprintf(&b, "\n\nResult of %s (%s):\n%s", result.Name, status, result.Output)
+	}
+	return b.String()
+}
+
 var errContextExceeded = errors.New("the conversation no longer fits in the model's context window; run /compact")
 
 // isContextOverflowError recognises both APIs' "prompt is too long" errors.
@@ -416,10 +445,24 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		if opts.compact != nil {
+			if compacted, ok := opts.compact(ctx); ok {
+				req.Conversation = compacted
+				req.ToolResults = nil
+				req.UserText = compactedToolResultsText(next.pendingToolResults)
+				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				if opts.planMode {
+					req.UserText = planModeNote + req.UserText
+				}
+			}
+		}
 		if opts.takeSteering != nil {
 			if text := opts.takeSteering(); text != "" {
 				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
 				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
+				if req.UserText != "" {
+					text = req.UserText + "\n\n" + text
+				}
 				req.UserText = text
 			}
 		}

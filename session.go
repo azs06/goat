@@ -150,7 +150,7 @@ func loadSessionFile(path string) (*savedSession, error) {
 // archiveSession keeps the current conversation in session.prev.json before it is
 // replaced, so /resume can bring it back.
 func archiveSession(cfg *config) {
-	if cfg.conversation.conversation.IsEmpty() && len(cfg.conversation.pendingToolResults) == 0 {
+	if cfg.ephemeral || cfg.conversation.conversation.IsEmpty() && len(cfg.conversation.pendingToolResults) == 0 {
 		return
 	}
 	if err := sessionSaver(previousSessionPath, sessionFromConfig(cfg)); err != nil {
