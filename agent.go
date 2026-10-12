@@ -340,7 +340,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
 	}
-	req.UserText = opts.contextNote + req.UserText
+	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
 	}
