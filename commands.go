@@ -153,6 +153,11 @@ func commandClear(ctx context.Context, c *config, args []string) error {
 
 // commandResume swaps the current conversation with the one kept in session.prev.json.
 func commandResume(ctx context.Context, c *config, args []string) error {
+	if c.ephemeral {
+		// Swapping would write over session.prev.json, which may hold the latest
+		// conversation, while the one resumed here is never saved.
+		return fmt.Errorf("/resume is not available in a run that is not saved; start goat with -c, or without -p")
+	}
 	previous, err := loadSessionFile(previousSessionPath)
 	if err != nil {
 		return err

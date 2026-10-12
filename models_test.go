@@ -997,3 +997,19 @@ func TestRecoveryAfterCompactingPartwayCarriesOnFromTheTurn(t *testing.T) {
 		t.Fatalf("expected the retry to carry on with the owed results, got %q", retry.UserText)
 	}
 }
+
+func TestResumeIsRefusedInARunThatIsNotSaved(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(previousSessionPath, savedSession{Version: sessionVersion, ConversationID: "cLatest", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	cfg := loadConfig(cliOptions{print: true})
+	cfg.ephemeral = true
+	if err := commandResume(context.Background(), cfg, nil); err == nil {
+		t.Fatal("expected /resume to be refused")
+	}
+	if previous, _ := loadSessionFile(previousSessionPath); previous == nil || previous.ConversationID != "cLatest" {
+		t.Fatalf("expected session.prev.json to be left alone, got %+v", previous)
+	}
+}
