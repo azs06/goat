@@ -544,6 +544,9 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		}
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		if c.keptPrevious {
+			fmt.Println(formatNotice("New conversation; /resume brings back the previous one."))
+		}
 		printModelLine(c)
 		return nil
 	}

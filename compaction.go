@@ -105,9 +105,17 @@ func buildCompactionSource(entries []historyEntry) string {
 	return truncateToolOutputCharsForModel(strings.Join(blocks, "\n\n"), maxCompactionSourceChars)
 }
 
+// applyCompactedConversation switches to the conversation seeded from summary. Only a
+// /compact keeps the full conversation for /resume: one compacted automatically was too
+// big to go on with and would only be compacted again, one compacted to recover was
+// refused by the API, and either would push out the conversation session.prev.json holds.
 func applyCompactedConversation(cfg *config, next provider.Conversation, summary, mode string) {
 	recordCompactionSummary(cfg, summary, mode)
-	replaceConversation(cfg, conversationState{conversation: next})
+	if mode == "manual" {
+		replaceConversation(cfg, conversationState{conversation: next})
+	} else {
+		startConversation(cfg, conversationState{conversation: next})
+	}
 	recordCompactionSeed(cfg, next, summary)
 }
 
@@ -227,7 +235,8 @@ func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus string
 	}
 
 	applyCompactedConversation(cfg, next, summary, "auto")
-	fmt.Println(formatNotice(fmt.Sprintf("Conversation auto-compacted (%s).", reason)))
+	// A -p run keeps stdout for the reply.
+	fmt.Fprintln(activityOut, formatNotice(fmt.Sprintf("Conversation auto-compacted (%s).", reason)))
 	return true, nil
 }
 

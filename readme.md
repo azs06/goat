@@ -60,7 +60,8 @@ does not show the key as you type it, saves it to `~/.config/goat/auth.json` (re
 only by you), checks it by listing the provider's models, and starts using it at once.
 `/login openai` skips the list. Without a key goat still starts at a terminal, so
 `/login` is there on the first run; a saved conversation waits, untouched, until a key
-gives goat a model to continue it on.
+gives goat a model. It is then set aside for `/resume` as at any start, or continued if
+goat was started with `-c`.
 
 Or put the keys in `~/.config/goat/auth.json` (`$XDG_CONFIG_HOME/goat/auth.json` when
 `XDG_CONFIG_HOME` is set). goat reads it whichever folder it starts in, and keeps the

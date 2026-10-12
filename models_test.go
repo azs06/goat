@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -770,14 +772,85 @@ func TestLongTurnIsCompactedBetweenToolRounds(t *testing.T) {
 	if len(next.Conversation.Messages) != 1 || string(next.Conversation.Messages[0]) != `{"seed":true}` || len(next.ToolResults) != 0 {
 		t.Fatalf("expected the second round to continue from the summary without the old tool results, got %+v", next)
 	}
-	if !strings.HasPrefix(next.UserText, planModeNote) || !strings.Contains(next.UserText, continueAfterCompactionNote) {
-		t.Fatalf("expected the model to be told to carry on, in plan mode, got %q", next.UserText)
+	if !strings.HasPrefix(next.UserText, planModeNote) || !strings.Contains(next.UserText, continueAfterCompactionNote) || !strings.Contains(next.UserText, "Result of read_dir (ok):") {
+		t.Fatalf("expected the model to get the tool results and be told to carry on, in plan mode, got %q", next.UserText)
 	}
 	if string(cfg.conversation.conversation.Messages[0]) != `{"n":2}` {
 		t.Fatalf("expected the turn to end on the compacted conversation, got %+v", cfg.conversation)
 	}
-	if previous, _ := loadSessionFile(previousSessionPath); previous == nil || len(previous.PendingToolResults) != 1 {
-		t.Fatalf("expected the full conversation, with its tool results, to be kept for /resume, got %+v", previous)
+	if previous, _ := loadSessionFile(previousSessionPath); previous != nil {
+		t.Fatalf("expected auto-compaction to leave session.prev.json to the conversation /resume brings back, got %+v", previous)
+	}
+}
+
+// toolRounds scripts n tool rounds that each report usage tokens, then a final answer.
+func toolRounds(n int, usage int64) []*provider.Response {
+	var responses []*provider.Response
+	for i := 1; i <= n; i++ {
+		responses = append(responses, &provider.Response{ID: fmt.Sprintf("r%d", i), Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: fmt.Sprintf("t%d", i), Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: usage}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	}
+	return append(responses, &provider.Response{ID: "end", Stop: provider.StopEndTurn, Text: "done", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+}
+
+func TestMidTurnCompactionStopsWhenItCannotHelp(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// Every round stays over the threshold, even right after compacting.
+	p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: toolRounds(4, defaultAnthropicAutoCompactTokens+1)}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 1 {
+		t.Fatalf("expected one compaction for the turn, got %d", p.completeCalls)
+	}
+
+	// A failed summary is not retried every round either.
+	p = &fakeProvider{name: provider.Anthropic, completeErr: errors.New("summary refused"), responses: toolRounds(4, defaultAnthropicAutoCompactTokens+1)}
+	cfg = newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if p.completeCalls != 1 {
+		t.Fatalf("expected one failed compaction attempt for the turn, got %d", p.completeCalls)
+	}
+}
+
+func TestContinueAfterAnEmptyStartPicksUpTheLastConversation(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	loadConfig(cliOptions{})
+	cfg := loadConfig(cliOptions{continueSession: true})
+	if len(cfg.conversation.conversation.Messages) != 1 || activeConversationID != "cOld" {
+		t.Fatalf("expected -c to continue the last conversation with something in it, got %+v (%s)", cfg.conversation, activeConversationID)
+	}
+}
+
+func TestStartLeavesTheSessionAloneWhenItCannotKeepIt(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, false, true)
+
+	writeSessionFile(sessionPath, savedSession{Version: sessionVersion, ConversationID: "cOld", Model: "anthropic:claude-opus-5-5", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}})
+	var writes []string
+	previous := sessionSaver
+	sessionSaver = func(path string, _ savedSession) error {
+		writes = append(writes, path)
+		if path == previousSessionPath {
+			return errors.New("disk trouble")
+		}
+		return nil
+	}
+	t.Cleanup(func() { sessionSaver = previous })
+
+	cfg := loadConfig(cliOptions{})
+	saveSession(cfg)
+	if !cfg.conversation.conversation.IsEmpty() || slices.Contains(writes, sessionPath) {
+		t.Fatalf("expected a new conversation that leaves session.json alone, got writes %v", writes)
 	}
 }
 

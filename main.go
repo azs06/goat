@@ -244,6 +244,15 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
+	if saved.Conversation.IsEmpty() && len(saved.PendingToolResults) == 0 {
+		// A start that sent nothing leaves an empty session behind; -c means the last
+		// conversation that had something in it.
+		if previous, _ := loadSessionFile(previousSessionPath); previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
+			adoptSavedConversation(cfg, previous)
+			saveSession(cfg)
+			return
+		}
+	}
 	if saved.Conversation.Fits(cfg.model.Provider) {
 		adoptSavedConversation(cfg, saved)
 		return
@@ -280,10 +289,13 @@ func startNewConversation(cfg *config, saved *savedSession) {
 		return
 	}
 	if err := sessionSaver(previousSessionPath, *saved); err != nil {
-		warnf("failed to keep the saved conversation for /resume: %v", err)
-	} else {
-		cfg.keptPrevious = true
+		// session.json is then the only copy; this run leaves it be, and -c continues it.
+		warnf("failed to keep the saved conversation for /resume: %v; this run will not be saved, and goat -c continues the saved one", err)
+		activeConversationID = newConversationID()
+		cfg.ephemeral = true
+		return
 	}
+	cfg.keptPrevious = true
 	startConversation(cfg, conversationState{})
 	recordHistory(historyEntry{Type: "reset", Provider: cfg.model.Provider})
 }
@@ -374,10 +386,15 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return err
 	}
 
+	// Compaction is tried again between tool rounds, but after a failure, or a round
+	// that is still too big right after compacting, not again this turn: each attempt
+	// costs a summary request.
+	midTurnCompaction, justCompacted := true, false
 	if _, err := maybeAutoCompactConversation(ctx, cfg, ""); err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
+		midTurnCompaction = false
 		warnf("%v; continuing with the full conversation", err)
 	}
 
@@ -402,13 +419,28 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		// A long tool loop can outgrow the threshold before the turn ends; checked after
 		// each round's checkpoint, so cfg holds the round's state.
 		compact: func(ctx context.Context) (provider.Conversation, bool) {
+			if !midTurnCompaction {
+				return provider.Conversation{}, false
+			}
+			if justCompacted {
+				justCompacted = false
+				if entries, err := loadConversationHistoryEntries(); err == nil {
+					if over, _ := shouldAutoCompactConversation(entries, autoCompactThreshold(cfg)); over {
+						midTurnCompaction = false
+						warnf("the conversation is still over the auto-compact threshold right after compacting; not compacting again this turn")
+						return provider.Conversation{}, false
+					}
+				}
+			}
 			compacted, err := maybeAutoCompactConversation(ctx, cfg, midTurnCompactionFocus)
 			if err != nil {
+				midTurnCompaction = false
 				if ctx.Err() == nil {
 					warnf("%v; continuing with the full conversation", err)
 				}
 				return provider.Conversation{}, false
 			}
+			justCompacted = compacted
 			return cfg.conversation.conversation, compacted
 		},
 	}

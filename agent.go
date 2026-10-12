@@ -59,8 +59,8 @@ type turnOptions struct {
 	checkpoint func(conversationState)
 	// compact, when set, is asked after every tool round's checkpoint whether the
 	// conversation was compacted. If it was, it returns the conversation started from
-	// the summary, and the turn goes on there; the summary covers the round's tool
-	// results, which belong to the old conversation and are not sent.
+	// the summary, and the turn goes on there; the round's tool results answer calls of
+	// the old conversation, so they go as text.
 	compact func(ctx context.Context) (provider.Conversation, bool)
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
@@ -322,11 +322,27 @@ func notRunResults(calls []provider.ToolCall, reason string) []provider.ToolResu
 
 // midTurnCompactionFocus steers the summary made partway through a turn toward the
 // work in flight, which the turn continues from.
-const midTurnCompactionFocus = "the task in progress, the latest tool calls and their results, and what was about to be done next"
+const midTurnCompactionFocus = "the task in progress and what was about to be done next"
 
-// continueAfterCompactionNote goes to the model in place of the tool results after the
-// conversation was compacted partway through a turn.
-const continueAfterCompactionNote = "[The conversation was compacted partway through this task; the summary above includes the results of your latest tool calls. Carry on with the task from where you left off.]"
+// continueAfterCompactionNote goes to the model, followed by the latest tool results,
+// after the conversation was compacted partway through a turn.
+const continueAfterCompactionNote = "[The conversation was compacted partway through this task. The results of your latest tool calls follow. Carry on with the task from where you left off.]"
+
+// compactedToolResultsText carries tool results over to a conversation compacted
+// partway through a turn. They answer calls the new conversation does not have, so they
+// go as text, in full: the summary keeps only part of each.
+func compactedToolResultsText(results []provider.ToolResult) string {
+	var b strings.Builder
+	b.WriteString(continueAfterCompactionNote)
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		fmt.Fprintf(&b, "\n\nResult of %s (%s):\n%s", result.Name, status, result.Output)
+	}
+	return b.String()
+}
 
 var errContextExceeded = errors.New("the conversation no longer fits in the model's context window; run /compact")
 
@@ -433,8 +449,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			if compacted, ok := opts.compact(ctx); ok {
 				req.Conversation = compacted
 				req.ToolResults = nil
-				req.UserText = continueAfterCompactionNote
-				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				req.UserText = compactedToolResultsText(next.pendingToolResults)
+				recordHistory(historyEntry{Type: "user", Content: continueAfterCompactionNote, Provider: providerName})
 				if opts.planMode {
 					req.UserText = planModeNote + req.UserText
 				}
