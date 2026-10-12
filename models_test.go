@@ -641,3 +641,25 @@ func TestLegacyResumeUsesTheResponsesOwnHistory(t *testing.T) {
 		t.Fatalf("expected the continued conversation's size, got %d", estimate)
 	}
 }
+
+func TestResumeSaysWhenItRestoresAnotherEffort(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, true, false)
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI})
+	cfg.reasoningEffort = provider.EffortLow
+	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-a"}}
+	if err := commandClear(context.Background(), cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg.reasoningEffort = provider.EffortHigh
+
+	out := captureStdout(t, func() {
+		if err := commandResume(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if cfg.reasoningEffort != provider.EffortLow || !strings.Contains(out, "at effort low") {
+		t.Fatalf("effort %s, output:\n%s", cfg.reasoningEffort, out)
+	}
+}

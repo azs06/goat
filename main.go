@@ -60,6 +60,11 @@ type config struct {
 	// pendingSaved is the saved session goat started without a model to continue it
 	// on. It is left on disk untouched, and restored once /login or /model picks a model.
 	pendingSaved *savedSession
+	// oneShot is set for a -p run, whose prompt is never a "!" command.
+	oneShot bool
+	// pendingShell holds the output of the "!" commands run since the last message,
+	// ready for the model; it goes with the next message.
+	pendingShell []string
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -343,15 +348,22 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	}
 
 	opts := turnOptions{
-		model:    cfg.model.ID,
-		effort:   cfg.reasoningEffort,
-		planMode: cfg.planMode,
-		codeMode: cfg.codeMode,
+		model:       cfg.model.ID,
+		effort:      cfg.reasoningEffort,
+		planMode:    cfg.planMode,
+		codeMode:    cfg.codeMode,
+		contextNote: shellContextNote(cfg.pendingShell),
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
 			cfg.conversation = state
+			cfg.pendingShell = nil
 			saveSession(cfg)
+			// The footer under the input catches up with the turn: context used, commands
+			// left running.
+			if cfg.interactive && style.Enabled() {
+				setTurnFooter(turnFooterParts(cfg, true))
+			}
 		},
 	}
 	defer saveSession(cfg)
@@ -363,8 +375,14 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		opts.takeSteering = takeQueuedText
 	}
 
+	sent := cfg.conversation.conversation
 	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
+	if err == nil || conversationMoved(sent, next.conversation) {
+		// The ! output went with this message, which the model has now seen. A request
+		// that failed outright keeps it for /retry.
+		cfg.pendingShell = nil
+	}
 	if err == nil || !provider.IsThinkingBindingError(err) {
 		return err
 	}
@@ -377,9 +395,19 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
+	sent = cfg.conversation.conversation
 	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
+	if err == nil || conversationMoved(sent, next.conversation) {
+		cfg.pendingShell = nil
+	}
 	return err
+}
+
+// conversationMoved reports whether a response was added to the conversation, so the
+// request before it reached the model.
+func conversationMoved(before, after provider.Conversation) bool {
+	return after.ResponseID != before.ResponseID || len(after.Messages) != len(before.Messages)
 }
 
 // handleInput runs one command or prompt. Ctrl-C cancels it instead of killing the goat.
@@ -387,28 +415,41 @@ func handleInput(cfg *config, text string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	cmd, args, err := lookupCommand(text)
-	if err != nil {
-		return err
+	shellCommand, afterShell, isShell := shellEscapeText(cfg, text)
+	if isShell && afterShell != "" {
+		// Only the first line is the command; the rest run after it.
+		requeueLines(afterShell)
+	}
+	var cmd *cliCommand
+	var args []string
+	if !isShell {
+		var err error
+		if cmd, args, err = lookupCommand(text); err != nil {
+			return err
+		}
 	}
 
 	// On an interactive color terminal, what is typed while the work runs is queued.
 	queueing := cfg.interactive && style.Enabled()
 	started := time.Now()
 	before, _ := loadConversationHistoryEntries()
-	err = runWithInputGuard(queueing, func() error {
+	err := runWithInputGuard(queueing, func() error {
 		if queueing {
 			fmt.Print(bracketedPasteOn)
 			defer fmt.Print(bracketedPasteOff)
+			setTurnFooter(turnFooterParts(cfg, !isShell && cmd == nil))
 			startKeyCapture(ctx, cfg.input)
 			defer stopKeyCapture()
 		}
-		if cmd != nil {
+		switch {
+		case isShell:
+			return runShellEscape(ctx, cfg, shellCommand)
+		case cmd != nil:
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
 	})
-	if cmd == nil && err == nil && style.Enabled() {
+	if cmd == nil && !isShell && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
 			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed, turnCostText(before)))
@@ -447,13 +488,7 @@ func migrateLegacyState(oneShot bool) {
 
 // printWelcome shows the banner and the notices about the restored state.
 func printWelcome(cfg *config) {
-	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
-	git := ""
-	if state, ok := readGitState(); ok {
-		git = state.footerText()
-	}
-	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), git, terminalWidth()))
+	printBanner(cfg)
 	if !cfg.conversation.conversation.IsEmpty() {
 		fmt.Println(formatNotice("Resumed saved conversation context."))
 	}
@@ -469,6 +504,26 @@ func printWelcome(cfg *config) {
 	}
 }
 
+// printBanner shows the welcome box with the current model, effort, directory and branch.
+func printBanner(cfg *config) {
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	git := ""
+	if state, ok := readGitState(); ok {
+		git = state.footerText()
+	}
+	fmt.Println(renderBanner(cfg.model.String(), string(cfg.reasoningEffort), shortenHome(cwd, home), git, terminalWidth()))
+}
+
+// printModelLine restates the banner's model row after the model or effort changed, so
+// the current values are on screen next to the change. Plain output has no banner box
+// and already names the change, so it gets nothing.
+func printModelLine(cfg *config) {
+	if style.Enabled() {
+		fmt.Println(renderModelLine(cfg.model.String(), string(cfg.reasoningEffort), terminalWidth()))
+	}
+}
+
 // footerParts is the status shown under the interactive prompt.
 func footerParts(cfg *config) []string {
 	parts := []string{cfg.model.String(), "effort " + string(cfg.reasoningEffort)}
@@ -477,6 +532,12 @@ func footerParts(cfg *config) []string {
 	}
 	if cfg.codeMode {
 		parts = append(parts, "code mode")
+	}
+	if running := backgroundFooterPart(); running != "" {
+		parts = append(parts, running)
+	}
+	if pending := pendingShellFooterPart(cfg); pending != "" {
+		parts = append(parts, pending)
 	}
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())
@@ -489,7 +550,24 @@ func footerParts(cfg *config) []string {
 	if cfg.approver != nil && cfg.approver.autoApprove {
 		parts = append(parts, "auto-approve on")
 	}
-	return append(parts, "? for shortcuts")
+	return append(parts, shortcutsFooterPart)
+}
+
+const shortcutsFooterPart = "? for shortcuts"
+
+// turnFooterParts is the footer under the input while a turn runs: the prompt's,
+// without the shortcuts hint, since "?" is just text there. A prompt's turn also leaves
+// out the ! output waiting, which it is about to send or has sent.
+func turnFooterParts(cfg *config, prompt bool) []string {
+	pending := pendingShellFooterPart(cfg)
+	var parts []string
+	for _, part := range footerParts(cfg) {
+		if (prompt && part == pending) || part == shortcutsFooterPart {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return parts
 }
 
 // readPrompt shows the prompt and reads one line. On an interactive color terminal the
@@ -642,12 +720,16 @@ func main() {
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
+	stopBackgroundOnSignal()
 
 	if opts.print {
 		// A one-shot run never asks anything: stdin may hold the prompt itself.
 		cfg.interactive = false
 		cfg.approver.interactive = false
-		os.Exit(runOneShot(cfg, opts))
+		cfg.oneShot = true
+		code := runOneShot(cfg, opts)
+		stopBackgroundOnExit(os.Stderr)
+		os.Exit(code)
 	}
 	if opts.newConversation && !cfg.conversation.conversation.IsEmpty() {
 		replaceConversation(cfg, conversationState{})
@@ -663,6 +745,12 @@ func main() {
 		fmt.Println(formatWarning(keylessNotice()))
 	}
 	runInteractive(cfg)
+}
+
+// sayGoodbye stops what goat left running in the background and says goodbye.
+func sayGoodbye() {
+	stopBackgroundOnExit(os.Stdout)
+	fmt.Println("Closing the Goat... Goodbye!")
 }
 
 // runInteractive is the prompt loop: it reads a prompt or command, runs it, and
@@ -682,7 +770,7 @@ func runInteractive(cfg *config) {
 		gap = true
 		if errors.Is(err, context.Canceled) {
 			if time.Since(lastInterrupt) < exitConfirmWindow {
-				fmt.Println("Closing the Goat... Goodbye!")
+				sayGoodbye()
 				return
 			}
 			lastInterrupt = time.Now()
@@ -693,7 +781,7 @@ func runInteractive(cfg *config) {
 			if !errors.Is(err, io.EOF) {
 				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
 			}
-			fmt.Println("Closing the Goat... Goodbye!")
+			sayGoodbye()
 			return
 		}
 		if strings.TrimSpace(text) == "" {
@@ -711,7 +799,7 @@ func runInteractive(cfg *config) {
 		switch {
 		case err == nil:
 		case errors.Is(err, errExitRequested):
-			fmt.Println("Closing the Goat... Goodbye!")
+			sayGoodbye()
 			return
 		case errors.Is(err, context.Canceled):
 			if style.Enabled() {

@@ -67,6 +67,9 @@ func historyEntryCompactionText(entry historyEntry) string {
 	case "assistant":
 		return fmt.Sprintf("Assistant: %s", strings.TrimSpace(entry.Content))
 	case "tool_call":
+		if entry.Status == "user" {
+			return fmt.Sprintf("User ran a shell command (%s): %s", entry.ToolName, strings.TrimSpace(entry.Arguments))
+		}
 		return fmt.Sprintf("Tool call %s: %s", entry.ToolName, strings.TrimSpace(entry.Arguments))
 	case "tool_output":
 		status := entry.Status

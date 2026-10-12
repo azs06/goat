@@ -39,6 +39,7 @@ func init() {
 	list := []*cliCommand{
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
+		{name: "ps", usage: "/ps [stop n|all]", description: "List the commands goat left running in the background, such as a dev server, and stop them", aliases: []string{"jobs"}, callback: commandProcesses},
 		{name: "plan", usage: "/plan [on|off]", description: "Toggle plan mode: goat reads and plans but changes nothing", callback: commandPlan},
 		{name: "codemode", usage: "/codemode [on|off]", description: "Toggle code mode: goat can batch tool calls in one run_code script", callback: commandCodeMode},
 		{name: "diff", usage: "/diff [staged]", description: "Show the uncommitted changes in the workspace's git repository", callback: commandDiff},
@@ -55,7 +56,7 @@ func init() {
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
-		{name: "theme", usage: "/theme [name]", description: "Switch to a built-in theme, such as one-dark, or reload the theme file", callback: commandTheme},
+		{name: "theme", usage: "/theme [name]", description: "Pick the theme, or switch to a built-in one such as one-dark (saved in config.json)", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
 		{name: "undo", usage: "/undo [preview|skip]", description: "Undo the latest file change (/undo skip gives up on one that cannot be restored)", callback: commandUndo},
 	}
@@ -125,7 +126,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		}
 		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
-	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Ctrl-C interrupts a turn."))
+	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn."))
 	fmt.Println()
 	fmt.Println(renderHelpTable(commands))
 	if style.Enabled() {
@@ -139,8 +140,14 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 
 func commandClear(ctx context.Context, c *config, args []string) error {
 	replaceConversation(c, conversationState{})
+	c.pendingShell = nil
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
+	// A new conversation starts under a fresh banner with the current model and effort.
+	if style.Enabled() {
+		fmt.Println()
+		printBanner(c)
+	}
 	return nil
 }
 
@@ -172,13 +179,19 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		return err
 	}
 	c.model = model
+	effortNote := ""
 	if effort, err := provider.ParseEffort(previous.Effort); err == nil && previous.Effort != "" {
+		if effort != c.reasoningEffort {
+			effortNote = " at effort " + string(effort)
+		}
 		c.reasoningEffort = effort
 	}
 	adoptSavedConversation(c, previous)
+	c.pendingShell = nil
 	saveSession(c)
 
-	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s. /resume again switches back.", c.model)))
+	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))
+	printModelLine(c)
 	return nil
 }
 
@@ -328,6 +341,7 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 		saveSession(c)
 		fmt.Println(formatSuccess("Effort set to "+string(effort)+".") + sent())
+		printModelLine(c)
 		return nil
 	}
 	fmt.Println("Reasoning effort: " + style.Highlight.Render(string(c.reasoningEffort)) + sent())
@@ -335,7 +349,6 @@ func commandEffort(ctx context.Context, c *config, args []string) error {
 	return nil
 }
 
-// effectiveEffortDescription says what the provider will actually receive.
 // effortStatusText is the effort, with what the model receives when that differs.
 func effortStatusText(c *config) string {
 	if sent := effectiveEffortDescription(c); sent != string(c.reasoningEffort) {
@@ -344,6 +357,7 @@ func effortStatusText(c *config) string {
 	return string(c.reasoningEffort)
 }
 
+// effectiveEffortDescription says what the provider will actually receive.
 func effectiveEffortDescription(c *config) string {
 	return provider.DescribeEffort(c.providers[c.model.Provider], c.model, c.reasoningEffort)
 }
@@ -530,6 +544,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		}
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -537,6 +552,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		c.model = target
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s; the conversation continues.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -544,6 +560,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		c.model = target
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s.", target)))
+		printModelLine(c)
 		return nil
 	}
 
@@ -560,6 +577,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	startConversation(c, conversationState{conversation: next})
 	recordCompactionSeed(c, next, summary)
 	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
+	printModelLine(c)
 	return nil
 }
 

@@ -277,14 +277,29 @@ Typing `/` opens a menu of matching commands; after a command and a space it sug
 command's arguments, such as the effort levels after `/effort `. Pasted text keeps its
 line breaks and is never sent before you press Enter.
 
+### Shell commands
+
+A line starting with `!` runs in the shell instead of going to the model: `!git status`,
+`!npm test`. Only that line is the command; lines after it are sent as usual. It runs the way `run_bash` runs commands (with `bash -lc` in the workspace,
+without the API keys in its environment and without a terminal to read from), but it is
+not confirmed, since you typed it, and has no time limit: Ctrl-C stops it. Up to 40 lines of
+its output are shown and `/output` shows the rest. The output also goes to the model with
+your next message, so `!npm test` then `fix the failures` works; the footer says when
+some is waiting. `/clear` and `/resume` drop it. A command started with `&` keeps running and is
+listed by `/ps`.
+
+Lines piped into goat run `!` commands only with `-y`, and a `-p` prompt is never one: it
+goes to the model as it is.
+
 ### Typing while goat works
 
-The line under the spinner takes a message while a turn runs, and Enter queues it. Queued
-text goes to the model with the next tool results, so it can change course mid-turn;
-anything still queued when the turn ends is sent as the next prompt. Slash commands wait
-until the turn is over. Up on an empty line takes the last queued message back to edit.
-After Ctrl-C or a failed turn nothing queued is sent; it is put back in the prompt
-instead. While the reply is streaming the line is hidden, but what you type is kept.
+While a turn runs the prompt stays at the bottom of the screen, in the same frame as
+between turns, under the spinner and above the footer; the reply streams in above it. It
+takes a message, and Enter queues it. Queued text goes to the model with the next tool
+results, so it can change course mid-turn; anything still queued when the turn ends is
+sent as the next prompt. Slash commands and `!` commands wait until the turn is over. Up
+on an empty line takes the last queued message back to edit. After Ctrl-C or a failed
+turn nothing queued is sent; it is put back in the prompt instead, one message per line.
 Queueing needs an interactive color terminal.
 
 ### Command line
@@ -324,7 +339,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/effort [level]` | Pick the reasoning effort with the arrow keys, or set it directly: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, mapped to what the model supports. |
 | `/login [provider]` (`/auth`) | Save a provider's API key to `auth.json` and start using it: pick the provider, then paste the key, which is not shown. For OpenAI, Anthropic, OpenRouter, xAI and Meta, choose **API key** first: signing in with your account is listed but not available yet. Needs a terminal. |
 | `/status` | Model, effort, which providers are available, conversation and context size, and settings. |
-| `/clear` (`/new`, `/reset`) | Start a new conversation; the old one is kept. |
+| `/clear` (`/new`, `/reset`) | Start a new conversation under a fresh welcome banner; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
 | `/retry` | Send the last prompt again. |
@@ -335,8 +350,9 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/copy` | Copy the last reply to the clipboard (pbcopy, wl-copy, xclip, xsel, or the terminal's OSC 52). |
 | `/export [file]` | Write the conversation, tool calls and outputs included, to a Markdown file in the workspace. |
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
+| `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2` (by number, or by the group ID it lists), `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
-| `/theme [name]` | Switch to a built-in theme for this session, such as `one-dark`; with no name, reload the theme file and show which one is in use. |
+| `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands and keys. |
@@ -344,6 +360,10 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 
 The pickers (`/model`, `/effort`, `/output`, `/login`) take Up/Down to move, typing to filter,
 Enter to choose and Esc to cancel.
+
+The welcome banner stays in the scrollback as it was printed, so when `/model`, `/effort` or
+`/resume` changes the model or effort, goat restates the banner's model row underneath. The
+footer under the prompt always shows the current values.
 
 The older commands (`help`, `exit`, `quit`, `status`, `compact`, `undo`, `tools`, `history`,
 `resume`, `reset`) also run when typed alone without the slash. Newer ones need the slash,
@@ -608,6 +628,13 @@ directory already has is left in `.goat/` instead, with a warning.
   killed with it. Changes made through `run_bash` are not snapshotted. A command that
   mentions goat's state directory (or `.goat`) is always confirmed, even when commands
   otherwise run without asking.
+- What a command leaves running in the background, such as a server started with `&`
+  (with its output redirected to a file, or it stops at its next write), keeps running
+  after the command returns. goat keeps track of it by process group: `/ps` lists and
+  stops it, and goat stops it, saying so, when it exits, when its terminal closes or when
+  it gets SIGTERM (a command still running then is stopped too; under `nohup` a hangup
+  stays ignored). A process that starts a session of its own, such as a
+  daemon, leaves the group and is not tracked. On Windows nothing is tracked.
 
 ## Themes
 
@@ -617,9 +644,12 @@ theme, after Atom's: blue accents and borders, red headings, green and red for s
 errors and diffs, yellow for warnings and approvals.
 
 ```sh
-/theme one-dark        # switch for this session; /theme default switches back
-"theme": "one-dark"    # in ~/.config/goat/config.json, to start with it
+/theme                 # pick a theme with the arrow keys
+/theme one-dark        # or name it; /theme default switches back
 ```
+
+Either way the choice is saved as `"theme": "one-dark"` in `~/.config/goat/config.json`,
+so goat starts with it next time (unless `GOAT_THEME` is set in your shell, which wins).
 
 Case, spaces, hyphens and underscores in a built-in theme's name do not matter, so
 `onedark` and `One Dark` are one-dark too. A misspelled name is not applied; `/theme` and
@@ -650,7 +680,7 @@ property, the way CSS cascades: roles you leave out keep their defaults, and
 `font-weight: normal` turns a default bold off. To adjust a built-in theme instead, name
 it in `"extends"`, e.g. `{"extends": "one-dark", "styles": {"heading": "color: #61afef"}}`;
 the built-in themes are in [`internal/style/themes`](internal/style/themes). `/theme`
-reloads the file and lists the built-in themes.
+offers your file alongside the built-in themes; picking it again reloads it after an edit.
 
 - **Properties:** `color`, `background-color` (or `background`), `font-weight` (`bold`,
   `normal`, `lighter`, or 100-900; light weights draw faint), `font-style` (`italic`,
