@@ -25,8 +25,9 @@ type config struct {
 	reasoningEffort   provider.Effort
 	autoCompactTokens int64
 	conversation      conversationState
-	// ephemeral is set for a -p run that does not continue the saved conversation; its
-	// session is never written.
+	// ephemeral is set for a -p run that does not continue the saved conversation, and
+	// for a start that could not keep the saved one for /resume; its session is never
+	// written.
 	ephemeral bool
 	// staleConversation is set when the saved conversation was built with a different
 	// system prompt or tool set; it is compacted before it is used again.
@@ -390,12 +391,14 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	// that is still too big right after compacting, not again this turn: each attempt
 	// costs a summary request.
 	midTurnCompaction, justCompacted := true, false
-	if _, err := maybeAutoCompactConversation(ctx, cfg, ""); err != nil {
+	if compacted, err := maybeAutoCompactConversation(ctx, cfg, ""); err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
 		midTurnCompaction = false
 		warnf("%v; continuing with the full conversation", err)
+	} else {
+		justCompacted = compacted
 	}
 
 	opts := turnOptions{

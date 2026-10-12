@@ -643,3 +643,38 @@ func TestAnthropicDroppedConnectionIsRetried(t *testing.T) {
 		t.Fatalf("expected two requests, got %d", fake.requestCount())
 	}
 }
+
+func TestAnthropicTurnCompactedBetweenToolRoundsSendsTheResultsAsText(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	big := &sse{}
+	big.event("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":%d,"output_tokens":1}}}`, defaultAnthropicAutoCompactTokens+1))
+	fake := newFakeAnthropic(t,
+		big.toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
+		newSSE("msg_sum").text("Goal: look around.").stop("end_turn", ""),
+		newSSE("msg_2").text("done").stop("end_turn", ""),
+	)
+	cfg := &config{
+		model:           provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"},
+		reasoningEffort: provider.EffortHigh,
+		providers:       map[string]provider.Provider{provider.Anthropic: fake.provider(true)},
+		approver:        &bashApprover{},
+	}
+
+	if err := runPrompt(context.Background(), cfg, "look around"); err != nil {
+		t.Fatalf("runPrompt: %v", err)
+	}
+	if fake.requestCount() != 3 {
+		t.Fatalf("expected the turn, the summary and the continued turn, got %d requests", fake.requestCount())
+	}
+	messages := messagesOf(t, fake.request(2))
+	encoded, _ := json.Marshal(messages)
+	if strings.Contains(string(encoded), "tool_result") || strings.Contains(string(encoded), "tool_use") {
+		t.Fatalf("expected no tool blocks after compacting, got %s", encoded)
+	}
+	last, _ := json.Marshal(messages[len(messages)-1])
+	if !strings.Contains(string(last), `"role":"user"`) || !strings.Contains(string(last), "Result of read_dir (ok)") || !strings.Contains(string(encoded), "Goal: look around.") {
+		t.Fatalf("expected the summary transcript and a user message carrying the tool results, got %s", encoded)
+	}
+}

@@ -567,10 +567,11 @@ Each start begins a new conversation and keeps the last one in `session.prev.jso
 old conversation is not sent again, and paid for again, with every request; `/resume` or
 `goat -c` brings it back.
 
-When the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, goat compacts it automatically,
-the same way `/compact` does: it is summarized into a fresh, smaller context. goat checks
-before each prompt and after each round of tool calls, so a long task is compacted
-partway through and carries on from the summary. If `session.json` or `operations.json` cannot be read, goat moves it
+When the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, goat compacts it automatically:
+it is summarized into a fresh, smaller context, as with `/compact`, except that the full
+conversation is not kept for `/resume`. goat checks before each prompt and after each
+round of tool calls, so a long task is compacted partway through and carries on from the
+summary and the latest tool results. If `session.json` or `operations.json` cannot be read, goat moves it
 aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 
 ## Safety

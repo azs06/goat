@@ -450,7 +450,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				req.Conversation = compacted
 				req.ToolResults = nil
 				req.UserText = compactedToolResultsText(next.pendingToolResults)
-				recordHistory(historyEntry{Type: "user", Content: continueAfterCompactionNote, Provider: providerName})
+				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
 				if opts.planMode {
 					req.UserText = planModeNote + req.UserText
 				}
