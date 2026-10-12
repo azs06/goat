@@ -33,6 +33,10 @@ var knownLimits = []struct {
 	{"claude-sonnet-4-5", Limits{ContextWindow: 200_000}},
 	{"claude-opus-4-5", Limits{ContextWindow: 200_000}},
 	{"claude-opus-4-1", Limits{ContextWindow: 200_000}},
+	{"claude-opus-4-0", Limits{ContextWindow: 200_000}},
+	{"claude-sonnet-4-0", Limits{ContextWindow: 200_000}},
+	{"claude-opus-4-2025", Limits{ContextWindow: 200_000}},
+	{"claude-sonnet-4-2025", Limits{ContextWindow: 200_000}},
 	{"claude-", Limits{ContextWindow: 1_000_000}},
 	{"gpt-5.6", Limits{ContextWindow: 922_000, PriceStep: 272_000}},
 	{"gpt-6", Limits{ContextWindow: 922_000, PriceStep: 272_000}},
@@ -51,6 +55,18 @@ func KnownLimits(model string) Limits {
 	return Limits{}
 }
 
+// KnownLimitsFor is KnownLimits for a model of the named provider. Only the built-in
+// providers serve the models the table describes: a providers.json entry's model that
+// shares a name, such as an Ollama build of a DeepSeek model, may have a far smaller
+// window.
+func KnownLimitsFor(providerName, model string) Limits {
+	switch providerName {
+	case OpenAI, Anthropic, DeepSeek:
+		return KnownLimits(model)
+	}
+	return Limits{}
+}
+
 // windowReporter is implemented by providers that learn a model's window from the API.
 type windowReporter interface {
 	contextWindow(model string) int64
@@ -59,7 +75,7 @@ type windowReporter interface {
 // ModelLimits returns model's limits: the window p has learned from the API, else the
 // published one, else DefaultContextWindow.
 func ModelLimits(p Provider, model string) Limits {
-	limits := KnownLimits(model)
+	limits := KnownLimitsFor(p.Name(), model)
 	if reporter, ok := p.(windowReporter); ok {
 		if window := reporter.contextWindow(model); window > 0 {
 			limits.ContextWindow = window

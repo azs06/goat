@@ -459,8 +459,9 @@ conversation's total, both worked out from the token usage the API reports, cach
 and writes included. Prices are built in for the Claude models, including Claude Haiku
 5.5's higher rate past 100K prompt tokens; for others, or to use your own rates, add them
 in US dollars per million tokens to `~/.config/goat/prices.json`. `long` is the price of
-a whole request whose prompt is past the model's published price step, or past
-`long_above` tokens:
+a whole request whose prompt is past `long_above` tokens; `long_above` may be left out
+only for the models whose price step goat knows (Claude Haiku 5.5 and OpenAI's GPT-5.6 and
+GPT-6 models):
 
 ```json
 {"gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01,
@@ -574,7 +575,8 @@ When the conversation grows past a limit, goat compacts it automatically: it is
 summarized into a fresh, smaller context, as with `/compact`, except that the full
 conversation is not kept for `/resume`. goat checks before each prompt and after each
 round of tool calls, so a long task is compacted partway through and carries on from the
-summary and the latest tool results. The limit is the lowest of:
+summary and the latest tool results. The check counts the prompt about to be sent. The
+limit is the lowest of:
 
 - the cost limit, `auto_compact_tokens`: by default 200K tokens on DeepSeek and 120K on
   Claude, whose cached conversations are cheap to send again, and 60K elsewhere;
@@ -582,10 +584,12 @@ summary and the latest tool results. The limit is the lowest of:
   tokens on Claude Haiku 5.5, 272K on OpenAI's GPT-5.6 and GPT-6 models. A cost limit you
   set yourself replaces this one;
 - the model's context window, less room for the reply. The window comes from the API when
-  it reports one (Claude, DeepSeek), else from the published one, else 128K is assumed.
+  it reports one (Claude, DeepSeek), else from the published one, else 128K is assumed,
+  as for every providers.json model.
 
 `/status` shows the limit and which of these set it. If a request still does not fit, goat
-compacts the conversation and tries once more, carrying on with the turn it was in. If
+compacts the conversation and tries once more, carrying on with the turn it was in; a
+prompt too big for the model by itself is refused instead. If
 `session.json` or `operations.json` cannot be read, goat moves it aside with a
 `.corrupt-<time>` suffix, warns, and starts fresh.
 

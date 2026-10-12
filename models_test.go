@@ -356,7 +356,7 @@ func TestStaleConversationIsCompactedBeforeUse(t *testing.T) {
 	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"old":true}`)}}}
 	cfg.staleConversation = true
 
-	compacted, err := maybeAutoCompactConversation(context.Background(), cfg, "")
+	compacted, err := maybeAutoCompactConversation(context.Background(), cfg, "", "")
 	if err != nil || !compacted {
 		t.Fatalf("expected compaction, got %v %v", compacted, err)
 	}
@@ -934,5 +934,66 @@ func TestOverflowPartwayThroughATurnCarriesOnInsteadOfStartingOver(t *testing.T)
 	retry := p.requests[2]
 	if strings.Contains(retry.UserText, "do the work") || !strings.Contains(retry.UserText, continueAfterRecoveryNote) || !strings.Contains(retry.UserText, "Result of read_dir (ok):") || len(retry.ToolResults) != 0 {
 		t.Fatalf("expected the retry to carry on with the owed tool results, got %+v", retry)
+	}
+}
+
+func TestTurnStartCountsThePromptAboutToBeSent(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// Claude Haiku 5.5 compacts at 90K, under its 100K price step.
+	model := provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}
+	setup := func() (*fakeProvider, *config) {
+		startConversation(&config{model: model}, conversationState{})
+		recordHistory(historyEntry{Type: "assistant", Content: "earlier", ResponseID: "r0", ContextTokens: 85000})
+		p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: []*provider.Response{{ID: "r1", Stop: provider.StopEndTurn, Text: "ok", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}}}
+		cfg := newModelTestConfig(t, model, p)
+		cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}
+		return p, cfg
+	}
+
+	p, cfg := setup()
+	if err := runPrompt(context.Background(), cfg, "short"); err != nil || p.completeCalls != 0 {
+		t.Fatalf("expected a short prompt to go without compacting, got %v after %d summaries", err, p.completeCalls)
+	}
+	p, cfg = setup()
+	if err := runPrompt(context.Background(), cfg, strings.Repeat("log line\n", 4000)); err != nil || p.completeCalls != 1 {
+		t.Fatalf("expected a 10K-token prompt to bring compaction forward, got %v after %d summaries", err, p.completeCalls)
+	}
+}
+
+func TestPromptTooBigByItselfIsRefusedWithoutCompacting(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	p := &fakeProvider{name: "ollama", summary: "s", sendErrs: []error{errors.New("400: This model's maximum context length is 131072 tokens")}}
+	cfg := newModelTestConfig(t, provider.Model{Provider: "ollama", ID: "deepseek-r1:8b"}, p)
+	err := runPrompt(context.Background(), cfg, strings.Repeat("x", 4*provider.DefaultContextWindow))
+	if err == nil || !strings.Contains(err.Error(), "prompt itself is too big") || p.completeCalls != 0 {
+		t.Fatalf("expected the prompt to be refused without a summary, got %v after %d summaries", err, p.completeCalls)
+	}
+}
+
+func TestRecoveryAfterCompactingPartwayCarriesOnFromTheTurn(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	// The conversation starts in the same shape a compaction leaves, so only the turn
+	// itself shows that the model had already started.
+	seeded := provider.Conversation{Provider: provider.Anthropic, ResponseID: "seeded-claude-opus-5-5", Messages: []json.RawMessage{json.RawMessage(`{"seed":true}`)}}
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		responses: toolRounds(1, defaultClaudeAutoCompactTokens+1),
+		sendErrs:  []error{nil, errors.New("prompt is too long")},
+	}
+	p.responses[0].Conversation = seeded
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	cfg.conversation = conversationState{conversation: seeded}
+
+	if err := runPrompt(context.Background(), cfg, "do the work"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	retry := p.requests[len(p.requests)-1]
+	if strings.Contains(retry.UserText, "do the work") || !strings.Contains(retry.UserText, "Result of read_dir (ok):") {
+		t.Fatalf("expected the retry to carry on with the owed results, got %q", retry.UserText)
 	}
 }

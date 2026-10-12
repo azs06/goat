@@ -26,8 +26,10 @@ const (
 	defaultDeepSeekAutoCompactTokens = 200000
 
 	// maxContextReserve is the most of a model's window kept free for the reply and for
-	// the error in the size estimate; a smaller window keeps a quarter of itself free.
-	maxContextReserve = 128000
+	// the error in the size estimate; a smaller window keeps a quarter of itself free. It
+	// covers the 128Ki tokens goat asks DeepSeek for at effort max, since DeepSeek's
+	// window counts the reply too.
+	maxContextReserve = 160000
 
 	// charsPerTokenEstimate sizes history recorded without token usage.
 	charsPerTokenEstimate = 4
@@ -206,19 +208,33 @@ func autoCompactThreshold(cfg *config) (int64, string) {
 		threshold, why = defaultCostLimit(cfg.model.Provider), "the cost limit"
 	}
 
-	limits := provider.KnownLimits(cfg.model.ID)
-	if p, err := cfg.currentProvider(); err == nil {
-		limits = provider.ModelLimits(p, cfg.model.ID)
-	} else if limits.ContextWindow <= 0 {
-		limits.ContextWindow = provider.DefaultContextWindow
-	}
+	limits := modelLimits(cfg)
 	if step := limits.PriceStep; step > 0 && cfg.autoCompactTokens <= 0 && step-step/10 < threshold {
 		threshold, why = step-step/10, fmt.Sprintf("below the %d-token price step", step)
 	}
-	if window := limits.ContextWindow - min(limits.ContextWindow/4, maxContextReserve); window < threshold {
-		threshold, why = window, fmt.Sprintf("short of the %d-token context window", limits.ContextWindow)
+	if budget := contextBudget(cfg); budget < threshold {
+		threshold, why = budget, fmt.Sprintf("short of the %d-token context window", limits.ContextWindow)
 	}
 	return threshold, why
+}
+
+// modelLimits returns the current model's limits, without asking the network.
+func modelLimits(cfg *config) provider.Limits {
+	if p, err := cfg.currentProvider(); err == nil {
+		return provider.ModelLimits(p, cfg.model.ID)
+	}
+	limits := provider.KnownLimitsFor(cfg.model.Provider, cfg.model.ID)
+	if limits.ContextWindow <= 0 {
+		limits.ContextWindow = provider.DefaultContextWindow
+	}
+	return limits
+}
+
+// contextBudget is the most a conversation may hold before a request: the model's window
+// less the reserve for the reply.
+func contextBudget(cfg *config) int64 {
+	window := modelLimits(cfg).ContextWindow
+	return window - min(window/4, maxContextReserve)
 }
 
 // defaultCostLimit is the cost limit for a provider's models.
@@ -235,7 +251,10 @@ func defaultCostLimit(providerName string) int64 {
 // maybeAutoCompactConversation compacts the conversation once it has grown past the
 // threshold or was built with another prompt. focus, when set, tells the summary what
 // to keep.
-func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus string) (bool, error) {
+//
+// pending is text about to be sent that the history does not hold yet, such as the
+// prompt that starts a turn; it counts toward the size.
+func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus, pending string) (bool, error) {
 	if cfg == nil || cfg.conversation.conversation.IsEmpty() {
 		return false, nil
 	}
@@ -249,7 +268,10 @@ func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus string
 			return false, err
 		}
 		threshold, thresholdWhy := autoCompactThreshold(cfg)
-		shouldCompact, why := shouldAutoCompactConversation(entries, threshold)
+		// A big prompt brings compaction forward, but at most halfway: a summary cannot
+		// shrink the prompt itself.
+		pendingTokens := int64(len([]rune(pending))) / charsPerTokenEstimate
+		shouldCompact, why := shouldAutoCompactConversation(entries, max(threshold-pendingTokens, threshold/2))
 		if !shouldCompact {
 			return false, nil
 		}

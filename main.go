@@ -391,7 +391,8 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	// that is still too big right after compacting, not again this turn: each attempt
 	// costs a summary request.
 	midTurnCompaction, justCompacted := true, false
-	if compacted, err := maybeAutoCompactConversation(ctx, cfg, ""); err != nil {
+	// The prompt goes with the turn's first request, so it counts toward the size.
+	if compacted, err := maybeAutoCompactConversation(ctx, cfg, "", prompt); err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
@@ -401,6 +402,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		justCompacted = compacted
 	}
 
+	// turnStarted is set once the model has answered this turn's first request; lastOwed
+	// are the tool results the latest round produced. Recovery needs both, and after a
+	// compaction partway through the turn the conversation's shape no longer shows them.
+	turnStarted, lastOwed := false, []provider.ToolResult(nil)
 	opts := turnOptions{
 		model:       cfg.model.ID,
 		effort:      cfg.reasoningEffort,
@@ -410,6 +415,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
+			turnStarted, lastOwed = true, state.pendingToolResults
 			cfg.conversation = state
 			cfg.pendingShell = nil
 			saveSession(cfg)
@@ -436,7 +442,7 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 					}
 				}
 			}
-			compacted, err := maybeAutoCompactConversation(ctx, cfg, midTurnCompactionFocus)
+			compacted, err := maybeAutoCompactConversation(ctx, cfg, midTurnCompactionFocus, "")
 			if err != nil {
 				midTurnCompaction = false
 				if ctx.Err() == nil {
@@ -472,9 +478,17 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	// The API no longer accepts this conversation's thinking blocks, or it outgrew the
 	// model's window. Carry it over in a summary and try once more. A turn the model had
 	// already started goes on from where it was instead of starting over.
-	moved := conversationMoved(sent, next.conversation)
+	moved := turnStarted || conversationMoved(sent, next.conversation)
 	owed := next.pendingToolResults
-	fmt.Println(formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
+	if len(owed) == 0 && turnStarted {
+		// A request after compacting partway through carried them as text.
+		owed = lastOwed
+	}
+	if errors.Is(err, errContextExceeded) && !moved && int64(len([]rune(prompt)))/charsPerTokenEstimate >= contextBudget(cfg) {
+		// No summary makes room for a prompt that does not fit by itself.
+		return fmt.Errorf("%w: the prompt itself is too big for this model; shorten it", err)
+	}
+	fmt.Fprintln(activityOut, formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
 	summaryConversation, summary, compactErr := compactConversation(ctx, p, cfg.model.ID, "")
 	if compactErr != nil {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
@@ -489,6 +503,9 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	cfg.conversation = next
 	if err == nil || conversationMoved(sent, next.conversation) {
 		cfg.pendingShell = nil
+	}
+	if errors.Is(err, errContextExceeded) {
+		return fmt.Errorf("%w even after compacting; shorten the prompt, or start over with /clear", err)
 	}
 	return err
 }

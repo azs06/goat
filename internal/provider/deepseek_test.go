@@ -87,6 +87,8 @@ func TestKnownLimits(t *testing.T) {
 		"claude-haiku-4-5-20251001": {ContextWindow: 200_000},
 		"gpt-6-luna":                {ContextWindow: 922_000, PriceStep: 272_000},
 		"gpt-5.6-terra":             {ContextWindow: 922_000, PriceStep: 272_000},
+		"claude-sonnet-4-20250514":  {ContextWindow: 200_000},
+		"claude-opus-4-0":           {ContextWindow: 200_000},
 		"qwen3:8b":                  {},
 	} {
 		if got := KnownLimits(model); got != want {
@@ -95,5 +97,11 @@ func TestKnownLimits(t *testing.T) {
 	}
 	if limits := ModelLimits(&anthropicProvider{capabilities: map[string]anthropicModelCapabilities{}}, "qwen3:8b"); limits.ContextWindow != DefaultContextWindow {
 		t.Errorf("expected an unknown model to get the default window, got %+v", limits)
+	}
+	// A providers.json entry's model that shares a built-in name is not assumed to share
+	// its window.
+	entry := &anthropicProvider{name: "ollama", entry: true, capabilities: map[string]anthropicModelCapabilities{}}
+	if limits := ModelLimits(entry, "deepseek-r1:8b"); limits.ContextWindow != DefaultContextWindow {
+		t.Errorf("expected an entry's model to get the default window, got %+v", limits)
 	}
 }

@@ -73,6 +73,11 @@ func priceFor(model string) (modelPrice, bool) {
 			if err := json.Unmarshal(data, &userPrices.prices); err != nil {
 				warnf("ignoring %s: %v", userPricesPath(), err)
 			}
+			for id, price := range userPrices.prices {
+				if price.Long != nil && price.LongAbove <= 0 && provider.KnownLimits(id).PriceStep <= 0 {
+					warnf("%s: %q has a long price but no long_above, and goat knows no price step for it; its long price is not used", userPricesPath(), id)
+				}
+			}
 		}
 	})
 	for _, table := range []map[string]modelPrice{userPrices.prices, builtinPrices} {
