@@ -241,7 +241,7 @@ func ModelChoices(current Model, extra map[string][]string) []Model {
 
 // pickerModels narrows a provider's models to the ones the picker offers: OpenAI's
 // GPT-5.6 and GPT-6 series, Claude's 5.5 models and Claude Fable 5.1, DeepSeek's
-// newest pro and flash models, and the OpenCode Go models goat can use. Any model can
+// newest pro and flash models, and the OpenCode Go models off the Responses API. Any model can
 // still be chosen by name.
 func pickerModels(provider string, ids []string) []string {
 	switch provider {
@@ -262,7 +262,7 @@ func pickerModels(provider string, ids []string) []string {
 		return newestDeepSeekModels(ids)
 	default:
 		if isOpenCode(provider) {
-			return filterModels(ids, func(id string) bool { return slices.Contains(openCodeModels, id) })
+			return filterModels(ids, func(id string) bool { return openCodeAPI(id) != apiResponses })
 		}
 		// An entry that lists models offers just those; one without offers whatever its
 		// server lists.

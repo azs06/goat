@@ -261,8 +261,9 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		return
 	}
 
-	// The saved conversation belongs to another provider. If the previous one matches,
-	// swap the two; otherwise start fresh and keep the saved one for /resume.
+	// The saved conversation belongs to another provider, or to another of opencode-go's
+	// APIs. If the previous one fits, swap the two; otherwise start fresh and keep the
+	// saved one for /resume.
 	previous, _ := loadSessionFile(previousSessionPath)
 	if err := sessionSaver(previousSessionPath, *saved); err != nil {
 		warnf("failed to keep the saved conversation: %v", err)
@@ -271,7 +272,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model) {
 		adoptSavedConversation(cfg, previous)
 		saveSession(cfg)
-		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", cfg.model.Provider, saved.Conversation.Provider)))
+		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", previous.Model, saved.Model)))
 		return
 	}
 

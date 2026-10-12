@@ -550,8 +550,8 @@ ones that have one. They list no models of their own: `/model` asks the provider
 [OpenCode Go](https://opencode.ai/docs/go) is the exception to "OpenAI-compatible": one
 subscription serving open models through Chat Completions (Kimi, GLM, DeepSeek, MiMo and
 others) and the Anthropic Messages API (MiniMax, Qwen, Claude Haiku), and goat picks the
-API per model, as OpenCode's docs list it. `/model` offers its models without asking the
-server; they need the prefix, e.g. `/model opencode-go:kimi-k3`, so a bare
+API per model, as OpenCode's docs list it. The `/model` picker offers goat's list of its
+models, and `/model list` adds any others the server reports; they need the prefix, e.g. `/model opencode-go:kimi-k3`, so a bare
 `deepseek-v4-pro` stays DeepSeek's own. Its GPT, Grok and Muse models are served through
 OpenAI's Responses API, which goat speaks only to OpenAI, and are refused. Switching
 between a Chat Completions model and a Messages model carries the conversation over, as a

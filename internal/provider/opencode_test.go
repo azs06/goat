@@ -207,7 +207,8 @@ func TestOpenCodeGoPickerAndLimits(t *testing.T) {
 			offered = append(offered, model.ID)
 		}
 	}
-	if !slices.Equal(offered, openCodeModels) {
+	// goat's list first, then what else the server reports, as /model list shows it.
+	if want := append(slices.Clone(openCodeModels), "omen-alpha"); !slices.Equal(offered, want) {
 		t.Fatalf("got %v", offered)
 	}
 	for _, model := range openCodeModels {
