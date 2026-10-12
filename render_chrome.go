@@ -70,7 +70,7 @@ func renderBanner(model, effort, cwd, git string, width int) string {
 		style.Accent.Render(g.TopLeft + strings.Repeat(g.HLine, width-2) + g.TopRight),
 		row(style.Title.Render(title)),
 		row(""),
-		dimRow("model  " + model + " " + g.Dot + " effort " + effort),
+		dimRow("model  " + modelEffortText(model, effort)),
 		dimRow("cwd    " + cwd),
 	}
 	if git != "" {
@@ -82,6 +82,18 @@ func renderBanner(model, effort, cwd, git string, width int) string {
 		style.Accent.Render(g.BottomLeft+strings.Repeat(g.HLine, width-2)+g.BottomRight),
 	)
 	return strings.Join(lines, "\n")
+}
+
+// modelEffortText is the banner's model row: "anthropic:claude-opus-5-5 · effort high".
+func modelEffortText(model, effort string) string {
+	return model + " " + style.Glyphs().Dot + " effort " + effort
+}
+
+// renderModelLine restates the banner's model row after the model or effort changes,
+// since the banner itself stays in the scrollback as it was printed. It is for color
+// mode, where there is a banner box to echo.
+func renderModelLine(model, effort string, width int) string {
+	return style.Muted.Render(style.TruncateToWidth("  model  "+modelEffortText(model, effort), width-1))
 }
 
 // renderFooter joins the status parts with dots into one dim line that fits in width-1
@@ -101,6 +113,7 @@ type shortcut struct{ keys, action string }
 
 var promptShortcuts = []shortcut{
 	{"/", "commands"},
+	{"!", "run a shell command"},
 	{"tab", "complete command or path"},
 	{"↑ ↓", "history, or lines"},
 	{"ctrl-j", "new line (or \\ enter)"},
@@ -297,7 +310,7 @@ var helpGroups = []struct {
 }{
 	{"Conversation", []string{"clear", "resume", "retry", "compact", "copy", "export"}},
 	{"Model", []string{"model", "effort", "status"}},
-	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "approve", "tools"}},
+	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "ps", "approve", "tools"}},
 	{"goat", []string{"theme", "history", "help", "exit"}},
 }
 

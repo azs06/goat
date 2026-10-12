@@ -60,6 +60,9 @@ type turnOptions struct {
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	approveBash func(ctx context.Context, command, workdir string) error
+	// contextNote, when set, goes before the prompt in the turn's first request, such as
+	// the output of the ! commands the user ran since the last message.
+	contextNote string
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -78,7 +81,8 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 // the markdown renderer, which prints each line once it is complete; plain output is
 // printed as it arrives. Either way control characters are made visible first (carriage
 // returns are dropped), so model text cannot move the cursor, clear the screen or set
-// the window title. The spinner is cleared just before anything is drawn.
+// the window title. Lines are printed above the spinner, which stays under them with
+// the input line, so where to type never disappears while the reply streams.
 func printModelText(md *markdown.Stream, text string) {
 	text = escapeControlChars(strings.ReplaceAll(text, "\r", ""))
 	if !style.Enabled() || md == nil {
@@ -86,8 +90,8 @@ func printModelText(md *markdown.Stream, text string) {
 		return
 	}
 	if out := md.Write(text); out != "" {
-		stopSpinner()
-		fmt.Print(out)
+		relabelSpinner("Writing")
+		printAboveSpinner(out)
 	}
 }
 
@@ -336,6 +340,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
 	}
+	req.UserText = opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
 	}

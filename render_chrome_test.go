@@ -289,3 +289,17 @@ func TestRenderApprovalCardWrapsLongCommands(t *testing.T) {
 		t.Errorf("command not shown in full: %q", joined)
 	}
 }
+
+func TestRenderModelLineEchoesTheBannerRow(t *testing.T) {
+	withColor(t, true)
+	banner := style.StripANSI(renderBanner("anthropic:claude-opus-5-5", "high", "~/code", "", 80))
+	for _, width := range []int{20, 50, 200} {
+		line := renderModelLine("anthropic:claude-opus-5-5", "high", width)
+		if w := style.VisibleWidth(line); w > width-1 {
+			t.Errorf("width %d: line is %d wide", width, w)
+		}
+		if width == 200 && !strings.Contains(banner, strings.TrimSpace(style.StripANSI(line))) {
+			t.Errorf("model line %q is not the banner's row:\n%s", style.StripANSI(line), banner)
+		}
+	}
+}
