@@ -344,12 +344,28 @@ func compactedToolResultsText(results []provider.ToolResult) string {
 	return b.String()
 }
 
-var errContextExceeded = errors.New("the conversation no longer fits in the model's context window; run /compact")
+var errContextExceeded = errors.New("the conversation no longer fits in the model's context window")
 
-// isContextOverflowError recognises both APIs' "prompt is too long" errors.
+// isContextOverflowError recognises both APIs' "prompt is too long" errors, and the
+// "maximum context length" wording of OpenAI-compatible servers.
 func isContextOverflowError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "context_length_exceeded") || strings.Contains(message, "prompt is too long") || strings.Contains(message, "context window")
+	return strings.Contains(message, "context_length_exceeded") || strings.Contains(message, "prompt is too long") || strings.Contains(message, "context window") || strings.Contains(message, "maximum context length")
+}
+
+// continueAfterRecoveryNote goes to the model, followed by any tool results it was
+// owed, when a turn that had already started is retried in a compacted conversation.
+const continueAfterRecoveryNote = "[The conversation was compacted partway through this task because it could not be continued as it was. Carry on with the task from where you left off.]"
+
+// recoveryPromptText is what a retry in a compacted conversation sends: the prompt
+// again when the model never saw it, or a note and the owed tool results when the turn
+// was already underway.
+func recoveryPromptText(prompt string, moved bool, owed []provider.ToolResult) string {
+	if !moved {
+		return prompt
+	}
+	text := compactedToolResultsText(owed)
+	return continueAfterRecoveryNote + strings.TrimPrefix(text, continueAfterCompactionNote)
 }
 
 // sendPromptStream runs one user turn: it streams the reply and keeps executing tool

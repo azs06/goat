@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/azs06/goat/internal/provider"
 )
 
 // modelPrice is a model's price in US dollars per million tokens.
@@ -15,18 +17,40 @@ type modelPrice struct {
 	Output     float64 `json:"output"`
 	CacheRead  float64 `json:"cache_read"`
 	CacheWrite float64 `json:"cache_write"`
+	// Long, when set, is the price of a whole request whose prompt is over LongAbove
+	// tokens, or over the model's published price step when LongAbove is 0.
+	Long      *modelPrice `json:"long,omitempty"`
+	LongAbove int64       `json:"long_above,omitempty"`
 }
 
 // builtinPrices are Anthropic's list prices (2026-10) for the models the picker offers.
 // Cache writes are the 5-minute rate, 1.25x input. Other models have no built-in price;
 // their costs can be set in ~/.config/goat/prices.json:
 //
-//	{"gpt-6-luna": {"input": 1.25, "output": 10, "cache_read": 0.125}}
+//	{"gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_read": 0.01,
+//	  "long": {"input": 0.20, "output": 0.75, "cache_read": 0.02}}}
 var builtinPrices = map[string]modelPrice{
 	"claude-fable-5-1":  {Input: 10, Output: 50, CacheRead: 0.25, CacheWrite: 12.5},
 	"claude-opus-5-5":   {Input: 4, Output: 20, CacheRead: 0.20, CacheWrite: 5},
-	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheRead: 0.20, CacheWrite: 2.5},
-	"claude-haiku-5-5":  {Input: 0.10, Output: 0.50, CacheRead: 0.01, CacheWrite: 0.125},
+	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheRead: 0.10, CacheWrite: 2.5},
+	// Five times as much past 100K prompt tokens, cache reads and writes included.
+	"claude-haiku-5-5": {Input: 0.10, Output: 0.50, CacheRead: 0.01, CacheWrite: 0.125,
+		Long: &modelPrice{Input: 0.50, Output: 2.50, CacheRead: 0.05, CacheWrite: 0.625}},
+}
+
+// forPrompt is the price that applies to a request with promptTokens of prompt.
+func (p modelPrice) forPrompt(model string, promptTokens int64) modelPrice {
+	if p.Long == nil {
+		return p
+	}
+	above := p.LongAbove
+	if above <= 0 {
+		above = provider.KnownLimits(model).PriceStep
+	}
+	if above > 0 && promptTokens > above {
+		return *p.Long
+	}
+	return p
 }
 
 var userPrices struct {
@@ -80,6 +104,7 @@ func usageCost(entries []historyEntry) (cost float64, responses int, known bool)
 			known = false
 			continue
 		}
+		price = price.forPrompt(entry.Model, entry.PromptTokens)
 		uncached := entry.PromptTokens - entry.CacheReadTokens - entry.CacheWriteTokens
 		output := max(entry.ContextTokens-entry.PromptTokens, 0)
 		cost += (float64(uncached)*price.Input + float64(output)*price.Output +

@@ -419,7 +419,8 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	}
 	rows = append(rows, [2]string{"Session:", conversation})
 	if entries, err := loadConversationHistoryEntries(); err == nil {
-		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d", estimateConversationTokens(entries), autoCompactThreshold(c))})
+		threshold, why := autoCompactThreshold(c)
+		rows = append(rows, [2]string{"Context:", fmt.Sprintf("about %d tokens; auto-compacts at %d (%s)", estimateConversationTokens(entries), threshold, why)})
 		if cost, responses, known := usageCost(historyEntriesSinceLastReset(entries)); responses > 0 {
 			text := formatCost(cost) + " for this conversation"
 			if !known {

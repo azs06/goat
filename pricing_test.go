@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,10 +13,13 @@ func TestUsageCost(t *testing.T) {
 		// 1M uncached input, 1M cache reads and 1M output on Opus 5.5: $4 + $0.20 + $20.
 		{Type: "tool_call", ResponseID: "r1", Model: "claude-opus-5-5", PromptTokens: 2_000_000, CacheReadTokens: 1_000_000, ContextTokens: 3_000_000},
 		{Type: "tool_call", ResponseID: "r1", Model: "claude-opus-5-5", PromptTokens: 2_000_000, CacheReadTokens: 1_000_000, ContextTokens: 3_000_000},
+		// 1M prompt tokens on Haiku 5.5 is past its 100K price step: $0.50, not $0.10.
 		{Type: "assistant", ResponseID: "r2", Model: "claude-haiku-5-5-20261001", PromptTokens: 1_000_000, ContextTokens: 1_000_000},
+		// 100K is not past it: 50K uncached at $0.10 and 50K cache reads at $0.01.
+		{Type: "assistant", ResponseID: "r3", Model: "claude-haiku-5-5", PromptTokens: 100_000, CacheReadTokens: 50_000, ContextTokens: 100_000},
 	}
 	cost, responses, known := usageCost(entries)
-	if responses != 2 || !known || formatCost(cost) != "$24.30" {
+	if responses != 3 || !known || fmt.Sprintf("%.5f", cost) != "24.70550" {
 		t.Fatalf("got %s over %d responses (known %v)", formatCost(cost), responses, known)
 	}
 	if _, _, known := usageCost([]historyEntry{{ResponseID: "x", Model: "mystery", PromptTokens: 5}}); known {

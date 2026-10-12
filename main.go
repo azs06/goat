@@ -428,7 +428,8 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 			if justCompacted {
 				justCompacted = false
 				if entries, err := loadConversationHistoryEntries(); err == nil {
-					if over, _ := shouldAutoCompactConversation(entries, autoCompactThreshold(cfg)); over {
+					threshold, _ := autoCompactThreshold(cfg)
+					if over, _ := shouldAutoCompactConversation(entries, threshold); over {
 						midTurnCompaction = false
 						warnf("the conversation is still over the auto-compact threshold right after compacting; not compacting again this turn")
 						return provider.Conversation{}, false
@@ -464,20 +465,27 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		// that failed outright keeps it for /retry.
 		cfg.pendingShell = nil
 	}
-	if err == nil || !provider.IsThinkingBindingError(err) {
+	if err == nil || !provider.IsThinkingBindingError(err) && !errors.Is(err, errContextExceeded) {
 		return err
 	}
 
-	// The API no longer accepts this conversation's thinking blocks. Carry it over in a
-	// summary and try once more.
+	// The API no longer accepts this conversation's thinking blocks, or it outgrew the
+	// model's window. Carry it over in a summary and try once more. A turn the model had
+	// already started goes on from where it was instead of starting over.
+	moved := conversationMoved(sent, next.conversation)
+	owed := next.pendingToolResults
 	fmt.Println(formatNotice("The conversation could not be continued as-is; compacting it and retrying."))
 	summaryConversation, summary, compactErr := compactConversation(ctx, p, cfg.model.ID, "")
 	if compactErr != nil {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
+	if moved {
+		// The note and any ! output went with the turn's first request.
+		opts.contextNote = ""
+	}
 	sent = cfg.conversation.conversation
-	next, err = sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
+	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || conversationMoved(sent, next.conversation) {
 		cfg.pendingShell = nil

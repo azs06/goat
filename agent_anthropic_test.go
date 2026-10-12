@@ -232,7 +232,7 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 	)
 	fake.modelInfo = map[string]any{
 		"id": "claude-opus-5-5", "type": "model", "display_name": "Claude Opus 5.5", "created_at": "2026-01-01T00:00:00Z",
-		"max_tokens": 128000, "max_input_tokens": 1000000,
+		"max_tokens": 128000, "max_input_tokens": 900000,
 		"capabilities": map[string]any{
 			"thinking": map[string]any{"supported": true, "types": map[string]any{"adaptive": map[string]any{"supported": true}, "enabled": map[string]any{"supported": false}}},
 			"effort":   map[string]any{"supported": true, "low": map[string]any{"supported": true}, "medium": map[string]any{"supported": true}, "high": map[string]any{"supported": true}, "xhigh": map[string]any{"supported": true}, "max": map[string]any{"supported": true}},
@@ -245,6 +245,9 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 		t.Fatalf("sendPromptStream: %v", err)
 	}
 
+	if limits := provider.ModelLimits(p, "claude-opus-5-5"); limits.ContextWindow != 900000 {
+		t.Errorf("expected the window the Models API reported, got %+v", limits)
+	}
 	first := fake.request(0)
 	if first.body["max_tokens"].(float64) != 64000 {
 		t.Errorf("expected max_tokens %d, got %v", 64000, first.body["max_tokens"])
@@ -649,7 +652,7 @@ func TestAnthropicTurnCompactedBetweenToolRoundsSendsTheResultsAsText(t *testing
 	chdirForTest(t, workDir)
 
 	big := &sse{}
-	big.event("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":%d,"output_tokens":1}}}`, defaultAnthropicAutoCompactTokens+1))
+	big.event("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":%d,"output_tokens":1}}}`, defaultClaudeAutoCompactTokens+1))
 	fake := newFakeAnthropic(t,
 		big.toolUse("toolu_1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
 		newSSE("msg_sum").text("Goal: look around.").stop("end_turn", ""),

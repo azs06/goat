@@ -19,8 +19,11 @@ import (
 
 // fakeProvider is a scripted Provider for tests that do not care about the wire format.
 type fakeProvider struct {
-	name        string
-	responses   []*provider.Response
+	name      string
+	responses []*provider.Response
+	// sendErrs, when set, are returned by the first Send calls in order; a nil one lets
+	// that call take the next response.
+	sendErrs    []error
 	requests    []provider.Request
 	completeErr error
 	// completeFailures makes the first Complete calls fail with a retryable error.
@@ -35,6 +38,13 @@ func (f *fakeProvider) Name() string { return f.name }
 
 func (f *fakeProvider) Send(ctx context.Context, req provider.Request, onText func(string)) (*provider.Response, bool, error) {
 	f.requests = append(f.requests, req)
+	if len(f.sendErrs) > 0 {
+		err := f.sendErrs[0]
+		f.sendErrs = f.sendErrs[1:]
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	if len(f.responses) == 0 {
 		return nil, false, errors.New("no scripted response")
 	}
@@ -736,17 +746,26 @@ func TestOneShotStartWritesNoSessionFiles(t *testing.T) {
 
 func TestAutoCompactThresholdDefaultsAndOverride(t *testing.T) {
 	for _, tc := range []struct {
-		provider       string
-		override, want int64
+		model    provider.Model
+		override int64
+		want     int64
+		why      string
 	}{
-		{provider.OpenAI, 0, defaultAutoCompactTokens},
-		{provider.Anthropic, 0, defaultAnthropicAutoCompactTokens},
-		{provider.DeepSeek, 0, defaultAnthropicAutoCompactTokens},
-		{provider.Anthropic, 25000, 25000},
+		{provider.Model{Provider: provider.OpenAI, ID: "gpt-6-luna"}, 0, defaultAutoCompactTokens, "cost limit"},
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, 0, defaultClaudeAutoCompactTokens, "cost limit"},
+		{provider.Model{Provider: provider.DeepSeek, ID: "deepseek-v4-pro"}, 0, defaultDeepSeekAutoCompactTokens, "cost limit"},
+		// Claude Haiku 5.5 costs five times as much past 100K prompt tokens.
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}, 0, 90000, "price step"},
+		// A chosen size wins over the price step, but not over the window.
+		{provider.Model{Provider: provider.Anthropic, ID: "claude-haiku-5-5"}, 150000, 150000, "configured"},
+		{provider.Model{Provider: provider.OpenAI, ID: "gpt-6-luna"}, 2_000_000, 922_000 - maxContextReserve, "context window"},
+		// A model goat knows nothing about is assumed to have a 128K window.
+		{provider.Model{Provider: "ollama", ID: "qwen3:8b"}, 200000, provider.DefaultContextWindow * 3 / 4, "context window"},
 	} {
-		cfg := &config{model: provider.Model{Provider: tc.provider, ID: "m"}, autoCompactTokens: tc.override}
-		if got := autoCompactThreshold(cfg); got != tc.want {
-			t.Errorf("%s with override %d: got %d, want %d", tc.provider, tc.override, got, tc.want)
+		cfg := &config{model: tc.model, autoCompactTokens: tc.override}
+		got, why := autoCompactThreshold(cfg)
+		if got != tc.want || !strings.Contains(why, tc.why) {
+			t.Errorf("%s with override %d: got %d (%s), want %d (%s)", tc.model, tc.override, got, why, tc.want, tc.why)
 		}
 	}
 }
@@ -756,7 +775,7 @@ func TestLongTurnIsCompactedBetweenToolRounds(t *testing.T) {
 	chdirForTest(t, workDir)
 
 	p := &fakeProvider{name: provider.Anthropic, summary: "MIDSUMMARY", responses: []*provider.Response{
-		{ID: "r1", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "t1", Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: defaultAnthropicAutoCompactTokens + 1}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}},
+		{ID: "r1", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "t1", Name: "read_dir", Arguments: `{"path":"."}`}}, Usage: provider.Usage{InputTokens: defaultClaudeAutoCompactTokens + 1}, Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":1}`)}}},
 		{ID: "r2", Stop: provider.StopEndTurn, Text: "done", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"n":2}`)}}},
 	}}
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
@@ -797,7 +816,7 @@ func TestMidTurnCompactionStopsWhenItCannotHelp(t *testing.T) {
 	chdirForTest(t, workDir)
 
 	// Every round stays over the threshold, even right after compacting.
-	p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: toolRounds(4, defaultAnthropicAutoCompactTokens+1)}
+	p := &fakeProvider{name: provider.Anthropic, summary: "s", responses: toolRounds(4, defaultClaudeAutoCompactTokens+1)}
 	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
 	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
 		t.Fatalf("runPrompt: %v", err)
@@ -807,7 +826,7 @@ func TestMidTurnCompactionStopsWhenItCannotHelp(t *testing.T) {
 	}
 
 	// A failed summary is not retried every round either.
-	p = &fakeProvider{name: provider.Anthropic, completeErr: errors.New("summary refused"), responses: toolRounds(4, defaultAnthropicAutoCompactTokens+1)}
+	p = &fakeProvider{name: provider.Anthropic, completeErr: errors.New("summary refused"), responses: toolRounds(4, defaultClaudeAutoCompactTokens+1)}
 	cfg = newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
 	if err := runPrompt(context.Background(), cfg, "work"); err != nil {
 		t.Fatalf("runPrompt: %v", err)
@@ -869,5 +888,51 @@ func TestShortTurnIsNotCompactedBetweenToolRounds(t *testing.T) {
 	}
 	if p.completeCalls != 0 || len(p.requests[1].ToolResults) != 1 || p.requests[1].UserText != "" {
 		t.Fatalf("expected the tool results to go straight back, got %d summaries and %+v", p.completeCalls, p.requests[1])
+	}
+}
+
+func TestOverflowingPromptIsCompactedAndSentAgain(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	recordHistory(historyEntry{Type: "user", Content: "earlier work"})
+
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		sendErrs:  []error{errors.New("400 invalid_request_error: prompt is too long: 1000500 tokens > 1000000 maximum")},
+		responses: []*provider.Response{{ID: "r1", Stop: provider.StopEndTurn, Text: "ok", Conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}}},
+	}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{"old":true}`)}}}
+
+	if err := runPrompt(context.Background(), cfg, "next step"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if p.completeCalls != 1 || len(p.requests) != 2 {
+		t.Fatalf("expected one compaction and one retry, got %d summaries and %d requests", p.completeCalls, len(p.requests))
+	}
+	if retry := p.requests[1]; retry.UserText != "next step" || string(retry.Conversation.Messages[0]) != `{"seed":true}` {
+		t.Fatalf("expected the prompt again in the compacted conversation, got %+v", retry)
+	}
+}
+
+func TestOverflowPartwayThroughATurnCarriesOnInsteadOfStartingOver(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	rounds := toolRounds(1, 1000)
+	p := &fakeProvider{name: provider.Anthropic, summary: "s",
+		sendErrs:  []error{nil, errors.New("400: This model's maximum context length is 128000 tokens")},
+		responses: rounds,
+	}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+
+	if err := runPrompt(context.Background(), cfg, "do the work"); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if len(p.requests) != 3 {
+		t.Fatalf("expected the turn, the failed round and the retry, got %d requests", len(p.requests))
+	}
+	retry := p.requests[2]
+	if strings.Contains(retry.UserText, "do the work") || !strings.Contains(retry.UserText, continueAfterRecoveryNote) || !strings.Contains(retry.UserText, "Result of read_dir (ok):") || len(retry.ToolResults) != 0 {
+		t.Fatalf("expected the retry to carry on with the owed tool results, got %+v", retry)
 	}
 }
