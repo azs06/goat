@@ -351,6 +351,12 @@ func authEntryKind(path, name string) (string, error) {
 // readAuthFields reads auth.json's top-level fields, in order. A missing or empty file
 // has none. Errors never quote the file.
 func readAuthFields(path string) ([]jsonfile.Field, error) {
+	return readJSONFields(path, "auth.json")
+}
+
+// readJSONFields reads the top-level fields of a JSON object file, in order. A missing
+// or empty file has none. Errors never quote the file, which may hold keys.
+func readJSONFields(path, what string) ([]jsonfile.Field, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -361,33 +367,39 @@ func readAuthFields(path string) ([]jsonfile.Field, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, nil
 	}
-	fields, err := jsonfile.Object(data, "auth.json must be a JSON object")
+	fields, err := jsonfile.Object(data, what+" must be a JSON object")
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w; fix it, then run /login again", displayPath(path), err)
+		return nil, fmt.Errorf("%s: %w; fix it, then try again", displayPath(path), err)
 	}
 	return fields, nil
 }
 
 // writeAuthKey sets a provider's key in auth.json and keeps everything else in it. The
-// file is replaced in one step, readable only by the user; a symbolic link, as from a
-// dotfiles repository, is followed and its target replaced.
+// file is readable only by the user.
 func writeAuthKey(path, name, key string) error {
-	path, err := followLinks(path)
-	if err != nil {
-		return err
-	}
-	fields, err := readAuthFields(path)
-	if err != nil {
-		return err
-	}
-
 	var value bytes.Buffer
 	encoder := json.NewEncoder(&value)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(map[string]string{"key": key}); err != nil {
 		return err
 	}
-	entry := jsonfile.Field{Name: name, Value: bytes.TrimSpace(value.Bytes())}
+	return writeJSONField(path, "auth.json", name, bytes.TrimSpace(value.Bytes()), 0o600)
+}
+
+// writeJSONField sets one top-level field of a JSON object file (auth.json, config.json)
+// and keeps the others, in order. The file is replaced in one step with mode perm; a
+// symbolic link, as from a dotfiles repository, is followed and its target replaced.
+func writeJSONField(path, what, name string, value json.RawMessage, perm os.FileMode) error {
+	path, err := followLinks(path)
+	if err != nil {
+		return err
+	}
+	fields, err := readJSONFields(path, what)
+	if err != nil {
+		return err
+	}
+
+	entry := jsonfile.Field{Name: name, Value: value}
 	replaced := false
 	for i := range fields {
 		if fields[i].Name == name {
@@ -421,12 +433,12 @@ func writeAuthKey(path, name, key string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".auth-*.json")
+	tmp, err := os.CreateTemp(dir, "."+strings.TrimSuffix(filepath.Base(path), ".json")+"-*.json")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()
 		return err
 	}
