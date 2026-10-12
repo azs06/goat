@@ -51,7 +51,7 @@ func TestProjectInstructionsGoWithTheFirstMessageOnly(t *testing.T) {
 	}
 	second := messagesOf(t, fake.request(1))
 	last := second[len(second)-1].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if last != "again" {
+	if last != modelNote("claude-opus-5-5", "anthropic")+"again" {
 		t.Errorf("expected later messages without the instructions, got %q", last)
 	}
 
