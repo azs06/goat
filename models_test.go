@@ -1013,3 +1013,31 @@ func TestResumeIsRefusedInARunThatIsNotSaved(t *testing.T) {
 		t.Fatalf("expected session.prev.json to be left alone, got %+v", previous)
 	}
 }
+
+func TestSwitchModelWithinOpenCodeGoCarriesOverBetweenAPIs(t *testing.T) {
+	configTest(t)
+	chdirForTest(t, t.TempDir())
+	t.Setenv("OPENCODE_API_KEY", "oc-test")
+	loadAll(t)
+	recordHistory(historyEntry{Type: "user", Content: "Refactor the parser."})
+
+	fake := &fakeProvider{name: provider.OpenCodeGo, summary: "Goal: refactor the parser."}
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenCodeGo, ID: "kimi-k3"}, fake)
+	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.OpenCodeGo, Format: provider.FormatChat, Messages: []json.RawMessage{json.RawMessage(`{"role":"user","content":"hi"}`)}}}
+
+	// Another Chat Completions model continues the transcript.
+	if err := commandModel(context.Background(), cfg, []string{"opencode-go:glm-5.3"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.seeded) != 0 || len(cfg.conversation.conversation.Messages) != 1 {
+		t.Fatalf("expected the conversation to continue, got %+v (seeded %v)", cfg.conversation, fake.seeded)
+	}
+
+	// A Messages model cannot read it, so it gets a summary, as another provider would.
+	if err := commandModel(context.Background(), cfg, []string{"opencode-go:minimax-m3"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.model != (provider.Model{Provider: provider.OpenCodeGo, ID: "minimax-m3"}) || !slices.Equal(fake.seeded, []string{"minimax-m3"}) {
+		t.Fatalf("expected minimax-m3 to be seeded, got %v (seeded %v)", cfg.model, fake.seeded)
+	}
+}

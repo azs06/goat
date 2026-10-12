@@ -250,13 +250,13 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 	if saved.Conversation.IsEmpty() && len(saved.PendingToolResults) == 0 {
 		// A start that sent nothing leaves an empty session behind; -c means the last
 		// conversation that had something in it.
-		if previous, _ := loadSessionFile(previousSessionPath); previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
+		if previous, _ := loadSessionFile(previousSessionPath); previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model) {
 			adoptSavedConversation(cfg, previous)
 			saveSession(cfg)
 			return
 		}
 	}
-	if saved.Conversation.Fits(cfg.model.Provider) {
+	if saved.Conversation.Fits(cfg.model) {
 		adoptSavedConversation(cfg, saved)
 		return
 	}
@@ -268,7 +268,7 @@ func restoreSavedConversation(cfg *config, saved *savedSession) {
 		warnf("failed to keep the saved conversation: %v", err)
 		return
 	}
-	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model.Provider) {
+	if previous != nil && !previous.Conversation.IsEmpty() && previous.Conversation.Fits(cfg.model) {
 		adoptSavedConversation(cfg, previous)
 		saveSession(cfg)
 		fmt.Println(formatNotice(fmt.Sprintf("Continuing the earlier %s conversation; the %s one is kept and /resume switches to it.", cfg.model.Provider, saved.Conversation.Provider)))

@@ -173,7 +173,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	if previous.Conversation.Provider != "" && previous.Conversation.Provider != model.Provider {
 		return fmt.Errorf("the previous conversation is inconsistent (model %s, conversation from %s)", model, previous.Conversation.Provider)
 	}
-	if !previous.Conversation.Fits(model.Provider) {
+	if !previous.Conversation.Fits(model) {
 		return fmt.Errorf("the previous conversation cannot continue on %s: its api in config.json has changed since", model.Provider)
 	}
 	if err := provider.Unavailable(model.Provider); err != nil {
@@ -536,7 +536,7 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	if err != nil {
 		return err
 	}
-	if err := provider.CheckDeepSeekModel(ctx, p, target.ID); err != nil {
+	if err := provider.CheckModel(ctx, p, target.ID); err != nil {
 		return err
 	}
 
@@ -557,7 +557,9 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		return nil
 	}
 
-	if target.Provider == c.model.Provider {
+	// opencode-go speaks different APIs to different models; a switch between them
+	// carries the conversation over like a switch of provider.
+	if target.Provider == c.model.Provider && c.conversation.conversation.Fits(target) {
 		c.model = target
 		saveSession(c)
 		fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s; the conversation continues.", target)))

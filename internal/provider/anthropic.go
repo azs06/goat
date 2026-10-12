@@ -99,7 +99,7 @@ func NewAnthropic() Provider {
 // the ANTHROPIC_* environment, so Anthropic's key never goes there. The key goes in both
 // x-api-key and a bearer Authorization header: compatible servers differ in which one
 // they read, and both go to the same server.
-func newAnthropicEntry(name, baseURL, key string) *anthropicProvider {
+func newAnthropicEntry(name, baseURL, key string, extra ...option.RequestOption) *anthropicProvider {
 	opts := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
 		option.WithHTTPClient(keyClient(anthropicHeaderTimeout)),
@@ -108,6 +108,7 @@ func newAnthropicEntry(name, baseURL, key string) *anthropicProvider {
 	if key != "" {
 		opts = append(opts, option.WithAPIKey(key), option.WithAuthToken(key))
 	}
+	opts = append(opts, extra...)
 	return &anthropicProvider{
 		name:          name,
 		client:        anthropic.NewClient(opts...),

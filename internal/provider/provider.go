@@ -62,17 +62,24 @@ type Conversation struct {
 // FormatChat marks a transcript in the Chat Completions format.
 const FormatChat = "chat"
 
-// Fits reports whether provider can continue the conversation: it is empty, or it was
-// made by that provider in the format the provider speaks now.
-func (c Conversation) Fits(provider string) bool {
+// Fits reports whether model can continue the conversation: it is empty, or it was made
+// by the model's provider in the format the provider speaks to that model now. Only
+// opencode-go speaks different formats to different models.
+func (c Conversation) Fits(model Model) bool {
 	if c.IsEmpty() {
 		return true
 	}
 	format := ""
-	if entry, ok := entries[provider]; ok && entry.API == APIOpenAI {
-		format = FormatChat
+	if entry, ok := entries[model.Provider]; ok {
+		api := entry.API
+		if api == APIOpenCode {
+			api = openCodeAPI(model.ID)
+		}
+		if api == APIOpenAI {
+			format = FormatChat
+		}
 	}
-	return c.Provider == provider && c.Format == format
+	return c.Provider == model.Provider && c.Format == format
 }
 
 func (c Conversation) IsEmpty() bool {

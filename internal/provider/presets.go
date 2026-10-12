@@ -1,37 +1,44 @@
 package provider
 
-import "slices"
+import (
+	"cmp"
+	"slices"
+)
 
 // preset is a provider goat knows without config.json beyond the built-in three: an
-// OpenAI-compatible API that needs only a key. Presets are registered like entries,
+// OpenAI-compatible API, or for opencode-go two APIs, that needs only a key. Presets are registered like entries,
 // after the user's own, and an entry of the same name in config.json replaces one.
 type preset struct {
 	name, label, baseURL, keyEnv string
+	// api is APIOpenAI (Chat Completions) unless set.
+	api string
 }
 
 // presets are listed in the order /login offers them. Their URLs come from each
 // provider's documentation of its OpenAI-compatible API.
 var presets = []preset{
-	{"openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"},
-	{"gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"},
-	{"xai", "xAI (Grok)", "https://api.x.ai/v1", "XAI_API_KEY"},
-	{"meta", "Meta (Muse)", "https://api.meta.ai/v1", "META_API_KEY"},
-	{"mistral", "Mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY"},
-	{"groq", "Groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY"},
-	{"together", "Together AI", "https://api.together.ai/v1", "TOGETHER_API_KEY"},
-	{"fireworks", "Fireworks AI", "https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"},
-	{"cerebras", "Cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"},
-	{"moonshot", "Moonshot (Kimi)", "https://api.moonshot.ai/v1", "MOONSHOT_API_KEY"},
-	{"zai", "Z.ai (GLM)", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"},
-	{"qwen", "Qwen (Alibaba Model Studio)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"},
-	{"minimax", "MiniMax", "https://api.minimax.io/v1", "MINIMAX_API_KEY"},
+	{"openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", ""},
+	// Chat Completions and Messages, by model (opencode.go); the key is pi's name for it.
+	{OpenCodeGo, "OpenCode Go", "https://opencode.ai/zen/go/v1", "OPENCODE_API_KEY", APIOpenCode},
+	{"gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", ""},
+	{"xai", "xAI (Grok)", "https://api.x.ai/v1", "XAI_API_KEY", ""},
+	{"meta", "Meta (Muse)", "https://api.meta.ai/v1", "META_API_KEY", ""},
+	{"mistral", "Mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY", ""},
+	{"groq", "Groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY", ""},
+	{"together", "Together AI", "https://api.together.ai/v1", "TOGETHER_API_KEY", ""},
+	{"fireworks", "Fireworks AI", "https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY", ""},
+	{"cerebras", "Cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", ""},
+	{"moonshot", "Moonshot (Kimi)", "https://api.moonshot.ai/v1", "MOONSHOT_API_KEY", ""},
+	{"zai", "Z.ai (GLM)", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY", ""},
+	{"qwen", "Qwen (Alibaba Model Studio)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", ""},
+	{"minimax", "MiniMax", "https://api.minimax.io/v1", "MINIMAX_API_KEY", ""},
 }
 
 // builtInLabels are the built-in providers' names as people write them.
 var builtInLabels = map[string]string{OpenAI: "OpenAI", Anthropic: "Anthropic", DeepSeek: "DeepSeek"}
 
 // PresetEntries are the presets that taken does not claim, as entries ready to register.
-// They list no models: the picker asks each server for its own.
+// They list no models: the picker asks each server for its own, or offers goat's list.
 func PresetEntries(taken func(name string) bool) []Entry {
 	var list []Entry
 	for _, p := range presets {
@@ -42,7 +49,7 @@ func PresetEntries(taken func(name string) bool) []Entry {
 		if err != nil {
 			panic(err)
 		}
-		list = append(list, Entry{Name: p.name, API: APIOpenAI, BaseURL: endpoint.URL, KeyEnv: p.keyEnv, Preset: true, endpoint: endpoint})
+		list = append(list, Entry{Name: p.name, API: cmp.Or(p.api, APIOpenAI), BaseURL: endpoint.URL, KeyEnv: p.keyEnv, Preset: true, endpoint: endpoint})
 	}
 	return list
 }
