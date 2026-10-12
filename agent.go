@@ -57,6 +57,11 @@ type turnOptions struct {
 	// checkpoint, when set, receives the state after every tool round so it can be
 	// saved before the turn finishes.
 	checkpoint func(conversationState)
+	// compact, when set, is asked after every tool round's checkpoint whether the
+	// conversation was compacted. If it was, it returns the conversation started from
+	// the summary, and the turn goes on there; the summary covers the round's tool
+	// results, which belong to the old conversation and are not sent.
+	compact func(ctx context.Context) (provider.Conversation, bool)
 	// approveBash, when set, is asked before every run_bash command; a non-nil error
 	// rejects the command.
 	approveBash func(ctx context.Context, command, workdir string) error
@@ -315,6 +320,14 @@ func notRunResults(calls []provider.ToolCall, reason string) []provider.ToolResu
 	return results
 }
 
+// midTurnCompactionFocus steers the summary made partway through a turn toward the
+// work in flight, which the turn continues from.
+const midTurnCompactionFocus = "the task in progress, the latest tool calls and their results, and what was about to be done next"
+
+// continueAfterCompactionNote goes to the model in place of the tool results after the
+// conversation was compacted partway through a turn.
+const continueAfterCompactionNote = "[The conversation was compacted partway through this task; the summary above includes the results of your latest tool calls. Carry on with the task from where you left off.]"
+
 var errContextExceeded = errors.New("the conversation no longer fits in the model's context window; run /compact")
 
 // isContextOverflowError recognises both APIs' "prompt is too long" errors.
@@ -416,10 +429,24 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		if opts.compact != nil {
+			if compacted, ok := opts.compact(ctx); ok {
+				req.Conversation = compacted
+				req.ToolResults = nil
+				req.UserText = continueAfterCompactionNote
+				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				if opts.planMode {
+					req.UserText = planModeNote + req.UserText
+				}
+			}
+		}
 		if opts.takeSteering != nil {
 			if text := opts.takeSteering(); text != "" {
 				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
 				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
+				if req.UserText != "" {
+					text = req.UserText + "\n\n" + text
+				}
 				req.UserText = text
 			}
 		}

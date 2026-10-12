@@ -56,9 +56,9 @@ type cliOptions struct {
 	model, effort     string
 	// print runs prompt once without the interactive prompt and exits.
 	print bool
-	// continueSession makes a print run continue the saved conversation instead of
-	// starting its own.
+	// continueSession continues the saved conversation instead of starting a new one.
 	continueSession bool
+	// newConversation asks for what a start does anyway; it is kept for scripts.
 	newConversation bool
 	autoApprove     bool
 	plan            bool
@@ -77,8 +77,8 @@ Flags:
   -m, --model MODEL    model to use, e.g. claude-opus-5-5 or openai:gpt-6-luna
   -e, --effort LEVEL   reasoning effort: none, minimal, low, medium, high, xhigh, max
   -p, --print          run one prompt non-interactively and exit
-  -c, --continue       with -p, continue the saved conversation instead of a new one
-  -n, --new            start a new conversation (the previous one stays for /resume)
+  -c, --continue       continue the saved conversation instead of starting a new one
+  -n, --new            start a new conversation (the default; /resume brings back the last)
   -y, --yes            run run_bash commands without asking (GOAT_AUTO_APPROVE_BASH=1)
       --plan           start in plan mode: read and plan, change nothing
       --codemode       start in code mode: batch tool calls in run_code scripts

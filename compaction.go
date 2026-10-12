@@ -17,10 +17,10 @@ const (
 	// defaultAutoCompactTokens is the conversation size, in tokens as reported by the
 	// API, at which the next turn first compacts the session. GOAT_AUTO_COMPACT_TOKENS
 	// overrides it; lower it when the account's tokens-per-minute limit is small.
-	defaultAutoCompactTokens = 80000
-	// defaultAnthropicAutoCompactTokens applies to Claude models, whose cached
-	// transcripts make long conversations cheaper.
-	defaultAnthropicAutoCompactTokens = 150000
+	defaultAutoCompactTokens = 40000
+	// defaultAnthropicAutoCompactTokens applies to models behind the Anthropic API, whose
+	// cached transcripts make long conversations cheaper.
+	defaultAnthropicAutoCompactTokens = 60000
 
 	// charsPerTokenEstimate sizes history recorded without token usage.
 	charsPerTokenEstimate = 4
@@ -194,7 +194,10 @@ func autoCompactThreshold(cfg *config) int64 {
 	return defaultAutoCompactTokens
 }
 
-func maybeAutoCompactConversation(ctx context.Context, cfg *config) (bool, error) {
+// maybeAutoCompactConversation compacts the conversation once it has grown past the
+// threshold or was built with another prompt. focus, when set, tells the summary what
+// to keep.
+func maybeAutoCompactConversation(ctx context.Context, cfg *config, focus string) (bool, error) {
 	if cfg == nil || cfg.conversation.conversation.IsEmpty() {
 		return false, nil
 	}
@@ -218,7 +221,7 @@ func maybeAutoCompactConversation(ctx context.Context, cfg *config) (bool, error
 	if err != nil {
 		return false, err
 	}
-	next, summary, err := compactConversation(ctx, provider, cfg.model.ID, "")
+	next, summary, err := compactConversation(ctx, provider, cfg.model.ID, focus)
 	if err != nil {
 		return false, fmt.Errorf("auto compact conversation: %w", err)
 	}

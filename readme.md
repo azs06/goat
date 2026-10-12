@@ -305,9 +305,9 @@ Queueing needs an interactive color terminal.
 ### Command line
 
 ```sh
-goat                          # start, resuming the last conversation
+goat                          # start a new conversation (/resume brings back the last one)
 goat "fix the failing test"   # start and run this prompt first
-goat -n                       # start a new conversation (the old one stays for /resume)
+goat -c                       # continue the last conversation instead
 goat --plan                   # start in plan mode: read and plan, change nothing
 goat --codemode               # start in code mode: batch tool calls in run_code scripts
 goat -m claude-sonnet-5-5 -e high
@@ -556,15 +556,20 @@ goat keeps its state in `.goat/` inside the workspace:
 
 | File | |
 | --- | --- |
-| `session.json` | The model, the effort and the current conversation, restored on the next start |
+| `session.json` | The model and effort, restored on the next start, and the current conversation, which `goat -c` continues |
 | `session.prev.json` | The previous conversation, for `/resume` |
 | `history.jsonl` | An append-only log of every prompt, reply and tool call |
 | `prompts.jsonl` | The prompts typed at the interactive prompt, for Up |
 | `operations.json`, `snapshots/` | The record of file changes and the snapshots `/undo` restores from |
 
-When a turn's token usage passes `GOAT_AUTO_COMPACT_TOKENS`, goat compacts the
-conversation automatically, the same way `/compact` does: it is summarized into a fresh,
-smaller context. If `session.json` or `operations.json` cannot be read, goat moves it
+Each start begins a new conversation and keeps the last one in `session.prev.json`, so an
+old conversation is not sent again, and paid for again, with every request; `/resume` or
+`goat -c` brings it back.
+
+When the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, goat compacts it automatically,
+the same way `/compact` does: it is summarized into a fresh, smaller context. goat checks
+before each prompt and after each round of tool calls, so a long task is compacted
+partway through and carries on from the summary. If `session.json` or `operations.json` cannot be read, goat moves it
 aside with a `.corrupt-<time>` suffix, warns, and starts fresh.
 
 ## Safety
@@ -712,7 +717,7 @@ when that is set), which never holds keys:
 | `effort` | `medium` | Effort to start with when there is no saved conversation | `GOAT_EFFORT` overrides the saved one |
 | `auto_approve_bash` | `false` | Run `run_bash` commands without asking | `GOAT_AUTO_APPROVE_BASH` |
 | `code_mode` | `false` | Start in code mode | `GOAT_CODEMODE` |
-| `auto_compact_tokens` | `80000` (OpenAI), `150000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits | `GOAT_AUTO_COMPACT_TOKENS` |
+| `auto_compact_tokens` | `40000` (OpenAI), `60000` (Claude, DeepSeek) | Conversation size that triggers automatic compaction; lower it for small tokens-per-minute limits | `GOAT_AUTO_COMPACT_TOKENS` |
 | `anthropic_fallbacks` | `true` | Server-side refusal fallbacks for Claude models | `GOAT_ANTHROPIC_FALLBACKS` (`on`/`off`) |
 | `anthropic_cache_ttl` | `"5m"` | Lifetime of Claude prompt cache entries, `"5m"` or `"1h"` | `GOAT_ANTHROPIC_CACHE_TTL` |
 | `reduced_motion` | `false` | Keep the spinner still (it updates once a second) | `GOAT_REDUCED_MOTION` |
