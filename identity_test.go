@@ -60,3 +60,17 @@ func TestEachPromptNamesTheModelInUse(t *testing.T) {
 		t.Error("expected no note without a model")
 	}
 }
+
+func TestModelNoteComesBeforeShellOutput(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+
+	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""))
+	if _, err := sendPromptStream(context.Background(), fake.provider(true), "what failed?", conversationState{}, turnOptions{model: "claude-opus-5-5", effort: provider.EffortLow, contextNote: "[shell output]\n\n"}); err != nil {
+		t.Fatal(err)
+	}
+	text := messagesOf(t, fake.request(0))[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if text != "[goat is using the model claude-opus-5-5 via anthropic.]\n\n[shell output]\n\nwhat failed?" {
+		t.Errorf("prompt %q", text)
+	}
+}

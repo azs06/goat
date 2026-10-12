@@ -12,6 +12,7 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	golang.org/x/sys v0.40.0
+	golang.org/x/text v0.27.0
 )
 
 require (
@@ -27,5 +28,4 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/text v0.27.0 // indirect
 )

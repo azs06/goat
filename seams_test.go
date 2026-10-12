@@ -75,7 +75,7 @@ func TestSimpleCommands(t *testing.T) {
 			}
 		}
 	})
-	for _, want := range []string{"Conversation", "grep_files", ".goat/history.jsonl", "without asking"} {
+	for _, want := range []string{"Conversation", "grep_files", "/history.jsonl", "without asking"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -124,6 +124,41 @@ func TestSpinnerDrawsTheQueuedInput(t *testing.T) {
 	if !strings.Contains(out, "\x1b[2A\r\x1b[J") || !strings.HasSuffix(out, "\x1b[2A\r\x1b[J") {
 		t.Errorf("expected the block to be erased in place: %q", out)
 	}
+
+	// With the turn's footer the input sits in its frame: status, queued, rule, input,
+	// rule, footer. The cursor is left on the input line, two lines above the bottom,
+	// and erasing moves up from there.
+	setTurnFooter([]string{"FOOTER"})
+	out = captureStdout(t, func() {
+		startSpinner("Thinking")
+		time.Sleep(30 * time.Millisecond)
+		redrawSpinner()
+		stopSpinner()
+	})
+	if !strings.Contains(style.StripANSI(out), "FOOTER") || !strings.Contains(out, "\x1b[2A\x1b[") || !strings.HasSuffix(out, "\x1b[3A\r\x1b[J") {
+		t.Errorf("expected the framed block, erased from the input line: %q", out)
+	}
+}
+
+func TestPrintAboveSpinnerKeepsTheBlockUnderTheText(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	turnQueue.capturing = true
+	setTurnFooter([]string{"FOOTER"})
+
+	out := captureStdout(t, func() {
+		printAboveSpinner("no spinner\n")
+		startSpinner("Thinking")
+		time.Sleep(30 * time.Millisecond)
+		relabelSpinner("Writing")
+		printAboveSpinner("a streamed line\n")
+		stopSpinner()
+	})
+	plain := style.StripANSI(out)
+	line := strings.Index(plain, "a streamed line")
+	if !strings.HasPrefix(plain, "no spinner\n") || line < 0 || !strings.Contains(plain[line:], "Writing") || !strings.Contains(plain[line:], "FOOTER") {
+		t.Fatalf("expected the block drawn again under the line: %q", plain)
+	}
 }
 
 func TestRunPromptAsksTheApproverBeforeRunBash(t *testing.T) {
@@ -146,5 +181,54 @@ func TestRunPromptAsksTheApproverBeforeRunBash(t *testing.T) {
 	}
 	if _, err := os.Stat("ran.txt"); !os.IsNotExist(err) {
 		t.Fatalf("the declined command ran: %v", err)
+	}
+}
+
+func TestModelAndEffortChangesRestateTheBannerRow(t *testing.T) {
+	cfg := seamConfig(t, newFakeAnthropic(t).provider(true))
+	sessionSaver = func(string, savedSession) error { return nil }
+	t.Cleanup(func() { sessionSaver = writeSessionFile })
+
+	withColor(t, true)
+	out := style.StripANSI(captureStdout(t, func() {
+		if err := commandEffort(context.Background(), cfg, []string{"high"}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	if !strings.Contains(out, "Effort set to high.") || !strings.Contains(out, "model  anthropic:claude-opus-5-5 · effort high") {
+		t.Fatalf("expected the banner's row with the new effort:\n%s", out)
+	}
+
+	// /clear starts the new conversation under a banner with the current values.
+	out = style.StripANSI(captureStdout(t, func() {
+		if err := commandClear(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	if !strings.Contains(out, "✻ Welcome") || !strings.Contains(out, "effort high") {
+		t.Fatalf("expected a fresh banner after /clear:\n%s", out)
+	}
+
+	// Plain output names the change once and draws no banner.
+	withColor(t, false)
+	out = captureStdout(t, func() {
+		if err := commandEffort(context.Background(), cfg, []string{"low"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := commandClear(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "model  ") || strings.Contains(out, "Welcome") || strings.ContainsAny(out, "\x1b\r") {
+		t.Fatalf("plain output changed:\n%q", out)
+	}
+}
+
+func TestSpinnerStatusLineFitsANarrowTerminal(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	s := &spinner{label: "Running " + strings.Repeat("a", 60), started: time.Now()}
+	if line, _, _ := strings.Cut(style.StripANSI(s.render()), "\n"); style.VisibleWidth(strings.TrimPrefix(line, "\r\x1b[2K")) >= terminalWidth() {
+		t.Fatalf("status line wider than the terminal: %q", line)
 	}
 }

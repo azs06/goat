@@ -14,7 +14,8 @@ import (
 // goat waits on the model or a tool. It only draws on a color terminal; elsewhere it
 // does nothing, so piped output never contains carriage returns or cursor movement.
 // There is at most one active spinner, kept in activeSpinner, so code that needs the
-// terminal (an approval prompt, the first streamed token) can stop it from anywhere.
+// terminal (an approval prompt) can stop it from anywhere. Streamed reply lines are
+// printed above it with printAboveSpinner instead.
 type spinner struct {
 	mu      sync.Mutex
 	label   string
@@ -23,8 +24,11 @@ type spinner struct {
 	done    chan struct{}
 	frame   int
 	// rows is how many lines the block took up when last drawn, 0 when nothing is on
-	// screen. The cursor is always on its last line.
+	// screen.
 	rows int
+	// cursorRow is the line of the block the cursor was left on, counted from its first
+	// line: the input line while keys are captured, otherwise the last line.
+	cursorRow int
 	// cleared is set once the spinner is gone for good, so a late redraw from a key
 	// typed at the same moment cannot bring it back.
 	cleared bool
@@ -122,6 +126,46 @@ func (s *spinner) run() {
 	}
 }
 
+// Synchronized output: terminals that support it show what is between these at once,
+// so redrawing the block does not flicker. Others ignore them.
+const (
+	syncOutputStart = "\x1b[?2026h"
+	syncOutputEnd   = "\x1b[?2026l"
+)
+
+// printAboveSpinner prints text, made of whole lines, above the spinner's block, which
+// stays on screen under it. Without a spinner it just prints.
+func printAboveSpinner(text string) {
+	spinnerMu.Lock()
+	s := activeSpinner
+	spinnerMu.Unlock()
+	if s == nil {
+		fmt.Print(text)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cleared {
+		fmt.Print(text)
+		return
+	}
+	erase := s.eraseBlock()
+	s.rows, s.cursorRow = 0, 0
+	fmt.Fprint(os.Stdout, syncOutputStart+erase+text+s.render()+syncOutputEnd)
+}
+
+// relabelSpinner changes what the active spinner says it is doing, from its next frame.
+func relabelSpinner(label string) {
+	spinnerMu.Lock()
+	s := activeSpinner
+	spinnerMu.Unlock()
+	if s != nil {
+		s.mu.Lock()
+		s.label = label
+		s.mu.Unlock()
+	}
+}
+
 // redrawSpinner draws the active spinner again straight away, after the text typed
 // under it changed.
 func redrawSpinner() {
@@ -133,16 +177,22 @@ func redrawSpinner() {
 	}
 }
 
-// draw replaces the block on screen: the status line, then the queued messages and the
-// line being typed while a turn runs. No line is wider than the terminal, so the block
-// never wraps and clearing it only has to move up its row count.
+// draw replaces the block on screen: the status line, then, while a turn runs, the
+// queued messages and the line being typed in its frame. No line is wider than the
+// terminal, so the block never wraps and clearing it only has to move up to its first
+// line.
 func (s *spinner) draw() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cleared {
 		return
 	}
+	fmt.Fprint(os.Stdout, syncOutputStart+s.render()+syncOutputEnd)
+}
 
+// render erases the block and returns it drawn again, leaving the cursor on the input
+// line when there is one. The caller holds s.mu.
+func (s *spinner) render() string {
 	frame := s.frame
 	elapsed := time.Since(s.started).Truncate(time.Second)
 	glyph := spinnerFrames[frame%len(spinnerFrames)]
@@ -153,10 +203,12 @@ func (s *spinner) draw() {
 	// \r and erase-line redraw in place; the line is cut to the terminal width so it
 	// never wraps, which would leave stale copies behind.
 	width := terminalWidth()
-	if style.VisibleWidth(line) >= width {
-		line = style.Accent.Render(glyph + " " + s.label + style.Glyphs().Ellipsis)
+	// Cells, not runes: a label with wide characters, such as a ! command, must not wrap.
+	if style.CellWidth(line) >= width {
+		line = style.Accent.Render(style.TruncateToCells(glyph+" "+s.label+style.Glyphs().Ellipsis, width-1))
 	}
-	below, cursor := queuedInputLines(width)
+	// The block, status line included, has to fit on the screen to be erased in place.
+	below, inputRow, cursor := turnFrameLines(width, terminalRows()-2)
 
 	var b strings.Builder
 	b.WriteString(s.eraseBlock())
@@ -164,11 +216,18 @@ func (s *spinner) draw() {
 	for _, extra := range below {
 		b.WriteString("\n\r\x1b[2K" + extra)
 	}
-	if len(below) > 0 {
-		fmt.Fprintf(&b, "\x1b[%dG", cursor)
-	}
-	fmt.Fprint(os.Stdout, b.String())
 	s.rows = 1 + len(below)
+	s.cursorRow = s.rows - 1
+	if len(below) > 0 {
+		// Printing first and moving up after works at the bottom of the screen too,
+		// where printing scrolls.
+		if up := len(below) - 1 - inputRow; up > 0 {
+			fmt.Fprintf(&b, "\x1b[%dA", up)
+		}
+		fmt.Fprintf(&b, "\x1b[%dG", cursor)
+		s.cursorRow = 1 + inputRow
+	}
+	return b.String()
 }
 
 // eraseBlock moves to the first line of the block and clears from there down. The
@@ -178,8 +237,8 @@ func (s *spinner) eraseBlock() string {
 		return "\r\x1b[2K"
 	}
 	up := ""
-	if s.rows > 1 {
-		up = fmt.Sprintf("\x1b[%dA", s.rows-1)
+	if s.cursorRow > 0 {
+		up = fmt.Sprintf("\x1b[%dA", s.cursorRow)
 	}
 	return up + "\r\x1b[J"
 }
@@ -190,7 +249,7 @@ func (s *spinner) clear() {
 	s.cleared = true
 	if s.rows > 0 {
 		fmt.Fprint(os.Stdout, s.eraseBlock())
-		s.rows = 0
+		s.rows, s.cursorRow = 0, 0
 	}
 }
 

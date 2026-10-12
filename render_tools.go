@@ -187,6 +187,12 @@ func renderToolHeader(call provider.ToolCall, width int) string {
 
 // renderToolResult is the block shown under a tool header once the call finishes.
 func renderToolResult(call provider.ToolCall, output string, err error, elapsed time.Duration, width int) string {
+	return renderToolResultLimit(call, output, err, elapsed, width, 0)
+}
+
+// renderToolResultLimit is renderToolResult showing up to limit lines of the output;
+// zero means the usual preview.
+func renderToolResultLimit(call provider.ToolCall, output string, err error, elapsed time.Duration, width, limit int) string {
 	var first string
 	var body []string
 	var diff bool
@@ -224,9 +230,11 @@ func renderToolResult(call provider.ToolCall, output string, err error, elapsed 
 	}
 	first += style.Subtle.Render(suffix)
 
-	limit := toolResultPreviewLines
-	if diff {
-		limit = toolDiffPreviewLines
+	if limit <= 0 {
+		limit = toolResultPreviewLines
+		if diff {
+			limit = toolDiffPreviewLines
+		}
 	}
 	return layoutToolResult(first, body, limit, diff, width)
 }

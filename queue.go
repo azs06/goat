@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -11,8 +12,8 @@ import (
 // While a turn runs on an interactive color terminal, keys go to a line under the
 // spinner instead of being thrown away. Enter queues the line: plain text is sent to the
 // model with the next tool results, so it can steer a turn that is still working, and
-// whatever is left when the turn ends is sent as the next prompt. Slash commands always
-// wait for the turn to end. Up on an empty line takes the last queued message back to
+// whatever is left when the turn ends is sent as the next prompt. Slash commands and !
+// shell commands always wait for the turn to end. Up on an empty line takes the last queued message back to
 // edit it. After Ctrl-C or a failed turn nothing is sent; the queue goes back into the
 // prompt instead.
 
@@ -22,6 +23,10 @@ type queueState struct {
 	editor promptEditor
 	// capturing is true while keys are read into editor, which is when it is drawn.
 	capturing bool
+	// footer is the status under the input while a turn runs, taken when it starts:
+	// building it runs git, too slow for every redraw. Without it the input is drawn
+	// without its frame.
+	footer []string
 }
 
 var turnQueue queueState
@@ -68,13 +73,19 @@ func queueKey(key string) {
 	}
 }
 
+// isQueuedCommand reports whether a queued line is a slash command or a ! shell
+// command, which run on their own once the turn is over.
+func isQueuedCommand(item string) bool {
+	return strings.HasPrefix(item, "/") || strings.HasPrefix(item, "!")
+}
+
 // takeQueuedText removes the plain text messages at the front of the queue and joins
-// them, stopping at the first slash command. It returns "" when there are none.
+// them, stopping at the first command. It returns "" when there are none.
 func takeQueuedText() string {
 	turnQueue.mu.Lock()
 	defer turnQueue.mu.Unlock()
 	n := 0
-	for n < len(turnQueue.items) && !strings.HasPrefix(turnQueue.items[n], "/") {
+	for n < len(turnQueue.items) && !isQueuedCommand(turnQueue.items[n]) {
 		n++
 	}
 	text := strings.Join(turnQueue.items[:n], "\n")
@@ -82,11 +93,11 @@ func takeQueuedText() string {
 	return text
 }
 
-// nextQueuedInput is what runs next once a turn is over: a slash command on its own,
-// or the plain text messages up to the next command, joined.
+// nextQueuedInput is what runs next once a turn is over: a command on its own, or the
+// plain text messages up to the next command, joined.
 func nextQueuedInput() (string, bool) {
 	turnQueue.mu.Lock()
-	if len(turnQueue.items) > 0 && strings.HasPrefix(turnQueue.items[0], "/") {
+	if len(turnQueue.items) > 0 && isQueuedCommand(turnQueue.items[0]) {
 		command := turnQueue.items[0]
 		turnQueue.items = turnQueue.items[1:]
 		turnQueue.mu.Unlock()
@@ -110,7 +121,9 @@ func returnQueueToPrompt(input *lineReader) {
 			kept = append(kept, part)
 		}
 	}
-	input.partial = strings.Join(kept, " ")
+	// One line each, so a queued ! command does not run the messages after it as its
+	// arguments.
+	input.partial = strings.Join(kept, "\n")
 }
 
 // queuedInputLines is the part of the live block under the spinner: the queued
@@ -150,6 +163,59 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 	end := min(len(editor.buf), start+room)
 	lines = append(lines, prefix+escapeControlChars(flattenBreaks(string(editor.buf[start:end]))))
 	return lines, prefixWidth + editor.pos - start + 1
+}
+
+// setTurnFooter sets the status shown under the input while the turn runs.
+func setTurnFooter(parts []string) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.footer = parts
+}
+
+// turnFrameLines is the live block under the status line while keys are captured: the
+// queued messages, then the input in the same frame as the prompt has between turns
+// (a rule, the input line, a rule and the footer), so the bottom of the screen keeps
+// its shape while goat works. cursorRow is the index of the input line in lines and
+// cursor its 1-based column. When the footer is unknown or the frame would not fit in
+// maxRows, the input is drawn on its own as the last line.
+func turnFrameLines(width, maxRows int) (lines []string, cursorRow, cursor int) {
+	lines, cursor = queuedInputLines(width)
+	if len(lines) == 0 {
+		return nil, 0, 0
+	}
+	turnQueue.mu.Lock()
+	footer := turnQueue.footer
+	turnQueue.mu.Unlock()
+	frame := 3
+	if footer == nil || maxRows < 1+frame+1 {
+		frame = 0
+	}
+	lines = capQueuedLines(lines, max(maxRows-frame, 1), width)
+	if frame == 0 {
+		return lines, len(lines) - 1, cursor
+	}
+	queued, input := lines[:len(lines)-1], lines[len(lines)-1]
+	rule := renderRule(width - 1)
+	framed := append(append([]string{}, queued...), rule, input, rule, renderFooter(footer, width))
+	return framed, len(queued) + 1, cursor
+}
+
+// capQueuedLines keeps the queued messages and the input line within rows lines, so the
+// block always fits on the screen: the latest messages stay, under a line counting the
+// ones left out.
+func capQueuedLines(lines []string, rows, width int) []string {
+	if len(lines) <= rows {
+		return lines
+	}
+	input := lines[len(lines)-1]
+	keep := rows - 2 // the count line and the input line
+	if keep < 0 {
+		return []string{input}
+	}
+	queued := lines[:len(lines)-1]
+	hidden := len(queued) - keep
+	more := style.Subtle.Render(style.TruncateToWidth(fmt.Sprintf("  +%d more queued", hidden), max(width-1, 1)))
+	return append(append([]string{more}, queued[hidden:]...), input)
 }
 
 // flattenBreaks shows a message with line breaks on a single line, one cell per break so
@@ -234,5 +300,6 @@ func stopKeyCapture() {
 	turnQueue.mu.Lock()
 	c.input.partial = turnQueue.editorText()
 	turnQueue.editor.setText("")
+	turnQueue.footer = nil
 	turnQueue.mu.Unlock()
 }

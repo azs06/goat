@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ func resetTurnQueue(t *testing.T) {
 		turnQueue.items = nil
 		turnQueue.editor = promptEditor{}
 		turnQueue.capturing = false
+		turnQueue.footer = nil
 		turnQueue.mu.Unlock()
 	}
 	reset()
@@ -73,6 +75,16 @@ func TestQueuedInputOrder(t *testing.T) {
 	if _, ok := nextQueuedInput(); ok {
 		t.Fatal("expected an empty queue")
 	}
+
+	// A ! shell command waits for the turn to end and runs on its own, like a slash
+	// command.
+	turnQueue.items = []string{"look", "!git status", "then this"}
+	if text := takeQueuedText(); text != "look" {
+		t.Fatalf("expected steering to stop at the shell command, got %q", text)
+	}
+	if text, ok := nextQueuedInput(); !ok || text != "!git status" {
+		t.Fatalf("expected the shell command on its own, got %q %v", text, ok)
+	}
 }
 
 func TestInterruptReturnsTheQueueToThePrompt(t *testing.T) {
@@ -82,7 +94,9 @@ func TestInterruptReturnsTheQueueToThePrompt(t *testing.T) {
 	input.partial = "half typed"
 
 	returnQueueToPrompt(input)
-	if input.partial != "one /compact half typed" || len(turnQueue.items) != 0 {
+	// One line each: a queued ! command must not take the messages after it as its
+	// arguments.
+	if input.partial != "one\n/compact\nhalf typed" || len(turnQueue.items) != 0 {
 		t.Fatalf("expected everything back in the prompt, got %q and %v", input.partial, turnQueue.items)
 	}
 }
@@ -185,3 +199,69 @@ func TestQueuedPasteStaysOneMessage(t *testing.T) {
 		t.Fatalf("expected the paste queued as one message, got %q", turnQueue.items)
 	}
 }
+
+func TestTurnFrameLinesFrameTheInputLikeThePrompt(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	if lines, _, _ := turnFrameLines(80, 20); lines != nil {
+		t.Fatalf("expected nothing while keys are not captured, got %q", lines)
+	}
+	turnQueue.capturing = true
+
+	// Without a footer the input is drawn on its own.
+	lines, row, _ := turnFrameLines(80, 20)
+	if len(lines) != 1 || row != 0 {
+		t.Fatalf("got %q, row %d", lines, row)
+	}
+
+	setTurnFooter([]string{"anthropic:claude-opus-5-5", "effort high"})
+	turnQueue.items = []string{"queued one"}
+	turnQueue.editor.setText("typing")
+	for _, width := range []int{20, 40, 120} {
+		lines, row, cursor := turnFrameLines(width, 20)
+		plain := make([]string, len(lines))
+		for i, line := range lines {
+			plain[i] = style.StripANSI(line)
+			if w := style.VisibleWidth(line); w >= width {
+				t.Errorf("width %d: line %d is %d wide", width, i, w)
+			}
+		}
+		if len(lines) != 5 || row != 2 || !strings.Contains(plain[0], "queued") || !strings.HasPrefix(plain[1], style.Glyphs().HLine) ||
+			!strings.Contains(plain[2], "typing") || !strings.HasPrefix(plain[3], style.Glyphs().HLine) || !strings.Contains(plain[4], "anthropic") {
+			t.Fatalf("width %d: got %q, row %d", width, plain, row)
+		}
+		if cursor != style.VisibleWidth(promptPrefix())+len("typing")+1 {
+			t.Errorf("width %d: cursor %d", width, cursor)
+		}
+	}
+
+	// Too short a screen for the frame: the input on its own again.
+	if lines, row, _ := turnFrameLines(80, 4); len(lines) != 2 || row != 1 {
+		t.Fatalf("got %q, row %d", lines, row)
+	}
+}
+
+func TestTurnFrameLinesFitTheScreenWithALongQueue(t *testing.T) {
+	resetTurnQueue(t)
+	withColor(t, true)
+	turnQueue.capturing = true
+	setTurnFooter([]string{"FOOTER"})
+	for i := range 30 {
+		turnQueue.items = append(turnQueue.items, fmt.Sprintf("q%d", i+1))
+	}
+	for _, maxRows := range []int{3, 5, 12} {
+		lines, row, _ := turnFrameLines(60, maxRows)
+		if len(lines) > maxRows || len(lines) == 0 {
+			t.Fatalf("maxRows %d: %d lines", maxRows, len(lines))
+		}
+		plain := style.StripANSI(strings.Join(lines, "\n"))
+		if maxRows >= 12 && (!strings.Contains(plain, "more queued") || !strings.Contains(plain, "q30") || strings.Contains(plain, "q1\n")) {
+			t.Fatalf("maxRows %d: expected the latest messages under a count:\n%s", maxRows, plain)
+		}
+		if !strings.Contains(style.StripANSI(lines[row]), promptPrefixText()) {
+			t.Fatalf("maxRows %d: row %d is not the input: %q", maxRows, row, plain)
+		}
+	}
+}
+
+func promptPrefixText() string { return style.StripANSI(promptPrefix()) }

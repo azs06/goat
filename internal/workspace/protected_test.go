@@ -15,7 +15,7 @@ func TestFileToolsStayOutOfAProtectedDirectory(t *testing.T) {
 	os.WriteFile(filepath.Join(config, "auth.json"), []byte(`{"openai": {"key": "sk-SECRET"}}`), 0o600)
 	os.WriteFile(filepath.Join(home, "notes.txt"), []byte("sk-not-a-secret\n"), 0o600)
 	os.Symlink(config, filepath.Join(home, "alias"))
-	ProtectDir(config)
+	ProtectDir(config, "goat's config directory, which holds the user's keys")
 	t.Cleanup(ResetProtectedDirs)
 
 	for _, path := range []string{".config/goat/auth.json", ".config/goat", "alias/auth.json", ".config/goat/new.txt", "./.config//goat/auth.json"} {

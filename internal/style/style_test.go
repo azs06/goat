@@ -331,3 +331,19 @@ func TestSuggestBuiltinCatchesTypos(t *testing.T) {
 		}
 	}
 }
+
+func TestCellWidthCountsWideCharacters(t *testing.T) {
+	for text, want := range map[string]int{"abc": 3, "日本語": 6, "🐐": 2, "é": 1, "é": 1, "\x1b[1m日\x1b[0m": 2} {
+		if got := CellWidth(text); got != want {
+			t.Errorf("CellWidth(%q) = %d, want %d", text, got, want)
+		}
+	}
+	for _, cells := range []int{1, 5, 10} {
+		if got := TruncateToCells("Running sleep # 日本語日本語日本語", cells); CellWidth(got) > cells {
+			t.Errorf("TruncateToCells(_, %d) = %q, %d cells", cells, got, CellWidth(got))
+		}
+	}
+	if got := TruncateToCells("short", 10); got != "short" {
+		t.Errorf("got %q", got)
+	}
+}

@@ -121,7 +121,7 @@ func TestDeleteDirRefusesWorkspaceRoot(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "a.txt")); err != nil {
 		t.Fatalf("expected workspace to be untouched, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, ".goat", "snapshots")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(statePath(t, ""), "snapshots")); !os.IsNotExist(err) {
 		t.Fatalf("expected no snapshot to be created, got %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestFailedSnapshotIsCleanedUp(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "dir", "a.txt")); err != nil {
 		t.Fatalf("expected directory to be untouched, got %v", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected failed snapshot to be removed, found %d entr(ies)", len(entries))
 	}
@@ -219,7 +219,7 @@ func TestOldSnapshotsArePruned(t *testing.T) {
 	if len(records) != maxRecordedOperations {
 		t.Fatalf("expected %d records, got %d", maxRecordedOperations, len(records))
 	}
-	entries, err := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, err := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if err != nil {
 		t.Fatalf("read snapshots: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestRunBashReturnsWhileBackgroundProcessRuns(t *testing.T) {
 
 	start := time.Now()
 	output, err := RunBash(context.Background(), "sleep 20 & echo $! > bg.pid; echo started", ".")
-	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
+	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")); BackgroundGroups() })
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
@@ -322,6 +322,9 @@ func TestRunBashTimeoutKillsProcessGroup(t *testing.T) {
 			t.Fatal("expected the background child to be killed with the shell")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if groups := BackgroundGroups(); len(groups) != 0 {
+		t.Fatalf("expected a killed group not to be recorded, got %+v", groups)
 	}
 }
 
@@ -387,7 +390,7 @@ func TestStateDirectoryCaseVariantsAreReserved(t *testing.T) {
 	if !shouldSkipDir(".GOAT") {
 		t.Error("expected searches to skip case variants of .goat")
 	}
-	if err := os.Symlink(filepath.Join(workspace, ".goat"), filepath.Join(workspace, "alias")); err != nil {
+	if err := os.Symlink(statePath(t, ""), filepath.Join(workspace, "alias")); err != nil {
 		t.Fatalf("create alias: %v", err)
 	}
 	if _, err := ReadFileForModel("alias/operations.json"); err == nil {
@@ -500,7 +503,7 @@ func TestFailedMutationRestoresPreviousState(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(workspace, "a.txt")); string(data) != "original" {
 		t.Fatalf("expected the file to be restored, got %q", data)
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected the snapshot to be cleaned up after restoring, found %d", len(entries))
 	}
@@ -523,7 +526,7 @@ func TestRunBashCommandFinishingBeforeDeadlineIsNotReportedAsTimeout(t *testing.
 	t.Cleanup(func() { bashToolTimeout = previousTimeout })
 
 	output, err := RunBash(context.Background(), "echo done; sleep 20 & echo $! > bg.pid", ".")
-	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")) })
+	t.Cleanup(func() { killPIDFile(filepath.Join(workspace, "bg.pid")); BackgroundGroups() })
 	if err != nil {
 		t.Fatalf("expected a clean exit to succeed, got %v", err)
 	}
@@ -629,8 +632,8 @@ func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 
-	os.MkdirAll(filepath.Join(workspace, ".goat"), 0755)
-	os.WriteFile(filepath.Join(workspace, ".goat", "operations.json"), []byte(`[{"id":"1","ki`), 0644)
+	os.MkdirAll(statePath(t, ""), 0755)
+	os.WriteFile(filepath.Join(statePath(t, ""), "operations.json"), []byte(`[{"id":"1","ki`), 0644)
 
 	if err := WriteFile("a.txt", "hello"); err != nil {
 		t.Fatalf("expected the write to succeed, got %v", err)
@@ -639,7 +642,7 @@ func TestCorruptOperationLogIsSetAside(t *testing.T) {
 	if err != nil || len(records) != 1 {
 		t.Fatalf("expected a fresh log with one record, got %d (%v)", len(records), err)
 	}
-	matches, _ := filepath.Glob(filepath.Join(workspace, ".goat", "operations.json.corrupt-*"))
+	matches, _ := filepath.Glob(filepath.Join(statePath(t, ""), "operations.json.corrupt-*"))
 	if len(matches) != 1 {
 		t.Fatalf("expected the corrupt log to be kept aside, found %d", len(matches))
 	}
@@ -661,7 +664,7 @@ func TestSnapshotsHandleReadOnlyDirectories(t *testing.T) {
 	os.Chmod(readOnly, 0555)
 	t.Cleanup(func() {
 		os.Chmod(readOnly, 0755)
-		filepath.Walk(filepath.Join(workspace, ".goat"), func(path string, info os.FileInfo, err error) error {
+		filepath.Walk(statePath(t, ""), func(path string, info os.FileInfo, err error) error {
 			if err == nil && info.IsDir() {
 				os.Chmod(path, 0755)
 			}
@@ -798,7 +801,7 @@ func TestSnapshotsWithReadOnlyDirectoriesAreCleanedUp(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the mutation error")
 	}
-	entries, _ := os.ReadDir(filepath.Join(workspace, ".goat", "snapshots"))
+	entries, _ := os.ReadDir(filepath.Join(statePath(t, ""), "snapshots"))
 	if len(entries) != 0 {
 		t.Fatalf("expected the snapshot to be removed, found %d", len(entries))
 	}
@@ -811,7 +814,7 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 	if err := WriteFile("a.txt", "1"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	logPath := filepath.Join(workspace, ".goat", "operations.json")
+	logPath := filepath.Join(statePath(t, ""), "operations.json")
 	os.WriteFile(logPath, []byte("{not json"), 0644)
 
 	if _, err := PreviewUndoLastChange(); err == nil {
@@ -821,7 +824,7 @@ func TestUndoPreviewLeavesCorruptLogAndOrphansAreCollected(t *testing.T) {
 		t.Fatalf("expected the preview to leave the log alone, got %q", data)
 	}
 
-	snapshots := filepath.Join(workspace, ".goat", "snapshots")
+	snapshots := filepath.Join(statePath(t, ""), "snapshots")
 	orphans, _ := os.ReadDir(snapshots)
 	old := time.Now().Add(-2 * unreferencedSnapshotGracePeriod)
 	for _, orphan := range orphans {
@@ -880,7 +883,7 @@ func TestUndoSkipsOperationWhoseSnapshotIsMissing(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	records, _ := loadOperationRecords(false)
-	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots", records[1].ID))
+	os.RemoveAll(filepath.Join(statePath(t, ""), "snapshots", records[1].ID))
 
 	if _, err := UndoLastChange(); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("expected a missing snapshot error, got %v", err)
@@ -1063,7 +1066,7 @@ func TestUndoPreviewIsAccurate(t *testing.T) {
 		t.Fatalf("expected only the file change in the preview, got\n%s", preview)
 	}
 
-	os.RemoveAll(filepath.Join(workspace, ".goat", "snapshots"))
+	os.RemoveAll(filepath.Join(statePath(t, ""), "snapshots"))
 	preview, err = PreviewUndoLastChange()
 	if err != nil || !strings.Contains(preview, "missing") || strings.Contains(preview, "/dev/null") {
 		t.Fatalf("expected the preview to report the missing snapshot, got %q (%v)", preview, err)
@@ -1074,7 +1077,7 @@ func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 
-	snapshot := filepath.Join(workspace, ".goat", "snapshots", "123")
+	snapshot := filepath.Join(statePath(t, ""), "snapshots", "123")
 	os.MkdirAll(filepath.Join(snapshot, "before", "dst"), 0755)
 	os.WriteFile(filepath.Join(snapshot, "before", "dst", "only-copy.txt"), []byte("precious"), 0644)
 	location := keepOperationSnapshot(operationRecord{ID: "123"})
@@ -1087,7 +1090,7 @@ func TestKeptSnapshotsAreNotCollected(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(snapshot, "before", "dst", "only-copy.txt")); err != nil {
 		t.Fatalf("expected the kept snapshot to survive collection, got %v", err)
 	}
-	if !strings.Contains(location, ".goat/snapshots/123") {
+	if !strings.Contains(filepath.ToSlash(location), "snapshots/123") {
 		t.Fatalf("expected the snapshot location to be reported, got %q", location)
 	}
 }
@@ -1152,7 +1155,7 @@ func TestUndoWorksForRecordsFromOlderVersions(t *testing.T) {
 	}
 
 	// Older versions wrote neither field (and wrote snapshot_path, which is ignored now).
-	logPath := filepath.Join(workspace, ".goat", "operations.json")
+	logPath := filepath.Join(statePath(t, ""), "operations.json")
 	var raw []map[string]any
 	data, _ := os.ReadFile(logPath)
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -1222,5 +1225,200 @@ func TestUndoReplacesAFileThatGainedHardLinks(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "outside.txt")); string(data) != "edited" {
 		t.Fatalf("expected the outside link to be left alone, got %q", data)
+	}
+}
+
+func TestRunBashKeepsTrackOfWhatItLeavesRunning(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 500 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	// A server started the way the tool description asks: in the background, with its
+	// output redirected.
+	output, err := RunBash(context.Background(), "sleep 30 >/dev/null 2>&1 & echo $! > bg.pid; echo started", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := readPIDFile(t, filepath.Join(workspace, "bg.pid"))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if strings.Contains(output, "background") {
+		t.Fatalf("expected the tool output to stay as it was, got %q", output)
+	}
+	groups := settledBackgroundGroups(t, 1)
+	if !strings.Contains(groups[0].Command, "sleep 30") || groups[0].Dir != "." {
+		t.Fatalf("got %+v", groups)
+	}
+	processes, err := GroupProcesses(groups[0].PGID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, process := range processes {
+		found = found || process.PID == pid && strings.Contains(process.Command, "sleep 30")
+	}
+	if !found {
+		t.Fatalf("expected pid %d in %+v", pid, processes)
+	}
+
+	// A command that leaves nothing behind is not listed (once whatever the login
+	// profile started has exited).
+	if _, err := RunBash(context.Background(), "echo quick", "."); err != nil {
+		t.Fatal(err)
+	}
+	settledBackgroundGroups(t, 1)
+
+	if err := StopBackgroundGroup(groups[0].PGID); err != nil {
+		t.Fatal(err)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatal("expected the background process to be stopped")
+	}
+	if len(BackgroundGroups()) != 0 {
+		t.Fatalf("expected the stopped group to be forgotten, got %+v", BackgroundGroups())
+	}
+	if err := StopBackgroundGroup(groups[0].PGID); err == nil {
+		t.Fatal("expected a forgotten group not to be signalled again")
+	}
+}
+
+func TestStopBackgroundGroupKillsWhatIgnoresSIGTERM(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 300 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	if _, err := RunBash(context.Background(), "(trap '' TERM; sleep 30) >/dev/null 2>&1 & echo $! > bg.pid", "."); err != nil {
+		t.Fatal(err)
+	}
+	pid := readPIDFile(t, filepath.Join(workspace, "bg.pid"))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	settledBackgroundGroups(t, 1)
+	stopped := StopAllBackground()
+	if len(stopped) != 1 || syscall.Kill(pid, 0) == nil {
+		t.Fatalf("expected the group to be killed, stopped %+v", stopped)
+	}
+}
+
+func TestBackgroundGroupsForgetsGroupsThatExited(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Cleanup(func() { StopAllBackground() })
+
+	if _, err := RunBash(context.Background(), "sleep 2 >/dev/null 2>&1 &", "."); err != nil {
+		t.Fatal(err)
+	}
+	if len(BackgroundGroups()) != 1 {
+		t.Fatalf("expected the sleep to be recorded, got %+v", BackgroundGroups())
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	for len(BackgroundGroups()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected the finished group to be forgotten")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if left := stopGroups([]int{0, 1}); len(left) != 0 || groupAlive(0) || groupAlive(1) {
+		t.Fatal("expected process groups 0 and 1 to be left alone")
+	}
+	if err := StopBackgroundGroup(12345678); err == nil {
+		t.Fatal("expected a group goat did not record to be refused")
+	}
+}
+
+func TestReusedGroupIDIsNotGoats(t *testing.T) {
+	// A process leading its own group with a recorded group's ID means the ID was
+	// reused: goat's shell, which led the recorded group, has exited.
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	if groupAlive(cmd.Process.Pid) {
+		t.Fatal("expected a group led by a live process not to count as goat's")
+	}
+}
+
+func TestStopAllBackgroundStopsACommandStillRunning(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousGrace := stopGracePeriod
+	stopGracePeriod = 500 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = previousGrace })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := RunBashFor(context.Background(), "echo $$ > shell.pid; sleep 30", ".", 0)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat("shell.pid"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the command did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	StopAllBackground()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the stopped command to fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected the running command to be stopped")
+	}
+}
+
+// settledBackgroundGroups waits up to two seconds for the recorded groups to come down
+// to want, since a login profile can leave a short-lived helper behind each command.
+func settledBackgroundGroups(t *testing.T, want int) []BackgroundGroup {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		groups := BackgroundGroups()
+		if len(groups) == want {
+			return groups
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d background groups, got %+v", want, groups)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestRunBashForWithoutTimeoutRunsPastTheToolTimeout(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousTimeout := bashToolTimeout
+	bashToolTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { bashToolTimeout = previousTimeout })
+
+	output, err := RunBashFor(context.Background(), "sleep 1; echo done", ".", 0)
+	if err != nil || !strings.Contains(output, "done") {
+		t.Fatalf("got %q, %v", output, err)
+	}
+	if _, err := RunBashFor(context.Background(), "sleep 5", ".", 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out after 300ms") {
+		t.Fatalf("expected its own timeout, got %v", err)
+	}
+}
+
+func TestRunBashKeepsTheStartAndEndOfLongOutput(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previousMax := maxBashOutput
+	maxBashOutput = 1000
+	t.Cleanup(func() { maxBashOutput = previousMax })
+
+	output, err := RunBash(context.Background(), "echo FIRST; head -c 100000 /dev/zero | tr '\\0' x; echo; echo LAST", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "FIRST") || !strings.Contains(output, "LAST") || !strings.Contains(output, "bytes of output omitted") || len(output) > 1300 {
+		t.Fatalf("got %d bytes: %.200q", len(output), output)
 	}
 }

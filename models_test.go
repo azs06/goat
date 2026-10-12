@@ -230,7 +230,7 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 	}
 	saveSession(cfg)
 
-	info, err := os.Stat(filepath.Join(workDir, ".goat", "session.json"))
+	info, err := os.Stat(filepath.Join(statePath(t, ""), "session.json"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("expected a private session file, got %v (%v)", info.Mode().Perm(), err)
 	}
@@ -242,11 +242,11 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 		t.Fatalf("unexpected session %+v", saved)
 	}
 
-	os.WriteFile(filepath.Join(workDir, ".goat", "session.json"), []byte("{broken"), 0600)
+	os.WriteFile(filepath.Join(statePath(t, ""), "session.json"), []byte("{broken"), 0600)
 	if saved, err := loadSessionFile(sessionPath); err != nil || saved != nil {
 		t.Fatalf("expected a corrupt session to be set aside, got %+v (%v)", saved, err)
 	}
-	if matches, _ := filepath.Glob(filepath.Join(workDir, ".goat", "session.json.corrupt-*")); len(matches) != 1 {
+	if matches, _ := filepath.Glob(filepath.Join(statePath(t, ""), "session.json.corrupt-*")); len(matches) != 1 {
 		t.Fatalf("expected the corrupt file to be kept aside, found %d", len(matches))
 	}
 }
@@ -639,5 +639,27 @@ func TestLegacyResumeUsesTheResponsesOwnHistory(t *testing.T) {
 	entries, _ := loadConversationHistoryEntries()
 	if estimate := estimateConversationTokens(entries); estimate < 120000 {
 		t.Fatalf("expected the continued conversation's size, got %d", estimate)
+	}
+}
+
+func TestResumeSaysWhenItRestoresAnotherEffort(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	setCredentials(t, true, false)
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.OpenAI, ID: provider.DefaultOpenAIModel}, &fakeProvider{name: provider.OpenAI})
+	cfg.reasoningEffort = provider.EffortLow
+	cfg.conversation = conversationState{conversation: provider.Conversation{Provider: provider.OpenAI, ResponseID: "resp-a"}}
+	if err := commandClear(context.Background(), cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg.reasoningEffort = provider.EffortHigh
+
+	out := captureStdout(t, func() {
+		if err := commandResume(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if cfg.reasoningEffort != provider.EffortLow || !strings.Contains(out, "at effort low") {
+		t.Fatalf("effort %s, output:\n%s", cfg.reasoningEffort, out)
 	}
 }
