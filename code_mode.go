@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
@@ -39,12 +40,24 @@ const maxNestedCallsShown = 20
 // own header, while the script runs.
 type nestedRenderer struct {
 	shown, hidden int
+	// sink, when set, gets every call instead of the terminal; it keeps what it shows
+	// within its own limits.
+	sink agentSink
+	// inputWait, when set, counts the time the turn waited on the user instead of
+	// inputWaitTotal.
+	inputWait *atomic.Int64
 }
 
 const nestedIndent = "  "
 
 func (r *nestedRenderer) Start(call provider.ToolCall) func(string, error) {
-	started, waitedBefore := time.Now(), time.Duration(inputWaitTotal.Load())
+	started, waitedBefore := time.Now(), inputWaited(r.inputWait)
+	if r.sink != nil {
+		r.sink.ToolStart(call)
+		return func(output string, err error) {
+			r.sink.ToolResult(call, output, err, time.Since(started)-(inputWaited(r.inputWait)-waitedBefore))
+		}
+	}
 	if r.shown >= maxNestedCallsShown {
 		r.hidden++
 		return func(string, error) {}
@@ -53,7 +66,7 @@ func (r *nestedRenderer) Start(call provider.ToolCall) func(string, error) {
 	width := toolRenderWidth() - len(nestedIndent)
 	r.print(indentBlock(renderToolHeader(call, width), nestedIndent))
 	return func(output string, err error) {
-		elapsed := time.Since(started) - (time.Duration(inputWaitTotal.Load()) - waitedBefore)
+		elapsed := time.Since(started) - (inputWaited(r.inputWait) - waitedBefore)
 		first, _, _ := strings.Cut(renderToolResult(call, output, err, elapsed, width), "\n")
 		r.print(nestedIndent + first)
 	}

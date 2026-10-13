@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/azs06/goat/internal/markdown"
@@ -80,6 +81,57 @@ type turnOptions struct {
 	// compacting passes the same one, so changes made before the retry are still
 	// checked and earlier runs still count.
 	verified *verifyState
+
+	// conversationID, when set, is the conversation the turn's history entries belong
+	// to instead of the active one, and parentID the conversation that started it; a
+	// subagent's turn sets both.
+	conversationID string
+	parentID       string
+	// sink, when set, is where the turn shows its work instead of the terminal.
+	sink agentSink
+	// inputWait, when set, counts the time the turn waited on the user instead of
+	// inputWaitTotal, so it is not counted as tool run time.
+	inputWait *atomic.Int64
+	// livePlanMode, when set, is asked before each tool call whether plan mode is on,
+	// in place of planMode, so a change partway through the turn applies to the next call.
+	livePlanMode func() bool
+	// serveAgents, when set, is called after every tool round, such as to answer the
+	// approvals subagents are waiting on.
+	serveAgents func(ctx context.Context)
+}
+
+// record saves entry to the history as part of the turn's conversation.
+func (o turnOptions) record(entry historyEntry) {
+	recordHistory(o.stamp(entry))
+}
+
+// stamp marks entry as part of the turn's conversation when the turn has its own.
+func (o turnOptions) stamp(entry historyEntry) historyEntry {
+	if o.conversationID != "" && entry.ConversationID == "" {
+		entry.ConversationID = o.conversationID
+	}
+	if o.parentID != "" && entry.ParentID == "" {
+		entry.ParentID = o.parentID
+	}
+	return entry
+}
+
+// inputWaited is the total time spent waiting on the user, from counter when set or
+// else inputWaitTotal.
+func inputWaited(counter *atomic.Int64) time.Duration {
+	if counter != nil {
+		return time.Duration(counter.Load())
+	}
+	return time.Duration(inputWaitTotal.Load())
+}
+
+// addInputWait counts d of waiting on the user against the turn.
+func addInputWait(opts turnOptions, d time.Duration) {
+	if opts.inputWait != nil {
+		opts.inputWait.Add(int64(d))
+		return
+	}
+	inputWaitTotal.Add(int64(d))
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -112,26 +164,21 @@ func printModelText(md *markdown.Stream, text string) {
 	}
 }
 
-// streamAttempt makes one provider call with a fresh renderer and a "Thinking" spinner.
-// Whatever ends the call, the spinner is cleared and a partial last line is printed.
-func streamAttempt(ctx context.Context, p provider.Provider, req provider.Request) (*provider.Response, bool, error) {
-	md := markdown.NewStream(terminalWidth())
-	startSpinner("Thinking")
-	defer func() {
-		stopSpinner()
-		if style.Enabled() {
-			fmt.Print(md.Flush())
-		}
-	}()
-	return p.Send(ctx, req, func(text string) { printModelText(md, text) })
+// streamAttempt makes one provider call, showing "Thinking" until the reply streams.
+// Whatever ends the call, the sink ends the response: on the terminal the spinner is
+// cleared and a partial last line is printed.
+func streamAttempt(ctx context.Context, p provider.Provider, req provider.Request, sink agentSink) (*provider.Response, bool, error) {
+	sink.Status("Thinking")
+	defer sink.EndText()
+	return p.Send(ctx, req, sink.Text)
 }
 
 // executeStreamedResponse sends one request, retrying transient failures as long as no
 // text has been shown yet.
-func executeStreamedResponse(ctx context.Context, p provider.Provider, req provider.Request) (*provider.Response, bool, error) {
+func executeStreamedResponse(ctx context.Context, p provider.Provider, req provider.Request, sink agentSink) (*provider.Response, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxStreamRateLimitRetries; attempt++ {
-		resp, printedText, err := streamAttempt(ctx, p, req)
+		resp, printedText, err := streamAttempt(ctx, p, req, sink)
 		if err == nil {
 			return resp, printedText, nil
 		}
@@ -149,7 +196,7 @@ func executeStreamedResponse(ctx context.Context, p provider.Provider, req provi
 			break
 		}
 
-		warnf("%v; retrying in %s (%d/%d)", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
+		sinkWarnf(sink, "%v; retrying in %s (%d/%d)", shortError(err), delay.Round(time.Millisecond), attempt+1, maxStreamRateLimitRetries)
 		if err := streamRetrySleeper(ctx, delay); err != nil {
 			return nil, false, err
 		}
@@ -280,54 +327,70 @@ func logToolCallResult(toolCall provider.ToolCall, output string, err error, ela
 // always cover every call.
 func runToolCalls(ctx context.Context, providerName string, opts turnOptions, resp *provider.Response) []provider.ToolResult {
 	var results []provider.ToolResult
+	if opts.sink == nil {
+		opts.sink = &terminalSink{}
+	}
 
 	for _, toolCall := range resp.ToolCalls {
 		if ctx.Err() != nil {
 			skipped := fmt.Sprintf("Tool %s was not run because the user interrupted the turn.", toolCall.Name)
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: skipped, ResponseID: resp.ID, Status: "skipped", Provider: providerName})
+			opts.record(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: skipped, ResponseID: resp.ID, Status: "skipped", Provider: providerName})
 			results = append(results, provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name, Output: skipped, IsError: true})
 			continue
 		}
 
-		logToolCallStart(toolCall)
-		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
+		opts.sink.ToolStart(toolCall)
+		opts.record(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
-		started, waitedBefore := time.Now(), time.Duration(inputWaitTotal.Load())
-		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
+		started, waitedBefore := time.Now(), inputWaited(opts.inputWait)
+		opts.sink.Status("Running " + toolDisplayName(toolCall.Name))
+		planMode := opts.planMode
+		if opts.livePlanMode != nil {
+			planMode = opts.livePlanMode()
+		}
+		// TODO(subagents): pass Agents and Subagent here once turnOptions and
+		// tools.Options have them.
+		toolOpts := tools.Options{PlanMode: planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
 		var shown []provider.Image
 		toolOpts.Vision = opts.vision
 		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
 		var nested *nestedRenderer
 		if toolCall.Name == tools.RunCode {
-			nested = &nestedRenderer{}
+			nested = &nestedRenderer{inputWait: opts.inputWait}
+			if !isTerminalSink(opts.sink) {
+				nested.sink = opts.sink
+			}
 			toolOpts.Nested = nested
 		}
 		toolOutput, err := tools.Execute(ctx, toolCall, toolOpts)
-		stopSpinner()
+		opts.sink.Status("")
 		if nested != nil {
 			nested.finish()
 		}
-		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(time.Duration(inputWaitTotal.Load())-waitedBefore))
+		opts.sink.ToolResult(toolCall, toolOutput, err, time.Since(started)-(inputWaited(opts.inputWait)-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
 		// A run_code script that fails after a nested view_image still shows its image.
 		result.Images = shown
+		output := historyEntry{Type: "tool_output", ToolName: toolCall.Name, ResponseID: resp.ID, Provider: providerName, Images: len(shown)}
 		if err != nil {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName, Images: len(shown)})
+			output.Content, output.Status = err.Error(), "error"
 			result.Output = fmt.Sprintf("Tool %s failed: %v", toolCall.Name, err)
 			result.IsError = true
 		} else {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName, Images: len(shown)})
+			output.Content, output.Status = toolOutput, "ok"
 			result.Output = toolOutput
 		}
 		full := result.Output
 		result.Output = prepareToolOutputForModel(toolCall.Name, result.Output)
-		// The history keeps the whole output, so the model can read what was cut.
+		// The history keeps the whole output, so the model can read what was cut. Other
+		// agents append to the same history, so the number is taken as it is recorded.
 		if result.Output != full && toolCall.Name != "read_output" {
-			if n, ok := latestToolOutputNumber(); ok {
+			if n, ok := recordToolOutputNumbered(opts.stamp(output)); ok {
 				result.Output += tools.ShortenedNote(n)
 			}
+		} else {
+			opts.record(output)
 		}
 		results = append(results, result)
 	}
@@ -397,7 +460,10 @@ func recoveryPromptText(prompt string, moved bool, owed []provider.ToolResult) s
 // should continue from, including when it also returns an error.
 func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, conv conversationState, opts turnOptions) (conversationState, error) {
 	providerName := p.Name()
-	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName, Images: len(opts.images)})
+	if opts.sink == nil {
+		opts.sink = &terminalSink{}
+	}
+	opts.record(historyEntry{Type: "user", Content: prompt, Provider: providerName, Images: len(opts.images)})
 
 	system, specs := promptFor(opts.codeMode)
 	req := provider.Request{
@@ -429,13 +495,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		verified = &verifyState{}
 	}
 	for round := 1; ; round++ {
-		resp, printedText, err := executeStreamedResponse(ctx, p, req)
-		// The markdown renderer ends every line itself; plain streamed text may not.
-		if printedText && !style.Enabled() {
-			fmt.Println()
-		}
+		resp, _, err := executeStreamedResponse(ctx, p, req, opts.sink)
 		if err != nil {
-			recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: req.Conversation.ResponseID, Status: "error", Provider: providerName})
+			opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: req.Conversation.ResponseID, Status: "error", Provider: providerName})
 			if isContextOverflowError(err) || provider.IsRequestTooLarge(err) {
 				err = fmt.Errorf("%w (%v)", errContextExceeded, shortError(err))
 			}
@@ -445,7 +507,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		if resp.Stop == provider.StopRefusal {
 			// The declined output is discarded; anything this request carried is still owed.
 			err := fmt.Errorf("the model declined to answer%s; rephrase the request or switch models with /model", detailSuffix(resp.RefusalDetail))
-			recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "refused", Provider: providerName})
+			opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "refused", Provider: providerName})
 			return conversationState{conversation: resp.Conversation, pendingToolResults: req.ToolResults}, err
 		}
 
@@ -456,6 +518,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			results = runToolCalls(ctx, providerName, opts, resp)
 			for _, call := range resp.ToolCalls {
 				verified.changed = verified.changed || changesWorkspace(call)
+			}
+			if opts.serveAgents != nil {
+				opts.serveAgents(ctx)
 			}
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
@@ -470,9 +535,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 
 		next := conversationState{conversation: resp.Conversation, pendingToolResults: results}
 		if len(results) == 0 {
-			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
+			opts.record(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 			if stopErr != nil {
-				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+				opts.record(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 				return next, stopErr
 			}
 			if opts.verify == nil || !verified.changed && !verified.failed {
@@ -484,7 +549,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				if ctx.Err() != nil {
 					status = "interrupted"
 				}
-				recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: status, Provider: providerName})
+				opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: status, Provider: providerName})
 				return next, err
 			}
 			if failure == "" {
@@ -494,7 +559,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			if opts.checkpoint != nil {
 				opts.checkpoint(next)
 			}
-			recordHistory(historyEntry{Type: "user", Content: failure, Provider: providerName})
+			opts.record(historyEntry{Type: "user", Content: failure, Provider: providerName})
 			req.Conversation = next.conversation
 			req.ToolResults = nil
 			req.UserText = failure
@@ -505,16 +570,16 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 
 		if stopErr != nil {
-			recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+			opts.record(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			return next, stopErr
 		}
 		if err := ctx.Err(); err != nil {
-			recordHistory(historyEntry{Type: "error", Content: "turn interrupted by the user", ResponseID: resp.ID, Status: "interrupted", Provider: providerName})
+			opts.record(historyEntry{Type: "error", Content: "turn interrupted by the user", ResponseID: resp.ID, Status: "interrupted", Provider: providerName})
 			return next, err
 		}
 		if round >= maxToolRoundsPerTurn {
 			err := fmt.Errorf("stopped after %d tool rounds in one turn; send another message to let the agent continue", maxToolRoundsPerTurn)
-			recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+			opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			return next, err
 		}
 
@@ -529,7 +594,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				req.UserText = compactedToolResultsText(next.pendingToolResults)
 				// The results go as text, and their images with it.
 				req.UserImages = resultImages(next.pendingToolResults)
-				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
+				opts.record(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
 				// The summary's conversation has not been told the model yet.
 				req.UserText = modelNote(opts.model, providerName) + req.UserText
 				if opts.planMode {
@@ -539,8 +604,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 		if opts.takeSteering != nil {
 			if text := opts.takeSteering(); text != "" {
-				fmt.Println("\n" + renderUserMessage(text, terminalWidth()))
-				recordHistory(historyEntry{Type: "user", Content: text, Provider: providerName})
+				opts.sink.User(text)
+				opts.record(historyEntry{Type: "user", Content: text, Provider: providerName})
 				if req.UserText != "" {
 					text = req.UserText + "\n\n" + text
 				}

@@ -46,6 +46,9 @@ type historyEntry struct {
 	// ConversationID ties the entry to one conversation, so a conversation brought back
 	// with /resume finds its own history again. Empty for older entries.
 	ConversationID string `json:"conversation_id,omitempty"`
+	// ParentID is the conversation that started a subagent's conversation; empty for
+	// the main conversation.
+	ParentID string `json:"parent_id,omitempty"`
 	// Images counts the images that went with a prompt or came back from a tool.
 	Images int `json:"images,omitempty"`
 }
@@ -213,7 +216,28 @@ func latestResumableConversation() (string, string, error) {
 	return latestResponseID, conversationID, nil
 }
 
+// historyAppendMu serializes appends to the history log. Subagents append from their
+// own goroutines, and a long entry is not written in one atomic write.
+var historyAppendMu sync.Mutex
+
 func recordHistory(entry historyEntry) {
+	historyAppendMu.Lock()
+	defer historyAppendMu.Unlock()
+	recordHistoryLocked(entry)
+}
+
+// recordToolOutputNumbered records a tool output and returns the number read_output
+// knows it by, or false when the history cannot be read. No other entry is appended
+// in between, so the number is this output's.
+func recordToolOutputNumbered(entry historyEntry) (n int, ok bool) {
+	historyAppendMu.Lock()
+	defer historyAppendMu.Unlock()
+	recordHistoryLocked(entry)
+	return latestToolOutputNumber()
+}
+
+// recordHistoryLocked appends entry; the caller holds historyAppendMu.
+func recordHistoryLocked(entry historyEntry) {
 	if entry.ConversationID == "" {
 		entry.ConversationID = activeConversationID
 	}
