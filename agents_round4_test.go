@@ -97,3 +97,145 @@ func TestAgentReportIsRecordedOnceAcrossRetries(t *testing.T) {
 		t.Fatalf("the report is in the history %d times", recorded)
 	}
 }
+
+// attachForTest opens the attach view of a with key capture on, runs during while it
+// is open, and returns once it closes.
+func attachForTest(t *testing.T, ctx context.Context, h *agentHost, cfg *config, a *subagent.Agent, during func()) {
+	t.Helper()
+	done := make(chan error, 1)
+	captureTerminal(t, func() {
+		go func() { done <- h.attach(ctx, cfg, a) }()
+		waitFor(t, "the attach view", func() bool {
+			turnQueue.mu.Lock()
+			defer turnQueue.mu.Unlock()
+			return turnQueue.emptyHint != ""
+		})
+		during()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func attachTestSetup(t *testing.T) (*echoRunner, *config, *agentHost, *subagent.Agent) {
+	withColor(t, true)
+	resetTurnQueue(t)
+	saved := currentKeyCapture()
+	setActiveKeyCapture(&keyCapture{})
+	t.Cleanup(func() { setActiveKeyCapture(saved) })
+	runner := &echoRunner{}
+	cfg, h := uiTestHost(t, runner.run)
+	a := spawnTest(t, h, "helper", "first")
+	waitFor(t, "a1 idle", func() bool { return a.State() == subagent.Idle })
+	return runner, cfg, h, a
+}
+
+// A line half typed for main when the attach view opens (Ctrl-G) is set aside: what is
+// typed in the view goes to the agent alone, and the draft comes back for main.
+func TestAttachSetsAsideTheDraftForMain(t *testing.T) {
+	runner, cfg, h, a := attachTestSetup(t)
+	turnQueue.mu.Lock()
+	turnQueue.editor.setText("draft for main")
+	turnQueue.mu.Unlock()
+	attachForTest(t, context.Background(), h, cfg, a, func() {
+		turnQueue.mu.Lock()
+		text := turnQueue.editorText()
+		turnQueue.mu.Unlock()
+		if text != "" {
+			t.Errorf("the attach view's input holds main's draft: %q", text)
+		}
+		enqueue("hello")
+		nudgeLineQueued()
+		waitFor(t, "the message", func() bool { return len(runner.seen()) == 2 })
+		enqueue("/back")
+		nudgeLineQueued()
+	})
+	if seen := runner.seen(); len(seen) != 2 || seen[1] != "hello" {
+		t.Fatalf("the agent should get only what was typed in the view: %q", seen)
+	}
+	turnQueue.mu.Lock()
+	text := turnQueue.editorText()
+	turnQueue.mu.Unlock()
+	if text != "draft for main" {
+		t.Fatalf("the draft should come back for main: %q", text)
+	}
+}
+
+// Ctrl-C out of the attach view sends nothing: lines queued for main wait in the
+// prompt, as after any other Ctrl-C.
+func TestCtrlCOutOfAttachKeepsMainsLinesInThePrompt(t *testing.T) {
+	runner, cfg, h, a := attachTestSetup(t)
+	enqueue("deploy it")
+	ctx, cancel := context.WithCancel(context.Background())
+	attachForTest(t, ctx, h, cfg, a, cancel)
+	if len(runner.seen()) != 1 {
+		t.Fatalf("a line meant for main went to the agent: %q", runner.seen())
+	}
+	if text, ok := nextQueuedInput(); ok {
+		t.Fatalf("Ctrl-C should not leave the line queued to send: %q", text)
+	}
+	turnQueue.mu.Lock()
+	text := turnQueue.editorText()
+	turnQueue.mu.Unlock()
+	if text != "deploy it" {
+		t.Fatalf("the line should wait in the input: %q", text)
+	}
+}
+
+// An agent's approval is not asked while the user has text typed at the prompt, even
+// when another agent finishing made the prompt give way: what the user goes on typing
+// would become the answer.
+func TestIdleApprovalWaitsWhileTextIsTyped(t *testing.T) {
+	withToolTestColor(t, true)
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[bg]]": {
+			newSSE("g1").toolUse("tg1", "run_bash", `{"command":"echo bg > bg.txt"}`).stop("tool_use", ""),
+			newSSE("g2").text("bg done").stop("end_turn", ""),
+		},
+	})
+	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	cfg.input = newLineReader(&scriptedLines{t: t, lines: []string{"y\n"}})
+	if _, err := h.Spawn(context.Background(), tools.SpawnRequest{Description: "background job", Prompt: "[[bg]] write it", Mode: tools.AgentModeGeneral, Background: true}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := h.m.Get("a1")
+	waitFor(t, "the approval request", func() bool { return a.State() == subagent.WaitingApproval })
+	cfg.input.partial = "half a sentence"
+	captureTerminal(t, func() { serveIdleApprovals(cfg) })
+	if a.State() != subagent.WaitingApproval || cfg.input.partial != "half a sentence" {
+		t.Fatalf("the approval was asked over typed text: %v %q", a.State(), cfg.input.partial)
+	}
+}
+
+// A workspace warning given while an agent runs (its file change, on its own goroutine)
+// is held for main, which shows it where it shows the agents' notices.
+func TestWorkspaceWarningsWaitForMainWhileAgentsRun(t *testing.T) {
+	withToolTestColor(t, true)
+	fake := newRoutedAnthropic(t, map[string][]string{"[[busy]]": {blockStream}})
+	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	previous := runningAgents.Swap(h)
+	t.Cleanup(func() { runningAgents.Store(previous) })
+	if _, err := h.Spawn(context.Background(), tools.SpawnRequest{Description: "busy", Prompt: "[[busy]] go", Mode: tools.AgentModeGeneral, Background: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the busy request", func() bool { return fake.started.Load() > 0 })
+	out := captureTerminal(t, func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			workspaceWarnf("write_file succeeded but could not be recorded for undo: %v", "disk full")
+		}()
+		<-done
+	})
+	if strings.Contains(out, "disk full") {
+		t.Fatalf("a warning from an agent's goroutine went straight to the terminal: %q", out)
+	}
+	out = captureTerminal(t, func() { collectAgentNotices(cfg) })
+	if !strings.Contains(out, "could not be recorded for undo: disk full") {
+		t.Fatalf("main should show the held warning: %q", out)
+	}
+	out = captureTerminal(t, func() { collectAgentNotices(cfg) })
+	if strings.Contains(out, "disk full") {
+		t.Fatalf("the warning is shown once: %q", out)
+	}
+}

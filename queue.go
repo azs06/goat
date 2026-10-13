@@ -153,24 +153,47 @@ func takeQueuedLine() (string, bool) {
 	return line, true
 }
 
-// holdQueuedLines takes the queued lines out of the queue, for restoreQueuedLines to
-// put back, so the attach view sends none of the lines meant for main to its agent.
-func holdQueuedLines() []string {
+// heldInput is what was queued or being typed for main when the attach view opened.
+type heldInput struct {
+	lines []string
+	draft string
+}
+
+// holdQueuedInput takes the queued lines and the line being typed out of the queue,
+// for restoreQueuedInput to put back, so the attach view sends none of what was meant
+// for main to its agent.
+func holdQueuedInput() heldInput {
 	turnQueue.mu.Lock()
 	defer turnQueue.mu.Unlock()
-	held := turnQueue.items
+	held := heldInput{lines: turnQueue.items, draft: turnQueue.editorText()}
 	turnQueue.items = nil
+	turnQueue.editor.setText("")
 	return held
 }
 
-// restoreQueuedLines puts held back at the front of the queue.
-func restoreQueuedLines(held []string) {
-	if len(held) == 0 {
-		return
-	}
+// restoreQueuedInput puts held back: the draft in front of the text being typed, and
+// the lines at the front of the queue, or, when toEditor is set, in front of the draft
+// in the input, so they are not sent before the user sees them again.
+func restoreQueuedInput(held heldInput, toEditor bool) {
 	turnQueue.mu.Lock()
 	defer turnQueue.mu.Unlock()
-	turnQueue.items = append(held, turnQueue.items...)
+	var parts []string
+	if toEditor {
+		parts = append(parts, held.lines...)
+	} else if len(held.lines) > 0 {
+		turnQueue.items = append(held.lines, turnQueue.items...)
+	}
+	parts = append(parts, held.draft, turnQueue.editorText())
+	var kept []string
+	for _, part := range parts {
+		if part != "" {
+			kept = append(kept, part)
+		}
+	}
+	if text := strings.Join(kept, "\n"); text != turnQueue.editorText() {
+		turnQueue.editor.setText(text)
+		turnQueue.editor.menuClosed = true
+	}
 }
 
 // returnQueuedLinesToEditor puts the lines still queued back in front of the text

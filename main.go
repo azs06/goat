@@ -910,7 +910,7 @@ func main() {
 	}
 
 	provider.Warnf = warnf
-	workspace.Warnf = warnf
+	workspace.Warnf = workspaceWarnf
 	terminal.Warnf = warnf
 	applyTheme()
 	for _, warning := range append(envWarnings, endpointNotices()...) {
@@ -955,6 +955,7 @@ func main() {
 // sayGoodbye stops what goat left running in the background and says goodbye.
 func sayGoodbye() {
 	stopBackgroundOnExit(os.Stdout)
+	showHeldWarnings()
 	fmt.Println("Closing the Goat... Goodbye!")
 }
 

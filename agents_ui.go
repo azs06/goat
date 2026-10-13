@@ -80,17 +80,14 @@ func (h *agentHost) promptEvents(footer func() string) *promptEvents {
 	}
 }
 
-// serveIdleApprovals asks about the commands agents wait to run, between turns. The
-// text typed at the prompt is set aside meanwhile, so it does not become the answer,
-// and Ctrl-C declines rather than ending goat.
+// serveIdleApprovals asks about the commands agents wait to run, between turns, once
+// nothing is typed at the prompt: the rest of a line the user keeps typing must not
+// become the answer. The prompt gives way when the line is empty, and a prompt sent
+// meanwhile asks first. Ctrl-C declines rather than ending goat.
 func serveIdleApprovals(cfg *config) {
 	h := cfg.agents
-	if h == nil || h.m.Broker.Len() == 0 {
+	if h == nil || h.m.Broker.Len() == 0 || cfg.input != nil && cfg.input.partial != "" {
 		return
-	}
-	typed := ""
-	if cfg.input != nil {
-		typed, cfg.input.partial = cfg.input.partial, ""
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -100,9 +97,6 @@ func serveIdleApprovals(cfg *config) {
 	})
 	if err != nil {
 		warnf("%v", err)
-	}
-	if cfg.input != nil {
-		cfg.input.partial = typed
 	}
 }
 
@@ -463,9 +457,11 @@ var attachReadOnly = map[string]bool{"agents": true, "help": true, "ps": true, "
 // the user starts here is not announced when it ends while the user still looks on.
 func (h *agentHost) attach(ctx context.Context, cfg *config, a *subagent.Agent) error {
 	defer h.m.SetAttached("")
-	// Lines queued before the view opened were meant for main: they wait, and go to
-	// main as they would have once the view closes.
-	defer restoreQueuedLines(holdQueuedLines())
+	// Lines queued, and the line typed, before the view opened were meant for main:
+	// they wait, and go to main as they would have once the view closes. Ctrl-C sends
+	// nothing, so after it the queued lines wait in the prompt instead.
+	held := holdQueuedInput()
+	defer func() { restoreQueuedInput(held, ctx.Err() != nil) }()
 	for {
 		h.m.SetAttached(a.ID)
 		next, err := h.attachOnce(ctx, cfg, a)

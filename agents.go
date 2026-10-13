@@ -69,6 +69,37 @@ type agentHost struct {
 // runningAgents is the session's host, for stopping its agents on every way out.
 var runningAgents atomic.Pointer[agentHost]
 
+// heldWarnings are workspace warnings given while agents may be running: a subagent's
+// file change runs on its own goroutine, which must never write to the terminal over
+// the prompt or the attach view. Main shows them where it shows agents' notices.
+var heldWarnings struct {
+	sync.Mutex
+	lines []string
+}
+
+// workspaceWarnf is workspace.Warnf: a warning, held for main while any agent may still
+// be changing files. Main's own warnings in that window wait until its next tool round.
+func workspaceWarnf(format string, args ...any) {
+	if h := runningAgents.Load(); h != nil && h.m.Active() > 0 {
+		heldWarnings.Lock()
+		heldWarnings.lines = append(heldWarnings.lines, fmt.Sprintf(format, args...))
+		heldWarnings.Unlock()
+		return
+	}
+	warnf(format, args...)
+}
+
+// showHeldWarnings shows the warnings held for main. Called on main.
+func showHeldWarnings() {
+	heldWarnings.Lock()
+	lines := heldWarnings.lines
+	heldWarnings.lines = nil
+	heldWarnings.Unlock()
+	for _, line := range lines {
+		warnf("%s", line)
+	}
+}
+
 // newAgentHost returns a host whose agents run within limits; zero limits take the
 // defaults.
 func newAgentHost(cfg *config, limits subagent.Config, interactive bool) *agentHost {
@@ -694,6 +725,7 @@ func (h *agentHost) noticeLine(n subagent.Notice) string {
 // turnNotices is the takeNotices hook of a main turn: finished agents' reports go to
 // the model with the next tool results.
 func (h *agentHost) turnNotices() string {
+	showHeldWarnings()
 	return strings.Join(h.takeNotices(func(line string) {
 		showAgentActivity(formatNotice(line) + "\n")
 	}), "\n\n")
@@ -702,6 +734,7 @@ func (h *agentHost) turnNotices() string {
 // collectAgentNotices, between turns, shows the agents that finished and keeps their
 // reports for the next message.
 func collectAgentNotices(cfg *config) {
+	showHeldWarnings()
 	taken := cfg.agents.takeNotices(func(line string) {
 		fmt.Fprintln(activityOut, formatNotice(line))
 	})
