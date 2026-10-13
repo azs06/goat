@@ -98,6 +98,15 @@ type turnOptions struct {
 	// serveAgents, when set, is called after every tool round, such as to answer the
 	// approvals subagents are waiting on.
 	serveAgents func(ctx context.Context)
+	// takeNotices, when set, returns the reports of background subagents that finished,
+	// to go to the model with the next tool results. Unlike takeSteering's text they are
+	// not shown as a message from the user.
+	takeNotices func() string
+	// agents runs the subagent tools; only the top-level agent has it.
+	agents tools.AgentHost
+	// subagent is set for a subagent's turn: it gets the subagent prompt, no subagent
+	// tools, and cannot undo.
+	subagent bool
 }
 
 // record saves entry to the history as part of the turn's conversation.
@@ -349,9 +358,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		if opts.livePlanMode != nil {
 			planMode = opts.livePlanMode()
 		}
-		// TODO(subagents): pass Agents and Subagent here once turnOptions and
-		// tools.Options have them.
-		toolOpts := tools.Options{PlanMode: planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
+		toolOpts := tools.Options{PlanMode: planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber, Agents: opts.agents, Subagent: opts.subagent}
 		var shown []provider.Image
 		toolOpts.Vision = opts.vision
 		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
@@ -465,7 +472,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	}
 	opts.record(historyEntry{Type: "user", Content: prompt, Provider: providerName, Images: len(opts.images)})
 
-	system, specs := promptFor(opts.codeMode)
+	system, specs := promptFor(opts.codeMode, !opts.subagent)
 	req := provider.Request{
 		Model:        opts.model,
 		System:       system,
@@ -517,7 +524,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		case provider.StopToolUse:
 			results = runToolCalls(ctx, providerName, opts, resp)
 			for _, call := range resp.ToolCalls {
-				verified.changed = verified.changed || changesWorkspace(call)
+				verified.changed = verified.changed || changesWorkspaceWith(call, agentModeLookup(opts.agents))
 			}
 			if opts.serveAgents != nil {
 				opts.serveAgents(ctx)
@@ -605,6 +612,15 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		if opts.takeSteering != nil {
 			if text := opts.takeSteering(); text != "" {
 				opts.sink.User(text)
+				opts.record(historyEntry{Type: "user", Content: text, Provider: providerName})
+				if req.UserText != "" {
+					text = req.UserText + "\n\n" + text
+				}
+				req.UserText = text
+			}
+		}
+		if opts.takeNotices != nil {
+			if text := opts.takeNotices(); text != "" {
 				opts.record(historyEntry{Type: "user", Content: text, Provider: providerName})
 				if req.UserText != "" {
 					text = req.UserText + "\n\n" + text

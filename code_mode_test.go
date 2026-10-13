@@ -59,12 +59,12 @@ func TestCodeModeOffersRunCodeOnlyWhenOn(t *testing.T) {
 	if slices.Contains(toolNames(t, off), tools.RunCode) || strings.Contains(fmt.Sprint(off.body["system"]), "run_code") {
 		t.Error("with code mode off, the model must not be offered run_code")
 	}
-	if len(toolNames(t, off)) != len(tools.Specs) || !strings.Contains(fmt.Sprint(off.body["system"]), systemPrompt) {
-		t.Error("with code mode off, the request should carry systemPrompt and tools.Specs")
+	if len(toolNames(t, off)) != len(tools.Specs)+len(tools.AgentSpecs) || !strings.Contains(fmt.Sprint(off.body["system"]), systemPrompt) {
+		t.Error("with code mode off, the request should carry systemPrompt, tools.Specs and the subagent tools")
 	}
 
 	names := toolNames(t, on)
-	if len(names) != len(tools.Specs)+1 || names[len(names)-1] != tools.RunCode {
+	if len(names) != len(tools.Specs)+1+len(tools.AgentSpecs) || names[len(tools.Specs)] != tools.RunCode {
 		t.Errorf("with code mode on, run_code should follow the other tools, got %v", names)
 	}
 	system := fmt.Sprint(on.body["system"])

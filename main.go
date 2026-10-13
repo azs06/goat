@@ -85,6 +85,11 @@ type config struct {
 	promptImages []promptImage
 	imageCount   int
 	lastImages   []provider.Image
+	// agents runs the session's subagents; nil until main starts it.
+	agents *agentHost
+	// agentNotices are the reports of background subagents that finished between
+	// turns, ready for the model; they go with the next message.
+	agentNotices []string
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -441,6 +446,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 
 // runPromptWithImages runs one turn for prompt with the images attached to it.
 func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userImages []provider.Image) error {
+	cfg.agents.sync(cfg)
+	// Commands subagents asked to run since the last turn are asked about first.
+	cfg.agents.serveApprovals(ctx, cfg)
+	collectAgentNotices(cfg)
 
 	p, err := cfg.currentProvider()
 	if err != nil {
@@ -473,13 +482,13 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		codeMode:    cfg.codeMode,
 		vision:      provider.AcceptsImages(cfg.model),
 		images:      userImages,
-		contextNote: shellContextNote(cfg.pendingShell),
+		contextNote: shellContextNote(cfg.pendingShell) + agentNoticesNote(cfg.agentNotices),
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
 			turnStarted, lastOwed = true, state.pendingToolResults
 			cfg.conversation = state
-			cfg.pendingShell = nil
+			cfg.pendingShell, cfg.agentNotices = nil, nil
 			saveSession(cfg)
 			// The footer under the input catches up with the turn: context used, commands
 			// left running.
@@ -520,6 +529,11 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	if cfg.approver != nil {
 		opts.approveBash = cfg.approver.approve
 	}
+	if cfg.agents != nil {
+		opts.agents = cfg.agents
+		opts.serveAgents = func(ctx context.Context) { cfg.agents.serveApprovals(ctx, cfg) }
+		opts.takeNotices = cfg.agents.turnNotices
+	}
 	// Plan mode changes nothing, so there is nothing to check.
 	if !cfg.planMode {
 		opts.verify = verifyGate()
@@ -537,7 +551,7 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	if err == nil || conversationMoved(sent, next.conversation) {
 		// The ! output went with this message, which the model has now seen. A request
 		// that failed outright keeps it for /retry.
-		cfg.pendingShell = nil
+		cfg.pendingShell, cfg.agentNotices = nil, nil
 	}
 	if err == nil || !provider.IsThinkingBindingError(err) && !errors.Is(err, errContextExceeded) {
 		return err
@@ -572,7 +586,7 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || conversationMoved(sent, next.conversation) {
-		cfg.pendingShell = nil
+		cfg.pendingShell, cfg.agentNotices = nil, nil
 	}
 	if errors.Is(err, errContextExceeded) {
 		return fmt.Errorf("%w even after compacting; shorten the prompt, or start over with /clear", err)
@@ -622,6 +636,8 @@ func handleInput(cfg *config, text string) error {
 			return runShellEscape(ctx, cfg, shellCommand)
 		case cmd != nil:
 			cfg.commandText = text
+			// A command can change the model or modes the agents take from main.
+			defer cfg.agents.sync(cfg)
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
@@ -901,6 +917,8 @@ func main() {
 	cfg.approver.autoApprove.Store(opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH"))
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
+	// Before the exit paths are set up, so every one of them stops the agents.
+	startAgents(cfg, opts.print)
 	stopBackgroundOnSignal()
 
 	if opts.print {
@@ -936,6 +954,9 @@ func runInteractive(cfg *config) {
 	gap := true
 	var lastInterrupt time.Time
 	for {
+		// Background agents that finished since the last turn are shown, and their
+		// reports go with the next message.
+		collectAgentNotices(cfg)
 		// Messages queued during the last turn run before the prompt comes back.
 		var err error
 		text, queued := nextQueuedInput()

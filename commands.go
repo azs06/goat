@@ -141,8 +141,11 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 }
 
 func commandClear(ctx context.Context, c *config, args []string) error {
+	if err := c.refuseWhileAgentsRun(); err != nil {
+		return err
+	}
 	replaceConversation(c, conversationState{})
-	c.pendingShell = nil
+	c.pendingShell, c.agentNotices = nil, nil
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	// A new conversation starts under a fresh banner with the current model and effort.
@@ -194,7 +197,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 	}
 	adoptSavedConversation(c, previous)
-	c.pendingShell = nil
+	c.pendingShell, c.agentNotices = nil, nil
 	saveSession(c)
 
 	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))
@@ -203,7 +206,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs))))
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs)+len(tools.AgentSpecs))))
 	fmt.Println()
 	fmt.Println(renderToolList())
 	return nil

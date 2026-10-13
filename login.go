@@ -38,6 +38,9 @@ func commandLogin(ctx context.Context, c *config, args []string) error {
 	if len(args) > 1 {
 		return errors.New("usage: /login [provider]")
 	}
+	if err := c.refuseWhileAgentsRun(); err != nil {
+		return err
+	}
 	if c.input == nil || !c.interactive {
 		fmt.Println(loginInstructions())
 		return nil

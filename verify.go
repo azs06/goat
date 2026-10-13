@@ -170,6 +170,33 @@ func verifyTimeout() time.Duration {
 // but a read-only tool or a preview. run_bash and run_code always count: they take no
 // preview, so a "preview" argument given to them is ignored and the command still runs.
 func changesWorkspace(call provider.ToolCall) bool {
+	return changesWorkspaceWith(call, nil)
+}
+
+// changesWorkspaceWith is changesWorkspace for a turn whose subagents' modes modeOf
+// knows. Only a general subagent can change anything: spawning one counts, and so does
+// a message to one, which starts or steers its work. Without modeOf a message counts
+// for nothing, since there is no agent to send it to.
+func changesWorkspaceWith(call provider.ToolCall, modeOf func(id string) (string, bool)) bool {
+	switch call.Name {
+	case tools.SpawnAgent:
+		var args struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.Unmarshal([]byte(call.Arguments), &args)
+		return strings.EqualFold(strings.TrimSpace(args.Mode), tools.AgentModeGeneral)
+	case tools.SendMessage:
+		var args struct {
+			Agent string `json:"agent"`
+		}
+		if json.Unmarshal([]byte(call.Arguments), &args) != nil || modeOf == nil {
+			return false
+		}
+		mode, ok := modeOf(strings.TrimSpace(args.Agent))
+		return ok && mode == tools.AgentModeGeneral
+	case tools.StopAgent, tools.AgentStatus, tools.WaitAgents:
+		return false
+	}
 	switch tools.PlanModePolicyFor(call.Name) {
 	case tools.PlanModeAllowed:
 		return false
