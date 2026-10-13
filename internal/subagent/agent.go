@@ -2,9 +2,12 @@ package subagent
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 // State is where an agent is in its life.
@@ -72,7 +75,14 @@ type Agent struct {
 	started    time.Time
 	updated    time.Time
 	turns      int
-	inbox      []string
+	inbox      []message
+	// owed is set while the parent model has asked for work it has not been told the
+	// outcome of: a spawn, or a message from the model. A turn only the user asked for
+	// from the attach view is not reported to the model.
+	owed bool
+	// delivered is set once the latest report reached the model, as a notice or from
+	// wait, so it is never given twice.
+	delivered  bool
 	turnCancel context.CancelCauseFunc
 	turnDone   chan struct{}
 	report     string
@@ -164,9 +174,66 @@ func (a *Agent) TurnDone() <-chan struct{} {
 func (a *Agent) TakeInbox() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	inbox := a.inbox
+	texts := make([]string, 0, len(a.inbox))
+	for _, msg := range a.inbox {
+		texts = append(texts, msg.text)
+	}
 	a.inbox = nil
-	return inbox
+	return texts
+}
+
+// message is one message in an agent's inbox, and who sent it.
+type message struct {
+	text     string
+	fromUser bool
+}
+
+// joinMessages is the prompt a turn takes from inbox messages.
+func joinMessages(msgs []message) string {
+	texts := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		texts = append(texts, msg.text)
+	}
+	return strings.Join(texts, "\n\n")
+}
+
+// hasModelMessage reports whether msgs hold a message from the parent model.
+func hasModelMessage(msgs []message) bool {
+	for _, msg := range msgs {
+		if !msg.fromUser {
+			return true
+		}
+	}
+	return false
+}
+
+// echoUserLocked shows the user's messages among msgs in the event ring, as a turn
+// takes them for its prompt. Messages steered into a running turn are shown by the
+// turn itself. Callers hold a.mu, which also keeps the turn from writing to the ring
+// first.
+func (a *Agent) echoUserLocked(msgs []message) {
+	if a.ring == nil {
+		return
+	}
+	for _, msg := range msgs {
+		if msg.fromUser {
+			a.ring.Append(Event{Kind: EventUser, Text: escapeControl(msg.text)})
+		}
+	}
+}
+
+// escapeControl writes control characters other than newline and tab as \xNN, so an
+// event never carries terminal escapes.
+func escapeControl(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			b.WriteRune(r)
+			continue
+		}
+		fmt.Fprintf(&b, "\\x%02x", r)
+	}
+	return b.String()
 }
 
 // InterruptTurn cancels the turn in flight, if any, with cause. The agent becomes Idle

@@ -90,6 +90,9 @@ type config struct {
 	// agentNotices are the reports of background subagents that finished between
 	// turns, ready for the model; they go with the next message.
 	agentNotices []string
+	// verifyPending is set when a turn's verify was put off because a general subagent
+	// was still changing the workspace; the next turn runs it.
+	verifyPending bool
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -536,9 +539,11 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	}
 	// Plan mode changes nothing, so there is nothing to check.
 	if !cfg.planMode {
-		opts.verify = verifyGate()
-		// The retry after compacting below is the same turn.
-		opts.verified = &verifyState{}
+		// While a general subagent still works, the check waits for a later turn.
+		opts.verify = cfg.agents.deferVerify(verifyGate(), &cfg.verifyPending)
+		// The retry after compacting below is the same turn. A check put off by an
+		// earlier turn runs when this one ends.
+		opts.verified = &verifyState{changed: cfg.verifyPending && opts.verify != nil}
 	}
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {

@@ -108,9 +108,11 @@ func (c Config) withDefaults() Config {
 const maxNotices = 32
 
 // Notice is a finished background agent's report, waiting to be given to the
-// conversation that spawned it.
+// conversation that spawned it. ForModel is false for a turn only the user asked for,
+// from the attach view: that one is shown to the user and never given to the model.
 type Notice struct {
 	AgentID, ParentConv, Text string
+	ForModel                  bool
 }
 
 // Manager owns every subagent and the goroutines their turns run on.
@@ -136,6 +138,8 @@ type Manager struct {
 	notices   []Notice
 	evicted   []Info
 	turnEnded chan struct{}
+	// attached is the agent the user is looking at in the attach view, if any.
+	attached string
 }
 
 // NewManager returns a manager that runs turns with run, within cfg's limits.
@@ -213,6 +217,7 @@ func (m *Manager) Spawn(opts SpawnOptions) (*Agent, error) {
 		ctx:        ctx,
 		cancel:     cancel,
 		state:      Idle,
+		owed:       true,
 		started:    now,
 		updated:    now,
 		ring:       NewEventRing(m.cfg.RingEvents, m.cfg.RingBytes, m.cfg.EventText),
@@ -248,6 +253,7 @@ func (m *Manager) startTurnLocked(a *Agent, prompt string) error {
 	}
 	a.gen++
 	gen := a.gen
+	a.delivered = false
 	a.state = Running
 	a.activity = ""
 	a.updated = time.Now()
@@ -301,11 +307,13 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 		return "", false
 	}
 	a.report = head(reply, m.cfg.ReportCap)
+	a.delivered = false
 	a.err = err
 	a.turns++
 	a.updated = time.Now()
 	if mayContinue && len(a.inbox) > 0 && ctx.Err() == nil && !m.closed {
-		next := strings.Join(a.inbox, "\n\n")
+		next := joinMessages(a.inbox)
+		a.echoUserLocked(a.inbox)
 		a.inbox = nil
 		a.state = Running
 		a.activity = ""
@@ -328,15 +336,17 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	a.activity = ""
 	a.turnCancel = nil
 	close(a.turnDone)
-	if a.Background && a.state != Stopped {
-		m.addNoticeLocked(a)
+	if a.Background && a.state != Stopped && (a.owed || a.ID != m.attached) {
+		m.addNoticeLocked(a, a.owed)
 	}
+	// A message from the model still waiting starts a turn it is owed the report of.
+	a.owed = hasModelMessage(a.inbox)
 	m.broadcastTurnEnd()
 	m.nudge()
 	return "", false
 }
 
-func (m *Manager) addNoticeLocked(a *Agent) {
+func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {
 	text := a.report
 	if a.err != nil {
 		text = fmt.Sprintf("The agent's turn ended with an error: %v\n\n%s", a.err, a.report)
@@ -345,6 +355,7 @@ func (m *Manager) addNoticeLocked(a *Agent) {
 		AgentID:    a.ID,
 		ParentConv: a.ParentConv,
 		Text:       WrapReport(a.ID, a.Label, text, m.cfg.ReportCap),
+		ForModel:   forModel,
 	})
 	if len(m.notices) > maxNotices {
 		m.notices = append([]Notice(nil), m.notices[len(m.notices)-maxNotices:]...)
@@ -361,9 +372,10 @@ func (m *Manager) kickLocked() {
 		if !a.state.Busy() && a.state != Stopped && len(a.inbox) > 0 {
 			inbox := a.inbox
 			a.inbox = nil
-			if err = m.startTurnLocked(a, strings.Join(inbox, "\n\n")); err != nil {
+			if err = m.startTurnLocked(a, joinMessages(inbox)); err != nil {
 				a.inbox = inbox
 			} else {
+				a.echoUserLocked(inbox)
 				m.nudge()
 			}
 		}
@@ -424,34 +436,58 @@ func (m *Manager) Counts() (running, waitingApproval, total int) {
 	return running, waitingApproval, len(m.agents)
 }
 
+// Delivery is what became of a message Send accepted.
+type Delivery int
+
+const (
+	// Started: the message began a new turn.
+	Started Delivery = iota
+	// Steered: the agent is running and reads the message at its next tool round.
+	Steered
+	// Queued: no slot is free; the message starts a turn once one frees.
+	Queued
+)
+
 // Send gives an agent a message. A running agent finds it in its inbox at its next
 // tool round. An idle or failed agent starts a new turn with it, or, when no slot is
 // free, keeps it in the inbox and starts when one frees. A stopped agent refuses the
 // model (fromUser false) with ErrStopped; the user resumes it. started reports
 // whether a new turn began.
 func (m *Manager) Send(id, text string, fromUser bool) (started bool, err error) {
+	d, err := m.Deliver(id, text, fromUser)
+	return err == nil && d == Started, err
+}
+
+// Deliver is Send, saying what became of the message. A message from the user that a
+// turn takes as its prompt is shown in the agent's events as that turn starts, so the
+// attach view shows each message once whatever the agent was doing. A message from
+// the model makes the agent's next report owed to the model.
+func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return false, ErrClosed
+		return 0, ErrClosed
 	}
 	a, err := m.getLocked(id)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.state == Stopped && !fromUser {
-		return false, fmt.Errorf("%s was stopped; only the user can resume it: %w", id, ErrStopped)
+		return 0, fmt.Errorf("%s was stopped; only the user can resume it: %w", id, ErrStopped)
 	}
 	if len(a.inbox) >= m.cfg.InboxCap {
-		return false, fmt.Errorf("%s has %d messages waiting: %w", id, len(a.inbox), ErrInboxFull)
+		return 0, fmt.Errorf("%s has %d messages waiting: %w", id, len(a.inbox), ErrInboxFull)
 	}
-	a.inbox = append(a.inbox, text)
+	a.inbox = append(a.inbox, message{text: text, fromUser: fromUser})
+	if !fromUser {
+		a.owed = true
+	}
 	a.updated = time.Now()
 	defer m.nudge()
 	if a.state.Busy() {
-		return false, nil
+		return Steered, nil
 	}
 	if a.state == Stopped {
 		a.ctx, a.cancel = context.WithCancelCause(m.root)
@@ -459,15 +495,39 @@ func (m *Manager) Send(id, text string, fromUser bool) (started bool, err error)
 	}
 	inbox := a.inbox
 	a.inbox = nil
-	switch err := m.startTurnLocked(a, strings.Join(inbox, "\n\n")); {
+	switch err := m.startTurnLocked(a, joinMessages(inbox)); {
 	case err == nil:
-		return true, nil
+		a.echoUserLocked(inbox)
+		return Started, nil
 	case errors.Is(err, ErrLimit) || errors.Is(err, ErrBusy):
 		a.inbox = inbox
-		return false, nil
+		return Queued, nil
 	default:
 		a.inbox = inbox
-		return false, err
+		return 0, err
+	}
+}
+
+// SetAttached records the agent the user is looking at in the attach view, "" for
+// none. A turn of that agent the user started is not announced when it ends: the user
+// saw it end.
+func (m *Manager) SetAttached(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attached = id
+}
+
+// MarkDelivered records that the agent's latest report reached the model, so a wait
+// on the agent says so instead of giving it again.
+func (m *Manager) MarkDelivered(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.agents[id]; ok {
+		a.mu.Lock()
+		if !a.state.Busy() {
+			a.delivered = true
+		}
+		a.mu.Unlock()
 	}
 }
 
@@ -493,6 +553,8 @@ func (m *Manager) Stop(id string) error {
 func (m *Manager) stopLocked(a *Agent, cause error) {
 	a.cancel(cause)
 	a.inbox = nil
+	// Whatever the model asked for ended here; a turn the user resumes is the user's.
+	a.owed = false
 	if a.state == Stopped {
 		return
 	}
@@ -672,12 +734,14 @@ func (m *Manager) TakeNotices(parentConv string) []Notice {
 	return taken
 }
 
-// Result is how an agent's turn ended, as Wait returns it.
+// Result is how an agent's turn ended, as Wait returns it. Delivered is set when the
+// report already reached the model before this wait.
 type Result struct {
 	ID, Label string
 	State     State
 	Report    string
 	Err       error
+	Delivered bool
 }
 
 // WaitResult is what Wait found: the agents that finished, the ones still running,
@@ -752,16 +816,16 @@ func (m *Manager) waitTargetsLocked(ids []string) ([]string, error) {
 	var targets []string
 	for _, id := range m.order {
 		a := m.agents[id]
-		if a.State().Busy() || m.hasNoticeLocked(id) {
+		if a.State().Busy() || m.hasModelNoticeLocked(id) {
 			targets = append(targets, id)
 		}
 	}
 	return targets, nil
 }
 
-func (m *Manager) hasNoticeLocked(id string) bool {
+func (m *Manager) hasModelNoticeLocked(id string) bool {
 	for _, n := range m.notices {
-		if n.AgentID == id {
+		if n.AgentID == id && n.ForModel {
 			return true
 		}
 	}
@@ -780,16 +844,25 @@ func (m *Manager) collectLocked(targets []string) WaitResult {
 		if a.state.Busy() {
 			res.Running = append(res.Running, id)
 		} else {
-			res.Done = append(res.Done, Result{ID: id, Label: a.Label, State: a.state, Report: a.report, Err: a.err})
+			res.Done = append(res.Done, Result{ID: id, Label: a.Label, State: a.state, Report: a.report, Err: a.err, Delivered: a.delivered})
 		}
 		a.mu.Unlock()
 	}
 	return res
 }
 
+// consumeNoticesLocked takes the reports in done as delivered: their notices are
+// dropped and a later wait says they were given already.
 func (m *Manager) consumeNoticesLocked(done []Result) {
 	if len(done) == 0 {
 		return
+	}
+	for _, r := range done {
+		if a, ok := m.agents[r.ID]; ok {
+			a.mu.Lock()
+			a.delivered = true
+			a.mu.Unlock()
+		}
 	}
 	kept := m.notices[:0:0]
 	for _, n := range m.notices {

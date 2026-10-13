@@ -272,7 +272,7 @@ func TestAttachRoutesWhatIsTyped(t *testing.T) {
 	captureTerminal(t, func() {
 		h.attachLine(ctx, cfg, a, "slow one")
 		waitFor(t, "a1 running", func() bool { return a.State().Busy() })
-		// A message to a running agent waits in its inbox and is not echoed here.
+		// A message to a running agent waits in its inbox; it shows when a turn takes it.
 		h.attachLine(ctx, cfg, a, "and more")
 		h.attachLine(ctx, cfg, a, "/stop")
 		// The interrupted turn ends; the message in the inbox then starts the next.
@@ -284,10 +284,16 @@ func TestAttachRoutesWhatIsTyped(t *testing.T) {
 	if len(causes) != 1 || !errors.Is(causes[0], subagent.ErrUserInterrupt) {
 		t.Fatalf("/stop should interrupt the turn: %v", causes)
 	}
+	// The message waited in the inbox, so it shows once, as the turn that took it
+	// started.
+	echoes := 0
 	for _, e := range a.Ring().Since(0) {
 		if e.Kind == subagent.EventUser && e.Text == "and more" {
-			t.Fatal("a message to a running agent is echoed by its turn, not by the attach view")
+			echoes++
 		}
+	}
+	if echoes != 1 {
+		t.Fatalf("a message should show once, got %d", echoes)
 	}
 }
 
@@ -524,14 +530,38 @@ func TestEditPromptGivesWayToAgentEventsAndKeepsTheText(t *testing.T) {
 		t.Fatalf("got %v %q, partial %q", r.err, r.text, input.partial)
 	}
 
-	// Ctrl-C keeps the text too.
-	ctx, cancel := context.WithCancel(context.Background())
+	// A context ended by something other than the user keeps the text too.
+	ctx, cancel := context.WithCancelCause(context.Background())
 	checks.Store(0)
 	result = editInBackground(t, ctx, input, events)
 	io.WriteString(keys, "xy")
 	waitFor(t, "two keys", func() bool { return checks.Load() == 3 })
-	cancel()
+	cancel(errors.New("goat is exiting"))
 	if r := <-result; !errors.Is(r.err, context.Canceled) || input.partial != "xy" {
+		t.Fatalf("got %v, partial %q", r.err, input.partial)
+	}
+}
+
+func TestCtrlCAtTheIdlePromptClearsTheLine(t *testing.T) {
+	withColor(t, true)
+	noCbreak(t)
+	input, keys := keyPipe(t)
+	var checks atomic.Int32
+	events := &promptEvents{interrupt: func(bool) bool { checks.Add(1); return false }}
+	// The prompt's context ends the way readPrompt's does on Ctrl-C: a plain cancel.
+	ctx, cancel := context.WithCancel(context.Background())
+	result := editInBackground(t, ctx, input, events)
+	io.WriteString(keys, "typed")
+	waitFor(t, "the keys", func() bool { return checks.Load() == 6 })
+	cancel()
+	if r := <-result; !errors.Is(r.err, context.Canceled) || input.partial != "" {
+		t.Fatalf("Ctrl-C should clear the line as before: %v, partial %q", r.err, input.partial)
+	}
+
+	// Ctrl-G gives way to the picker and keeps the text for the prompt after it.
+	result = editInBackground(t, context.Background(), input, events)
+	io.WriteString(keys, "hi\x07")
+	if r := <-result; !errors.Is(r.err, errOpenAgents) || input.partial != "hi" {
 		t.Fatalf("got %v, partial %q", r.err, input.partial)
 	}
 }

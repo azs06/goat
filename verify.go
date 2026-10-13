@@ -263,7 +263,7 @@ func commandVerify(ctx context.Context, c *config, args []string) error {
 			return nil
 		}
 		fmt.Println("Verify command: " + escapeControlChars(command) + style.Muted.Render(" ("+source+")"))
-		fmt.Println(style.Muted.Render(fmt.Sprintf("goat runs it when a turn that changed something ends, for up to %s, and sends a failure back to the model (at most %d runs a turn). /verify run runs it now; /verify off removes it.", verifyTimeout(), maxVerifyRuns)))
+		fmt.Println(style.Muted.Render(fmt.Sprintf("goat runs it when a turn that changed something ends, for up to %s, and sends a failure back to the model (at most %d runs a turn). While a general subagent is still running it waits, and runs when the next turn ends. /verify run runs it now; /verify off removes it.", verifyTimeout(), maxVerifyRuns)))
 		return nil
 	}
 

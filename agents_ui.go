@@ -457,9 +457,12 @@ const (
 var attachReadOnly = map[string]bool{"agents": true, "help": true, "ps": true, "tools": true, "output": true}
 
 // attach shows an agent's work as it happens and sends it what the user types, until
-// /back or Ctrl-C, which leave the agent running. /agents <id> switches agents.
+// /back or Ctrl-C, which leave the agent running. /agents <id> switches agents. A turn
+// the user starts here is not announced when it ends while the user still looks on.
 func (h *agentHost) attach(ctx context.Context, cfg *config, a *subagent.Agent) error {
+	defer h.m.SetAttached("")
 	for {
+		h.m.SetAttached(a.ID)
 		next, err := h.attachOnce(ctx, cfg, a)
 		if err != nil || next == "" {
 			return err
@@ -627,22 +630,17 @@ func (h *agentHost) attachLine(ctx context.Context, cfg *config, a *subagent.Age
 
 // sendFromUser gives an agent the user's message. It starts a new turn of an agent
 // that is not running, the user's to resume even when stopped; a running agent reads
-// it at its next step, where its turn shows it.
+// it at its next step. Either way the message shows in the agent's events once, when
+// a turn takes it, and the note says what became of it.
 func (h *agentHost) sendFromUser(a *subagent.Agent, text string) (string, error) {
-	before := a.State()
-	if !before.Busy() {
-		if ring := a.Ring(); ring != nil {
-			ring.Append(subagent.Event{Kind: subagent.EventUser, Text: escapeControlChars(text)})
-		}
-	}
-	started, err := h.m.Send(a.ID, text, true)
+	delivery, err := h.m.Deliver(a.ID, text, true)
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case started:
+	switch delivery {
+	case subagent.Started:
 		return "", nil
-	case before.Busy():
+	case subagent.Steered:
 		return a.ID + " reads it at its next step.", nil
 	}
 	running, _, _ := h.m.Counts()

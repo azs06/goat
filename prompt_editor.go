@@ -583,14 +583,31 @@ type promptEvents struct {
 	footer func() string
 }
 
+// keepsTypedText reports whether the prompt ended by err keeps what was typed for the
+// next prompt. The prompt's context ends with a plain cancel on the user's Ctrl-C
+// (signal.NotifyContext), which clears the line; a context ended with another cause
+// was not the user, and the prompt gives way like on an agent event.
+func keepsTypedText(ctx context.Context, err error) bool {
+	switch {
+	case errors.Is(err, errUIEvent), errors.Is(err, errOpenAgents):
+		return true
+	case ctx.Err() != nil:
+		cause := context.Cause(ctx)
+		return !errors.Is(cause, context.Canceled)
+	}
+	return false
+}
+
 // enterCbreak puts the terminal in cbreak mode; a variable so tests can edit without
 // a terminal.
 var enterCbreak = terminal.EnterCbreak
 
 // editPrompt draws the prompt frame and edits one line in cbreak mode. ok is false when
 // the terminal cannot be put in cbreak mode, and nothing has been drawn. On return the
-// frame has been cleared. On any error, errUIEvent and Ctrl-C included, what was typed
-// is kept in input.partial for the next prompt. events may be nil.
+// frame has been cleared. When the prompt gives way (errUIEvent, errOpenAgents) or ctx
+// ends for a reason other than the user's Ctrl-C, what was typed is kept in
+// input.partial for the next prompt; Ctrl-C clears the line, as it always did. events
+// may be nil.
 func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int, attacher imageAttacher, events *promptEvents) (text string, ok bool, err error) {
 	restore, err := enterCbreak()
 	if err != nil {
@@ -649,7 +666,9 @@ func editPrompt(ctx context.Context, input *lineReader, history []string, footer
 		}
 		fmt.Print(editor.clear())
 		if err != nil {
-			input.partial = string(editor.buf)
+			if keepsTypedText(ctx, err) {
+				input.partial = string(editor.buf)
+			}
 			return "", true, err
 		}
 		return string(editor.buf), true, nil

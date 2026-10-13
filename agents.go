@@ -61,6 +61,10 @@ type agentHost struct {
 	// pending holds the settings of agents whose first turn has not taken them yet,
 	// by conversation id.
 	pending map[string]childSettings
+	// lineage holds the earlier ids of main's current conversation: compaction and a
+	// model switch carry it on under a new id, and the agents it spawned before still
+	// report to it. /clear and /resume start another one and empty it.
+	lineage map[string]bool
 }
 
 // runningAgents is the session's host, for stopping its agents on every way out.
@@ -69,7 +73,7 @@ var runningAgents atomic.Pointer[agentHost]
 // newAgentHost returns a host whose agents run within limits; zero limits take the
 // defaults.
 func newAgentHost(cfg *config, limits subagent.Config, interactive bool) *agentHost {
-	h := &agentHost{cfg: cfg, interactive: interactive, pending: map[string]childSettings{}}
+	h := &agentHost{cfg: cfg, interactive: interactive, pending: map[string]childSettings{}, lineage: map[string]bool{}}
 	if cfg.approver != nil {
 		h.startupAutoApprove = cfg.approver.autoApprove.Load()
 	}
@@ -268,6 +272,9 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 	}
 	var cursor uint64
 	parentDone := ctx.Done()
+	// After the parent's interrupt the turn gets StopTimeout to end; a provider that
+	// ignores the cancellation must not hold main.
+	var giveUp <-chan time.Time
 	for finished := false; !finished; {
 		h.showEvents(a, ring, &cursor)
 		select {
@@ -279,6 +286,12 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 		case <-parentDone:
 			// The turn was interrupted; it ends soon.
 			parentDone = nil
+			timer := time.NewTimer(h.m.Config().StopTimeout)
+			defer timer.Stop()
+			giveUp = timer.C
+		case <-giveUp:
+			showAgentActivity(formatNotice(a.ID+" is still winding down; it goes on in the background (/agents "+a.ID+").") + "\n")
+			finished = true
 		}
 	}
 	stop()
@@ -286,6 +299,7 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	h.m.MarkDelivered(a.ID)
 	return h.wrapResult(subagent.Result{ID: a.ID, Label: a.Label, State: a.State(), Report: a.Report(), Err: a.Err()}), nil
 }
 
@@ -349,6 +363,8 @@ func renderAgentEvent(e subagent.Event) string {
 func (h *agentHost) wrapResult(r subagent.Result) string {
 	text := r.Report
 	switch {
+	case r.Delivered:
+		return fmt.Sprintf("Agent %s (%s) has not run since its report was delivered above; it is not repeated here. send_message continues it.", r.ID, escapeControlChars(oneLine(r.Label)))
 	case errors.Is(r.Err, subagent.ErrEvicted):
 		text = "The agent was dismissed; its report is no longer available."
 	case r.State == subagent.Stopped:
@@ -406,7 +422,7 @@ func (h *agentHost) Status(id string) (string, error) {
 // Send gives an agent a message. A foreground agent that starts a new turn with it is
 // followed like a spawn; otherwise the call returns at once.
 func (h *agentHost) Send(ctx context.Context, id, message string) (string, error) {
-	started, err := h.m.Send(id, message, false)
+	delivery, err := h.m.Deliver(id, message, false)
 	if err != nil {
 		return "", err
 	}
@@ -415,11 +431,11 @@ func (h *agentHost) Send(ctx context.Context, id, message string) (string, error
 		return "", err
 	}
 	switch {
-	case started && !a.Background:
+	case delivery == subagent.Started && !a.Background:
 		return h.follow(ctx, a)
-	case started:
+	case delivery == subagent.Started:
 		return fmt.Sprintf("%s started a new turn in the background. Its report will be delivered to you automatically when it finishes; do not guess its results.", id), nil
-	case a.State().Busy():
+	case delivery == subagent.Steered:
 		return fmt.Sprintf("%s is running; it reads the message at its next step.", id), nil
 	}
 	return fmt.Sprintf("%s has the message and starts once a running agent finishes (at most %d run at once).", id, h.m.Config().MaxRunning), nil
@@ -522,7 +538,8 @@ func noticeHeader(id string) string {
 
 // takeNotices takes the reports of background agents that finished, shows a line for
 // each, and returns those of the active conversation's agents in one text for the
-// model. Reports of an earlier conversation's agents are only shown.
+// model, which then has them. Reports of another conversation's agents, and of turns
+// only the user asked for, are only shown.
 func (h *agentHost) takeNotices(show func(string)) []string {
 	if h == nil {
 		return nil
@@ -530,11 +547,81 @@ func (h *agentHost) takeNotices(show func(string)) []string {
 	var texts []string
 	for _, n := range h.m.TakeNotices("") {
 		show(h.noticeLine(n))
-		if n.ParentConv == activeConversationID {
+		if n.ForModel && h.inMainLineage(n.ParentConv) {
 			texts = append(texts, noticeHeader(n.AgentID)+"\n"+n.Text)
+			h.m.MarkDelivered(n.AgentID)
 		}
 	}
 	return texts
+}
+
+// inMainLineage reports whether conv is main's current conversation, or an earlier id
+// of it from before a compaction.
+func (h *agentHost) inMainLineage(conv string) bool {
+	if conv == activeConversationID {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lineage[conv]
+}
+
+// carryLineage records that main's conversation went on from previous under a new id,
+// so the agents spawned under previous keep reporting to it. Called on main.
+func (h *agentHost) carryLineage(previous string) {
+	if h == nil || previous == "" || previous == activeConversationID {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lineage == nil {
+		h.lineage = map[string]bool{}
+	}
+	h.lineage[previous] = true
+}
+
+// leaveLineage is a switch to another conversation, such as /clear or /resume: the
+// agents of the one before only show their reports from now on.
+func (h *agentHost) leaveLineage() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	clear(h.lineage)
+}
+
+// busyWriters are the general agents still running, which may still change the
+// workspace.
+func (h *agentHost) busyWriters() []string {
+	if h == nil {
+		return nil
+	}
+	var ids []string
+	for _, info := range h.m.List() {
+		if !info.Evicted && info.State.Busy() && info.Mode == tools.AgentModeGeneral {
+			ids = append(ids, info.ID)
+		}
+	}
+	return ids
+}
+
+// deferVerify wraps main's end-of-turn verify. While a general agent still runs, the
+// workspace is still changing, so the check is skipped with a notice and pending is
+// set: the next turn runs it when it ends, whether or not it changes anything.
+func (h *agentHost) deferVerify(verify func(context.Context) (string, error), pending *bool) func(context.Context) (string, error) {
+	if h == nil || verify == nil {
+		return verify
+	}
+	return func(ctx context.Context) (string, error) {
+		if ids := h.busyWriters(); len(ids) > 0 {
+			*pending = true
+			fmt.Fprintln(activityOut, formatNotice("Not verifying yet: "+strings.Join(ids, ", ")+" may still change the workspace. The verify command runs when the next turn ends; /verify run runs it now."))
+			return "", nil
+		}
+		*pending = false
+		return verify(ctx)
+	}
 }
 
 // noticeLine is the line shown when a background agent finishes.

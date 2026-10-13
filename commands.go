@@ -147,6 +147,7 @@ func commandClear(ctx context.Context, c *config, args []string) error {
 	}
 	replaceConversation(c, conversationState{})
 	c.pendingShell, c.agentNotices = nil, nil
+	c.agents.leaveLineage()
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	// A new conversation starts under a fresh banner with the current model and effort.
@@ -199,6 +200,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	}
 	adoptSavedConversation(c, previous)
 	c.pendingShell, c.agentNotices = nil, nil
+	c.agents.leaveLineage()
 	saveSession(c)
 
 	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))
@@ -596,6 +598,8 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 	// The archive keeps the old model, so /resume returns to the full conversation.
 	archiveSession(c)
 	c.model = target
+	// The conversation goes on under a new id; its agents still report to it.
+	c.agents.carryLineage(activeConversationID)
 	startConversation(c, conversationState{conversation: next})
 	recordCompactionSeed(c, next, summary)
 	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
