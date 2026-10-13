@@ -222,15 +222,32 @@ func TestIdlePromptDoesNotGiveWayInTheMiddleOfAPaste(t *testing.T) {
 	}
 	result := editInBackground(t, context.Background(), input, events)
 	waitFor(t, "the prompt", func() bool { return checks.Load() == 1 })
-	fire.Store(1)
 	io.WriteString(keys, pasteStart+"rm -rf build")
+	// Wake the prompt until a wake finds it inside the paste: interrupt is only asked
+	// outside one, so a redraw with no check means the paste has begun.
+	inPaste := false
+	for range 50 {
+		before, redraws := checks.Load(), footers.Load()
+		changed <- struct{}{}
+		waitFor(t, "the redraw", func() bool { return footers.Load() > redraws })
+		if checks.Load() == before {
+			inPaste = true
+			break
+		}
+	}
+	if !inPaste {
+		t.Fatal("the paste never began")
+	}
+	// Now an event arrives with the paste still coming in.
+	fire.Store(1)
+	redraws := footers.Load()
 	changed <- struct{}{}
 	select {
 	case r := <-result:
 		t.Fatalf("the prompt gave way mid-paste: %v, partial %q", r.err, input.partial)
 	case <-time.After(5 * time.Second):
 		t.Fatal("the wake was not handled")
-	case <-waitChan(func() bool { return footers.Load() == 2 }):
+	case <-waitChan(func() bool { return footers.Load() > redraws }):
 	}
 	fire.Store(0)
 	io.WriteString(keys, "\rsecond"+pasteEnd+"\r")
