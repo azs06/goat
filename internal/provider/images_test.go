@@ -15,9 +15,27 @@ import (
 // testPNG is a 1x1 PNG.
 var testPNG, _ = base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
+// useImageStore makes a temporary directory the image store for one test.
+func useImageStore(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	previous := ImageStore
+	ImageStore = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { ImageStore = previous })
+	return dir
+}
+
+// storedTestImage is a test PNG in the image store, which it sets up if needed.
 func storedTestImage(t *testing.T) Image {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "shot.png")
+	dir := ""
+	if ImageStore != nil {
+		dir, _ = ImageStore()
+	}
+	if dir == "" {
+		dir = useImageStore(t)
+	}
+	path := filepath.Join(dir, "shot.png")
 	if err := os.WriteFile(path, testPNG, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +57,9 @@ func TestImageRefsRoundTrip(t *testing.T) {
 }
 
 func TestExpandImageRefsFillsInTheData(t *testing.T) {
+	store := useImageStore(t)
 	img := storedTestImage(t)
-	gone := Image{Path: filepath.Join(t.TempDir(), "gone.png"), MediaType: "image/png"}
+	gone := Image{Path: filepath.Join(store, "gone.png"), MediaType: "image/png"}
 	plain := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"same bytes"}]}`)
 	anthropicMessage, _ := newAnthropicUserMessage(userMessageContent{text: "look", userImages: []Image{img, gone}}, nil)
 	chat, _ := chatUserMessage("look", []Image{img}, nil)
@@ -221,5 +240,63 @@ func TestAcceptsImages(t *testing.T) {
 		if _, err := ParseEntries([]byte(`{"x": {"api": "openai", "base_url": "http://localhost:1/v1", "images": ` + bad + `}}`)); err == nil || !strings.Contains(err.Error(), "x.images") {
 			t.Errorf("images %s: got %v", bad, err)
 		}
+	}
+}
+
+// goat reads an image only from its own store, and only where it puts images itself.
+func TestExpandImageRefsReadsOnlyGoatsImages(t *testing.T) {
+	store := useImageStore(t)
+	img := storedTestImage(t)
+	secret := filepath.Join(t.TempDir(), "secret.png")
+	os.WriteFile(secret, []byte("TOP-SECRET"), 0o600)
+	link := filepath.Join(store, "link.png")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skip("cannot make symbolic links here:", err)
+	}
+	hidden := base64.StdEncoding.EncodeToString([]byte("TOP-SECRET"))
+	block := func(path, mediaType string) map[string]any {
+		return map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": mediaType, "data": imageRefPrefix + mediaType + ";" + path}}
+	}
+	message := func(v any) json.RawMessage {
+		data, _ := json.Marshal(v)
+		return data
+	}
+
+	for name, test := range map[string]struct {
+		message json.RawMessage
+		sent    string
+	}{
+		"outside the store":       {message(map[string]any{"role": "user", "content": []any{block(secret, "image/png")}}), "secret.png is no longer available"},
+		"a link out of the store": {message(map[string]any{"role": "user", "content": []any{block(link, "image/png")}}), "link.png is no longer available"},
+		"not an image type":       {message(map[string]any{"role": "user", "content": []any{block(img.Path, "text/plain")}}), "shot.png is no longer available"},
+		"a tool call's input": {message(map[string]any{"role": "assistant", "content": []any{
+			map[string]any{"type": "tool_use", "id": "t", "name": "read_dir", "input": map[string]any{"x": block(img.Path, "image/png")}},
+		}}), imageRefPrefix},
+		"deeper than a tool_result's content": {message(map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": "t", "content": []any{map[string]any{"type": "text", "text": "x", "extra": block(img.Path, "image/png")}}},
+		}}), imageRefPrefix},
+		"a Chat Completions assistant": {message(map[string]any{"role": "assistant", "content": []any{
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageRefPrefix + "image/png;" + img.Path}},
+		}}), imageRefPrefix},
+	} {
+		out := string(expandImageRefs([]json.RawMessage{test.message})[0])
+		if strings.Contains(out, hidden) || strings.Contains(out, testPNGBase64) || !strings.Contains(out, test.sent) {
+			t.Errorf("%s: sent %s", name, out)
+		}
+	}
+
+	// goat's own places still get the data: a user message and a tool_result in one.
+	own := message(map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "tool_result", "tool_use_id": "t", "content": []any{block(img.Path, "image/png")}},
+		block(img.Path, "image/png"),
+	}})
+	if out := string(expandImageRefs([]json.RawMessage{own})[0]); strings.Count(out, testPNGBase64) != 2 {
+		t.Errorf("goat's own images were not filled in: %s", out)
+	}
+
+	// Without a store nothing is read.
+	ImageStore = nil
+	if out := string(expandImageRefs([]json.RawMessage{own})[0]); strings.Contains(out, testPNGBase64) {
+		t.Errorf("an image was read with no store set: %s", out)
 	}
 }

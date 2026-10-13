@@ -512,8 +512,10 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
 	if moved {
-		// The note and any ! output went with the turn's first request.
+		// The note, any ! output and the prompt's images went with the turn's first
+		// request. The retry carries the owed results as text, so their images go with it.
 		opts.contextNote = ""
+		opts.images = resultImages(owed)
 	}
 	sent = cfg.conversation.conversation
 	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)

@@ -303,14 +303,15 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		}
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
+		// A run_code script that fails after a nested view_image still shows its image.
+		result.Images = shown
 		if err != nil {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName, Images: len(shown)})
 			result.Output = fmt.Sprintf("Tool %s failed: %v", toolCall.Name, err)
 			result.IsError = true
 		} else {
 			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName, Images: len(shown)})
 			result.Output = toolOutput
-			result.Images = shown
 		}
 		result.Output = prepareToolOutputForModel(toolCall.Name, result.Output)
 		results = append(results, result)

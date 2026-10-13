@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,9 +47,52 @@ func parseImageRef(ref string) (Image, bool) {
 // message, on APIs whose tool results hold text only.
 const toolImagesNote = "Attached image(s) from the tool results above:"
 
-// load reads the image's data as base64.
+// ImageStore names the directory goat keeps its images in: view_image's copies and
+// pasted images. goat sends an image only from there, so a path that reached a
+// transcript some other way, such as inside a model's tool call, is never read. Unset,
+// no image is sent. The tools package sets it.
+var ImageStore func() (string, error)
+
+// imageMediaTypes are the formats goat stores and the APIs take.
+var imageMediaTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+// errUntrustedImage refuses an image that is not a file in goat's image store.
+var errUntrustedImage = errors.New("not one of goat's stored images")
+
+// storedPath is where the image's file really is, once it is known to be a regular file
+// inside the image store, through any symbolic links.
+func (img Image) storedPath() (string, error) {
+	if ImageStore == nil || !imageMediaTypes[img.MediaType] {
+		return "", errUntrustedImage
+	}
+	dir, err := ImageStore()
+	if err != nil {
+		return "", err
+	}
+	if dir, err = filepath.EvalSymlinks(dir); err != nil {
+		return "", err
+	}
+	path, err := filepath.EvalSymlinks(img.Path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", errUntrustedImage
+	}
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		return "", errUntrustedImage
+	}
+	return path, nil
+}
+
+// load reads the image's data as base64, only from goat's image store.
 func (img Image) load() (string, error) {
-	data, err := os.ReadFile(img.Path)
+	path, err := img.storedPath()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -67,10 +111,13 @@ func missingImageText(path string) string {
 	return fmt.Sprintf("[image %s is no longer available]", filepath.Base(path))
 }
 
-// expandImageRefs puts the data of every image a stored transcript refers to into the
-// messages sent. Anthropic image blocks take the base64 data; Chat Completions
-// image_url parts take a data URL. A file that is gone becomes a note in its place.
-// Messages without images are sent byte for byte as stored.
+// expandImageRefs puts the data of the images a stored transcript refers to into the
+// messages sent, but only where goat itself puts images: the content of a user message
+// and, in Anthropic's format, the content of a tool_result inside one. Anything else
+// that looks like an image, such as an object inside a model's tool call, is sent as
+// stored and never read. Anthropic image blocks take the base64 data; Chat Completions
+// image_url parts take a data URL. An image goat cannot send becomes a note in its
+// place. Messages without images are sent byte for byte as stored.
 func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
 	var out []json.RawMessage
 	for i, message := range messages {
@@ -79,11 +126,25 @@ func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
 		}
 		decoder := json.NewDecoder(bytes.NewReader(message))
 		decoder.UseNumber()
-		var value any
-		if decoder.Decode(&value) != nil {
+		var value map[string]any
+		if decoder.Decode(&value) != nil || value["role"] != "user" {
 			continue
 		}
-		expanded, err := json.Marshal(expandImageValue(value))
+		blocks, ok := value["content"].([]any)
+		if !ok {
+			continue
+		}
+		for j, block := range blocks {
+			blocks[j] = expandImageBlock(block)
+			if result, ok := blocks[j].(map[string]any); ok && result["type"] == "tool_result" {
+				if inner, ok := result["content"].([]any); ok {
+					for k := range inner {
+						inner[k] = expandImageBlock(inner[k])
+					}
+				}
+			}
+		}
+		expanded, err := json.Marshal(value)
 		if err != nil {
 			continue
 		}
@@ -98,54 +159,48 @@ func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
 	return out
 }
 
-func expandImageValue(value any) any {
-	switch v := value.(type) {
-	case []any:
-		for i := range v {
-			v[i] = expandImageValue(v[i])
-		}
-		return v
-	case map[string]any:
-		switch v["type"] {
-		case "image":
-			// {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ref}}
-			if source, ok := v["source"].(map[string]any); ok {
-				if ref, ok := source["data"].(string); ok {
-					img, isRef := parseImageRef(ref)
-					if !isRef {
-						break
-					}
-					encoded, err := img.load()
-					if err != nil {
-						return map[string]any{"type": "text", "text": missingImageText(img.Path)}
-					}
-					source["data"] = encoded
-					return v
-				}
-			}
-		case "image_url":
-			// {"type": "image_url", "image_url": {"url": ref}}
-			if part, ok := v["image_url"].(map[string]any); ok {
-				if ref, ok := part["url"].(string); ok {
-					img, isRef := parseImageRef(ref)
-					if !isRef {
-						break
-					}
-					url, err := img.dataURL()
-					if err != nil {
-						return map[string]any{"type": "text", "text": missingImageText(img.Path)}
-					}
-					part["url"] = url
-					return v
-				}
-			}
-		}
-		for key, inner := range v {
-			v[key] = expandImageValue(inner)
-		}
-		return v
+// expandImageBlock fills in one content block if it is an image that refers to a stored
+// file; any other block comes back as it was.
+func expandImageBlock(block any) any {
+	v, ok := block.(map[string]any)
+	if !ok {
+		return block
 	}
-	return value
+	switch v["type"] {
+	case "image":
+		// {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ref}}
+		source, ok := v["source"].(map[string]any)
+		if !ok {
+			return block
+		}
+		ref, ok := source["data"].(string)
+		img, isRef := parseImageRef(ref)
+		if !ok || !isRef {
+			return block
+		}
+		encoded, err := img.load()
+		if err != nil {
+			return map[string]any{"type": "text", "text": missingImageText(img.Path)}
+		}
+		source["data"] = encoded
+	case "image_url":
+		// {"type": "image_url", "image_url": {"url": ref}}
+		part, ok := v["image_url"].(map[string]any)
+		if !ok {
+			return block
+		}
+		ref, ok := part["url"].(string)
+		img, isRef := parseImageRef(ref)
+		if !ok || !isRef {
+			return block
+		}
+		url, err := img.dataURL()
+		if err != nil {
+			return map[string]any{"type": "text", "text": missingImageText(img.Path)}
+		}
+		part["url"] = url
+	}
+	return v
 }
 
 // CountImageRefs counts the images a stored conversation holds, for size estimates.

@@ -425,7 +425,9 @@ Images larger than about 1568 pixels on the long side, or 1.15 megapixels, are s
 down first, as Claude requires (it costs about 1,600 tokens); PNG, JPEG, GIF and WebP
 are accepted. goat keeps a copy in its [state directory](#conversations-and-state), and
 the saved conversation names that copy rather than holding the image, so `session.json`
-stays small; each request reads it again. On Claude, an image `view_image` returns goes
+stays small; each request reads it again. goat sends an image only from those copies,
+and only where it put one itself, so nothing a model writes can make goat send another
+file. On Claude, an image `view_image` returns goes
 inside the tool result; Chat Completions servers and DeepSeek take images only in user
 messages, so there it follows the tool results in one. A summary from compaction keeps
 only the fact that images were there.

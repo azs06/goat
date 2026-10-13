@@ -66,14 +66,32 @@ func runViewImage(_ context.Context, raw string, opts Options) (string, error) {
 	return fmt.Sprintf("Image %s (%s) is attached.", filepath.Clean(args.Path), prepared.Describe()), nil
 }
 
-// StoreImage keeps a prepared image in the workspace's state directory, where the
-// conversation refers to it.
+// The provider package sends images only from ImageDir; it cannot import workspace
+// itself.
+func init() {
+	provider.ImageStore = ImageDir
+}
+
+// ImageDir is the private directory in the workspace's state directory where goat keeps
+// the images a conversation refers to.
+func ImageDir() (string, error) {
+	root, err := workspace.StateRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "images"), nil
+}
+
+// StoreImage keeps a prepared image in ImageDir, where the conversation refers to it.
 func StoreImage(prepared images.Prepared) (provider.Image, error) {
-	root, err := workspace.EnsureStateRoot()
+	if _, err := workspace.EnsureStateRoot(); err != nil {
+		return provider.Image{}, err
+	}
+	dir, err := ImageDir()
 	if err != nil {
 		return provider.Image{}, err
 	}
-	path, err := images.Store(filepath.Join(root, "images"), prepared)
+	path, err := images.Store(dir, prepared)
 	if err != nil {
 		return provider.Image{}, err
 	}

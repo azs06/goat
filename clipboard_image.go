@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/azs06/goat/internal/images"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -48,11 +48,13 @@ func readClipboardImage(ctx context.Context) ([]byte, error) {
 // clipboardTempFile is a private file in goat's state directory for a clipboard tool
 // that can only write an image to a file. The caller removes it.
 func clipboardTempFile() (string, error) {
-	root, err := workspace.EnsureStateRoot()
+	if _, err := workspace.EnsureStateRoot(); err != nil {
+		return "", err
+	}
+	dir, err := tools.ImageDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(root, "images")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
