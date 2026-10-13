@@ -79,7 +79,7 @@ func writeSessionFile(path string, session savedSession) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0700); err != nil {
 		return err
 	}
 

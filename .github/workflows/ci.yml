@@ -55,6 +55,28 @@ jobs:
           go test -run '^$' -fuzz '^FuzzResolveToolPath$' -fuzztime 20s ./internal/workspace/
           go test -run '^$' -fuzz '^FuzzParseTheme$' -fuzztime 20s ./internal/style/
 
+  # Windows is best-effort: its failures show here without failing the run, until the
+  # suite has been made to pass there.
+  test-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      # Keep LF line endings, as on the other platforms, so text comparisons match.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
   cross-build:
     runs-on: ubuntu-latest
     steps:

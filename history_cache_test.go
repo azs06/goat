@@ -16,6 +16,11 @@ func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
 	if err != nil || len(first) != 1 {
 		t.Fatalf("got %d entries (%v)", len(first), err)
 	}
+	if info, err := os.Stat(statePath(t, "history.jsonl")); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0600 {
+		t.Fatalf("expected a private history file, got %v", info.Mode().Perm())
+	}
 	recordHistory(historyEntry{Type: "assistant", Content: "two"})
 	second, _ := loadConversationHistoryEntries()
 	if len(second) != 2 || second[1].Content != "two" {

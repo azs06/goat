@@ -430,6 +430,9 @@ script makes are shown indented under it as they run.
   the script. Its result is cut to the same size as any other tool output. `JSON.parse`
   refuses input nested more than 5000 levels deep, and one regular expression match may
   take at most 2 seconds (one that runs out of time counts as no match).
+- The engine runs inside goat's own process, so these limits cannot catch everything: a
+  script that builds arrays nested about a million deep can overflow the stack and crash
+  goat. The session is saved after every round, so `goat -c` picks up where it stopped.
 - A failed call rejects with an error the script can catch. An uncaught error, or a failed
   call nothing awaited, ends the script, and the model gets the error, the line it came
   from and the console output; changes made before it are kept. Declining a command stops

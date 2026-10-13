@@ -162,7 +162,7 @@ func appendHistoryEntry(entry historyEntry) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0700); err != nil {
 		return fmt.Errorf("create history directory: %w", err)
 	}
 
@@ -172,7 +172,7 @@ func appendHistoryEntry(entry historyEntry) error {
 	}
 	encoded = append(encoded, '\n')
 
-	file, err := os.OpenFile(resolvedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(resolvedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("open history file: %w", err)
 	}
