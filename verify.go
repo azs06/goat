@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -82,20 +81,23 @@ func expandHome(path string) string {
 	return path
 }
 
-// sameDirectory reports whether two paths name the same directory, through symbolic
-// links, and ignoring case where file names do by default (macOS, Windows).
+// sameDirectory reports whether two paths name the same directory. When both exist the
+// file system decides, which follows symbolic links and ignores case only where the
+// volume does. A path that does not exist matches only its exact spelling: guessing
+// that case does not matter could run another workspace's command.
 func sameDirectory(a, b string) bool {
+	aInfo, aErr := os.Stat(a)
+	bInfo, bErr := os.Stat(b)
+	if aErr == nil && bErr == nil {
+		return os.SameFile(aInfo, bInfo)
+	}
 	canonical := func(path string) string {
 		if resolved, err := filepath.EvalSymlinks(path); err == nil {
 			path = resolved
 		}
 		return filepath.Clean(path)
 	}
-	a, b = canonical(a), canonical(b)
-	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
+	return canonical(a) == canonical(b)
 }
 
 // verifyCommand is the verify command for the workspace goat runs in, and where it was
@@ -295,27 +297,37 @@ func writeVerifyCommands() error {
 	return writeJSONField(configPath(), "config.json", "verify", bytes.TrimSpace(value.Bytes()), configFileMode())
 }
 
+// verifyState is what the verify gate knows about one turn.
+type verifyState struct {
+	// changed is whether a tool call since the last verify run may have changed the
+	// workspace.
+	changed bool
+	// runs counts the turn's verify runs, and failed is whether the latest one failed.
+	runs   int
+	failed bool
+}
+
 // verifyTurn runs the verify command for a turn the model just finished. It returns the
 // message to send the model when the command failed and the turn should go on, or ""
 // when the turn is done. It stops with an error once the command has failed
 // maxVerifyRuns times, when the model stopped after a failure without changing
 // anything, or when the turn is out of rounds.
-func verifyTurn(ctx context.Context, opts turnOptions, changed *bool, runs *int, failed *bool, round int) (string, error) {
-	if !*changed {
+func verifyTurn(ctx context.Context, opts turnOptions, state *verifyState, round int) (string, error) {
+	if !state.changed {
 		return "", fmt.Errorf("%w, and the model stopped without changing anything; /output shows its output", errVerifyFailed)
 	}
-	*changed = false
-	*runs++
+	state.changed = false
+	state.runs++
 	failure, err := opts.verify(ctx)
 	if err != nil {
 		return "", err
 	}
-	*failed = failure != ""
+	state.failed = failure != ""
 	switch {
 	case failure == "":
 		return "", nil
-	case *runs >= maxVerifyRuns:
-		return "", fmt.Errorf("%w after %d runs this turn; /output shows its output", errVerifyFailed, *runs)
+	case state.runs >= maxVerifyRuns:
+		return "", fmt.Errorf("%w after %d runs this turn; /output shows its output", errVerifyFailed, state.runs)
 	case round >= maxToolRoundsPerTurn:
 		return "", fmt.Errorf("%w, and the turn is out of tool rounds; send another message to let the agent continue", errVerifyFailed)
 	}

@@ -467,6 +467,8 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	// Plan mode changes nothing, so there is nothing to check.
 	if !cfg.planMode {
 		opts.verify = verifyGate()
+		// The retry after compacting below is the same turn.
+		opts.verified = &verifyState{}
 	}
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {

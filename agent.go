@@ -72,6 +72,10 @@ type turnOptions struct {
 	// changed the workspace. It returns the message to send the model when the check
 	// fails, which the turn then goes on with, or "" when it passed.
 	verify func(ctx context.Context) (string, error)
+	// verified, when set, holds what verify knows about the turn. A turn retried after
+	// compacting passes the same one, so changes made before the retry are still
+	// checked and earlier runs still count.
+	verified *verifyState
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -406,10 +410,10 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 	}
 
-	// changed is whether a tool call since the last verify run may have changed the
-	// workspace; verifyRuns counts this turn's runs, and verifyFailed is whether the
-	// latest one failed.
-	changed, verifyRuns, verifyFailed := false, 0, false
+	verified := opts.verified
+	if verified == nil {
+		verified = &verifyState{}
+	}
 	for round := 1; ; round++ {
 		resp, printedText, err := executeStreamedResponse(ctx, p, req)
 		// The markdown renderer ends every line itself; plain streamed text may not.
@@ -437,7 +441,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		case provider.StopToolUse:
 			results = runToolCalls(ctx, providerName, opts, resp)
 			for _, call := range resp.ToolCalls {
-				changed = changed || changesWorkspace(call)
+				verified.changed = verified.changed || changesWorkspace(call)
 			}
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
@@ -457,10 +461,10 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 				return next, stopErr
 			}
-			if opts.verify == nil || !changed && !verifyFailed {
+			if opts.verify == nil || !verified.changed && !verified.failed {
 				return next, nil
 			}
-			failure, err := verifyTurn(ctx, opts, &changed, &verifyRuns, &verifyFailed, round)
+			failure, err := verifyTurn(ctx, opts, verified, round)
 			if err != nil {
 				status := "error"
 				if ctx.Err() != nil {

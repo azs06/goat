@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -339,4 +341,119 @@ func mustHistory(t *testing.T) []historyEntry {
 		t.Fatal(err)
 	}
 	return entries
+}
+
+// recoveryTurn is a fake Claude whose requests fail with a context overflow at the
+// given request numbers (counting from 1), after which goat compacts and retries.
+func recoveryTurn(overflowAt []int, responses ...*provider.Response) *fakeProvider {
+	moved := provider.Conversation{Provider: provider.Anthropic, Messages: []json.RawMessage{json.RawMessage(`{}`)}}
+	for _, resp := range responses {
+		resp.Conversation = moved
+	}
+	var errs []error
+	for i := 1; i <= slices.Max(overflowAt); i++ {
+		var err error
+		if slices.Contains(overflowAt, i) {
+			err = errors.New("400: This model's maximum context length is 128000 tokens")
+		}
+		errs = append(errs, err)
+	}
+	return &fakeProvider{name: provider.Anthropic, summary: "s", sendErrs: errs, responses: responses}
+}
+
+// verifyLog makes the verify command append a line to verify.log, failing when fail
+// is set, and returns how to count its runs.
+func verifyLog(t *testing.T, fail bool) func() int {
+	t.Helper()
+	command := "echo ran >> verify.log"
+	if fail {
+		command += " && false"
+	}
+	t.Setenv("GOAT_VERIFY", command)
+	return func() int {
+		data, _ := os.ReadFile("verify.log")
+		return strings.Count(string(data), "ran")
+	}
+}
+
+func TestVerifyChecksChangesMadeBeforeARecovery(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	runs := verifyLog(t, false)
+	// The model writes a file; sending the write's result overflows the context, and
+	// the retry after compacting ends the turn without changing anything more.
+	p := recoveryTurn([]int{2},
+		&provider.Response{ID: "write", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{"path": "out.txt", "content": "x"}`}}},
+		&provider.Response{ID: "done", Stop: provider.StopEndTurn, Text: "done"})
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	captureActivity(t, func() {
+		if err := runPrompt(context.Background(), cfg, "write it"); err != nil {
+			t.Fatalf("expected the retry to succeed, got %v", err)
+		}
+	})
+	if len(p.requests) != 3 {
+		t.Fatalf("expected the turn, the failed round and the retry, got %d requests", len(p.requests))
+	}
+	if runs() != 1 {
+		t.Fatalf("the file written before the retry should still be checked, got %d runs", runs())
+	}
+}
+
+func TestVerifyFailureOutlastsARecovery(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	runs := verifyLog(t, true)
+	// The check fails; sending the failure overflows the context, and the model ends the
+	// retried turn without fixing anything.
+	p := recoveryTurn([]int{3},
+		&provider.Response{ID: "write", Stop: provider.StopToolUse, ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{"path": "out.txt", "content": "x"}`}}},
+		&provider.Response{ID: "done", Stop: provider.StopEndTurn, Text: "done"},
+		&provider.Response{ID: "shrug", Stop: provider.StopEndTurn, Text: "looks fine to me"})
+	cfg := newModelTestConfig(t, provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}, p)
+	var err error
+	captureActivity(t, func() { err = runPrompt(context.Background(), cfg, "write it") })
+	if !errors.Is(err, errVerifyFailed) || !strings.Contains(err.Error(), "without changing anything") {
+		t.Fatalf("a failed check must not pass because the turn was retried, got %v", err)
+	}
+	if runs() != 1 {
+		t.Fatalf("nothing changed after the failure, so it should not run again; got %d runs", runs())
+	}
+}
+
+func TestSameDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if !sameDirectory(dir, dir+string(filepath.Separator)) {
+		t.Error("a directory should match itself")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err == nil && !sameDirectory(link, dir) {
+		t.Error("a symbolic link should match its target")
+	}
+	if sameDirectory(dir, t.TempDir()) {
+		t.Error("two directories should not match")
+	}
+
+	// A path that does not exist matches only its own spelling, whatever the system:
+	// on a case-sensitive volume /code/App and /code/app are different workspaces.
+	gone := filepath.Join(dir, "Gone", "App")
+	if !sameDirectory(gone, gone) {
+		t.Error("a missing path should match itself")
+	}
+	if sameDirectory(gone, filepath.Join(dir, "Gone", "app")) || sameDirectory(gone, filepath.Join(dir, "gone", "App")) {
+		t.Error("a missing path must not match another spelling")
+	}
+
+	// Two spellings of one existing directory match only where the volume ignores case.
+	upper := filepath.Join(dir, "Work")
+	os.Mkdir(upper, 0o755)
+	lower := filepath.Join(dir, "work")
+	_, err := os.Stat(lower)
+	ignoresCase := err == nil
+	if sameDirectory(upper, lower) != ignoresCase {
+		t.Errorf("Work and work should match only on a case-insensitive volume (ignores case: %v)", ignoresCase)
+	}
+	if !ignoresCase {
+		os.Mkdir(lower, 0o755)
+		if sameDirectory(upper, lower) {
+			t.Error("Work and work are different directories here")
+		}
+	}
 }
