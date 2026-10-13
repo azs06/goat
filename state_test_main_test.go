@@ -19,6 +19,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_STATE_HOME", dir)
+	// A verify command from the shell would run after every test turn that changes files.
+	os.Unsetenv("GOAT_VERIFY")
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

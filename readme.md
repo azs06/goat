@@ -353,6 +353,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
 | `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2` (by number, or by the group ID it lists), `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
+| `/verify [command\|run\|off]` | Show or set the workspace's verify command (see [Verification](#verification)): `/verify go test ./...` sets it, saved in config.json; `/verify run` runs it now; `/verify off` removes it. |
 | `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
@@ -404,6 +405,46 @@ compacted; `/output N` counts back from the latest instead. The history keeps ab
 first and last 16,000 characters of each output. After changing code, the model is asked to run the
 project's build and tests, or the checks its instructions name, and to show the command
 and its result before saying the work is done.
+
+## Verification
+
+Give goat a command that checks the work, and it runs that command itself whenever the
+model finishes a turn that may have changed something:
+
+```
+/verify go vet ./... && go test ./...
+```
+
+- **When:** only after a turn that changed files, ran a shell command or ran a script.
+  Reads and previews don't count, and plan mode never runs it.
+- **On failure:** goat sends the command's output (head and tail) back to the model, which
+  fixes the problem in the same turn, and goat runs the check again.
+- **When it gives up:** after 3 runs in one turn, or when the model stops without changing
+  anything after a failure. goat then reports that verification still fails.
+  - `goat -p` exits with status 1 in that case.
+  - In `-p` mode, stdout holds each reply the model gave on the way.
+- **Where it runs:** the workspace, with the same rules as `run_bash`.
+  - Credentials are removed from its environment.
+  - Ctrl-C stops it, along with everything it started.
+  - It has its own time limit: 5 minutes by default, set with `verify_timeout`.
+- **Where to see it:** each run is shown like a tool call (`Verify(...)`), and `/output`
+  shows its full output.
+
+The command is yours and runs without asking, so goat takes it only from your own settings:
+- config.json's `verify` field, which maps each workspace to its command;
+- `GOAT_VERIFY`, which applies to every workspace and wins over `verify`. `GOAT_VERIFY=off`
+  turns verification off for a run.
+
+goat never reads it from the workspace, so a cloned repository cannot get a command run.
+
+```json
+{
+  "verify": {
+    "~/code/goat": "go vet ./... && go test ./...",
+    "~/code/web": "npm test"
+  }
+}
+```
 
 ## Code mode
 
@@ -783,6 +824,8 @@ when that is set), which never holds keys:
 | `anthropic_fallbacks` | `true` | Server-side refusal fallbacks for Claude models | `GOAT_ANTHROPIC_FALLBACKS` (`on`/`off`) |
 | `anthropic_cache_ttl` | `"5m"` | Lifetime of Claude prompt cache entries, `"5m"` or `"1h"` | `GOAT_ANTHROPIC_CACHE_TTL` |
 | `reduced_motion` | `false` | Keep the spinner still (it updates once a second) | `GOAT_REDUCED_MOTION` |
+| `verify` | | Workspaces (full paths, `~/` works) and the command that checks each one's changes (see [Verification](#verification)); `/verify` sets it | `GOAT_VERIFY`, for every workspace (`off` turns it off) |
+| `verify_timeout` | `300` | Seconds the verify command may run | `GOAT_VERIFY_TIMEOUT` |
 | `base_urls` | | `openai`, `anthropic` or `deepseek` at a proxy or a compatible API (see [Safety](#safety) for the checks) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `DEEPSEEK_BASE_URL` |
 | `providers` | | Other providers (see [Setup](#optional-add-other-providers)) | |
 

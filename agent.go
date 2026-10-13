@@ -68,6 +68,14 @@ type turnOptions struct {
 	// contextNote, when set, goes before the prompt in the turn's first request, such as
 	// the output of the ! commands the user ran since the last message.
 	contextNote string
+	// verify, when set, checks the work when the model finishes a turn that may have
+	// changed the workspace. It returns the message to send the model when the check
+	// fails, which the turn then goes on with, or "" when it passed.
+	verify func(ctx context.Context) (string, error)
+	// verified, when set, holds what verify knows about the turn. A turn retried after
+	// compacting passes the same one, so changes made before the retry are still
+	// checked and earlier runs still count.
+	verified *verifyState
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -402,6 +410,10 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 	}
 
+	verified := opts.verified
+	if verified == nil {
+		verified = &verifyState{}
+	}
 	for round := 1; ; round++ {
 		resp, printedText, err := executeStreamedResponse(ctx, p, req)
 		// The markdown renderer ends every line itself; plain streamed text may not.
@@ -428,6 +440,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		switch resp.Stop {
 		case provider.StopToolUse:
 			results = runToolCalls(ctx, providerName, opts, resp)
+			for _, call := range resp.ToolCalls {
+				verified.changed = verified.changed || changesWorkspace(call)
+			}
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
 		case provider.StopContextExceeded:
@@ -444,8 +459,32 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 			if stopErr != nil {
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+				return next, stopErr
 			}
-			return next, stopErr
+			if opts.verify == nil || !verified.changed && !verified.failed {
+				return next, nil
+			}
+			failure, err := verifyTurn(ctx, opts, verified, round)
+			if err != nil {
+				status := "error"
+				if ctx.Err() != nil {
+					status = "interrupted"
+				}
+				recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: status, Provider: providerName})
+				return next, err
+			}
+			if failure == "" {
+				return next, nil
+			}
+			// The model answers the failure in the same turn.
+			if opts.checkpoint != nil {
+				opts.checkpoint(next)
+			}
+			recordHistory(historyEntry{Type: "user", Content: failure, Provider: providerName})
+			req.Conversation = next.conversation
+			req.ToolResults = nil
+			req.UserText = failure
+			continue
 		}
 		if opts.checkpoint != nil {
 			opts.checkpoint(next)
