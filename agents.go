@@ -46,10 +46,6 @@ type agentHost struct {
 
 	// interactive is set when main can ask the user about a subagent's command.
 	interactive bool
-	// startupAutoApprove is the auto-approval the user asked for when starting goat
-	// (--yes or GOAT_AUTO_APPROVE_BASH). A subagent follows it, but never an "always"
-	// answered to main's own commands.
-	startupAutoApprove bool
 	// mainPlanMode is main's plan mode, which general subagents follow call by call.
 	mainPlanMode atomic.Bool
 	// convSeq numbers the subagents' conversation ids.
@@ -74,9 +70,6 @@ var runningAgents atomic.Pointer[agentHost]
 // defaults.
 func newAgentHost(cfg *config, limits subagent.Config, interactive bool) *agentHost {
 	h := &agentHost{cfg: cfg, interactive: interactive, pending: map[string]childSettings{}, lineage: map[string]bool{}}
-	if cfg.approver != nil {
-		h.startupAutoApprove = cfg.approver.autoApprove.Load()
-	}
 	h.m = subagent.NewManager(limits, h.runChild)
 	h.sync(cfg)
 	return h
@@ -156,13 +149,15 @@ func (h *agentHost) runChild(ctx context.Context, a *subagent.Agent, prompt stri
 }
 
 // childApprover asks about a subagent's run_bash commands. An agent the user answered
-// "always" for runs its commands, except ones touching goat's state or keys. Without
-// a terminal the answer is main's approver's: it declines, unless the user started goat
-// with auto-approval. Otherwise the request waits for main to ask the user.
+// "always" for runs its commands, except ones touching goat's state or keys, and so do
+// all agents while the user has auto-approval on (--yes, GOAT_AUTO_APPROVE_BASH or
+// /approve on, but not an "always" answered to main). Without a terminal the answer is
+// main's approver's: it declines, unless auto-approval is on. Otherwise the request
+// waits for main to ask the user.
 func (h *agentHost) childApprover(a *subagent.Agent) func(ctx context.Context, command, workdir string) error {
 	return func(ctx context.Context, command, workdir string) error {
 		guarded := mentionsStateDir(command, workdir) || mentionsConfigDir(command, workdir)
-		if !guarded && (a.AutoApprove.Load() || h.startupAutoApprove) {
+		if !guarded && (a.AutoApprove.Load() || h.sessionAutoApprove()) {
 			return nil
 		}
 		if !h.interactive {
@@ -175,6 +170,23 @@ func (h *agentHost) childApprover(a *subagent.Agent) func(ctx context.Context, c
 		a.SetState(subagent.WaitingApproval)
 		defer a.SetState(subagent.Running)
 		return h.m.Broker.Request(ctx, &subagent.ApprovalRequest{AgentID: a.ID, Label: a.Label, Command: command, Workdir: workdir})
+	}
+}
+
+// sessionAutoApprove reports whether the user has auto-approval on for the session.
+func (h *agentHost) sessionAutoApprove() bool {
+	return h.cfg.approver != nil && h.cfg.approver.sessionAutoApprove.Load()
+}
+
+// forgetAlways drops every agent's "always", for /approve off.
+func (h *agentHost) forgetAlways() {
+	if h == nil {
+		return
+	}
+	for _, info := range h.m.List() {
+		if a, err := h.m.Get(info.ID); err == nil {
+			a.AutoApprove.Store(false)
+		}
 	}
 }
 
@@ -374,7 +386,8 @@ func (h *agentHost) wrapResult(r subagent.Result) string {
 	case strings.TrimSpace(text) == "":
 		text = "(the agent finished without a report)"
 	}
-	return subagent.WrapReport(r.ID, r.Label, text, h.m.Config().ReportCap)
+	// The report was cut to ReportCap, with a note saying so, when the turn ended.
+	return subagent.WrapReport(r.ID, r.Label, text, 0)
 }
 
 // Status describes one agent, or all of them.
@@ -452,17 +465,18 @@ func (h *agentHost) Wait(ctx context.Context, ids []string, all bool, timeout ti
 		if errors.Is(err, subagent.ErrApprovalPending) {
 			h.serveApprovals(ctx, h.cfg)
 			if ctx.Err() != nil {
+				// The reports found so far never reach the model; they stay pending.
 				return "", ctx.Err()
 			}
 			if !all && len(done) > 0 {
-				return h.formatWait(done, res.Running, false, timeout), nil
+				return h.deliverWait(done, res.Running, false, timeout), nil
 			}
 			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		return h.formatWait(done, res.Running, res.TimedOut, timeout), nil
+		return h.deliverWait(done, res.Running, res.TimedOut, timeout), nil
 	}
 }
 
@@ -481,6 +495,15 @@ func mergeResults(done, more []subagent.Result) []subagent.Result {
 		}
 	}
 	return done
+}
+
+// deliverWait is formatWait for a wait that returns to the model: the reports in done
+// are delivered from now on.
+func (h *agentHost) deliverWait(done []subagent.Result, running []string, timedOut bool, timeout time.Duration) string {
+	for _, r := range done {
+		h.m.MarkDelivered(r.ID)
+	}
+	return h.formatWait(done, running, timedOut, timeout)
 }
 
 func (h *agentHost) formatWait(done []subagent.Result, running []string, timedOut bool, timeout time.Duration) string {
@@ -663,13 +686,14 @@ func agentNoticesNote(notices []string) string {
 }
 
 // refuseWhileAgentsRun refuses commands that change what running agents depend on,
-// such as the keys and the conversation.
+// such as the keys and the conversation. A stopped agent whose turn has not ended yet,
+// and a message waiting to start a turn, count as running: either runs a turn later.
 func (c *config) refuseWhileAgentsRun() error {
 	if c.agents == nil {
 		return nil
 	}
-	if running, _, _ := c.agents.m.Counts(); running > 0 {
-		return fmt.Errorf("%s running; stop agents first (/agents stop all)", plural(running, "subagent"))
+	if active := c.agents.m.Active(); active > 0 {
+		return fmt.Errorf("%s running; stop agents first (/agents stop all)", plural(active, "subagent"))
 	}
 	return nil
 }

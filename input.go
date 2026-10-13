@@ -163,6 +163,10 @@ type bashApprover struct {
 	interactive bool
 	// autoApprove is atomic because turns running beside the main one read it.
 	autoApprove atomic.Bool
+	// sessionAutoApprove is the auto-approval the user asked for in so many words: --yes,
+	// GOAT_AUTO_APPROVE_BASH or /approve on|off, never an "always" answered to one of
+	// main's commands. Subagents follow it, read live.
+	sessionAutoApprove atomic.Bool
 	// label, when set, names who asks, such as a subagent, above the question.
 	label string
 }

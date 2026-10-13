@@ -461,6 +461,9 @@ var attachReadOnly = map[string]bool{"agents": true, "help": true, "ps": true, "
 // the user starts here is not announced when it ends while the user still looks on.
 func (h *agentHost) attach(ctx context.Context, cfg *config, a *subagent.Agent) error {
 	defer h.m.SetAttached("")
+	// Lines queued before the view opened were meant for main: they wait, and go to
+	// main as they would have once the view closes.
+	defer restoreQueuedLines(holdQueuedLines())
 	for {
 		h.m.SetAttached(a.ID)
 		next, err := h.attachOnce(ctx, cfg, a)

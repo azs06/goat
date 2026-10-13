@@ -286,8 +286,12 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 		switch strings.ToLower(args[0]) {
 		case "on", "yes", "true":
 			c.approver.autoApprove.Store(true)
+			c.approver.sessionAutoApprove.Store(true)
 		case "off", "no", "false":
 			c.approver.autoApprove.Store(false)
+			c.approver.sessionAutoApprove.Store(false)
+			// Asking again covers the subagents' commands too.
+			c.agents.forgetAlways()
 		default:
 			return fmt.Errorf("use /approve on or /approve off")
 		}
@@ -594,17 +598,23 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		return fmt.Errorf("could not carry the conversation over to %s, so the model was not changed: %w (use /clear first to switch without it)", target, err)
 	}
 	previous := c.model
+	carryOverToModel(c, target, next, summary)
+	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
+	printModelLine(c)
+	return nil
+}
+
+// carryOverToModel switches to target with the conversation seeded from summary.
+func carryOverToModel(c *config, target provider.Model, next provider.Conversation, summary string) {
 	recordCompactionSummary(c, summary, "model switch")
 	// The archive keeps the old model, so /resume returns to the full conversation.
 	archiveSession(c)
 	c.model = target
 	// The conversation goes on under a new id; its agents still report to it.
-	c.agents.carryLineage(activeConversationID)
+	previousConversation := activeConversationID
 	startConversation(c, conversationState{conversation: next})
+	c.agents.carryLineage(previousConversation)
 	recordCompactionSeed(c, next, summary)
-	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
-	printModelLine(c)
-	return nil
 }
 
 // pickModel resolves a number from the last listing, or a model name.

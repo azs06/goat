@@ -153,6 +153,26 @@ func takeQueuedLine() (string, bool) {
 	return line, true
 }
 
+// holdQueuedLines takes the queued lines out of the queue, for restoreQueuedLines to
+// put back, so the attach view sends none of the lines meant for main to its agent.
+func holdQueuedLines() []string {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	held := turnQueue.items
+	turnQueue.items = nil
+	return held
+}
+
+// restoreQueuedLines puts held back at the front of the queue.
+func restoreQueuedLines(held []string) {
+	if len(held) == 0 {
+		return
+	}
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.items = append(held, turnQueue.items...)
+}
+
 // returnQueuedLinesToEditor puts the lines still queued back in front of the text
 // being typed, so leaving the attach view sends none of them anywhere.
 func returnQueuedLinesToEditor() {

@@ -36,6 +36,10 @@ const (
 type conversationState struct {
 	conversation       provider.Conversation
 	pendingToolResults []provider.ToolResult
+	// pendingText is what a request that failed carried for the model besides the
+	// prompt and the tool results: messages steered into the turn and subagents' reports
+	// taken partway through it. The next request sends it first. It lives in memory only.
+	pendingText string
 }
 
 var streamRetrySleeper = sleepWithContext
@@ -487,6 +491,12 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	// changes: the stored transcript and the results still owed keep their images, so
 	// they go again after a switch back to a model that sees.
 	req.TextOnly = !opts.vision
+	if conv.pendingText != "" {
+		req.UserText = conv.pendingText + "\n\n" + req.UserText
+	}
+	// carried is the text this round's request takes that nothing else keeps: a request
+	// that fails hands it back in pendingText.
+	carried := conv.pendingText
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
@@ -508,14 +518,14 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			if isContextOverflowError(err) || provider.IsRequestTooLarge(err) {
 				err = fmt.Errorf("%w (%v)", errContextExceeded, shortError(err))
 			}
-			return conversationState{conversation: req.Conversation, pendingToolResults: req.ToolResults}, err
+			return conversationState{conversation: req.Conversation, pendingToolResults: req.ToolResults, pendingText: carried}, err
 		}
 
 		if resp.Stop == provider.StopRefusal {
 			// The declined output is discarded; anything this request carried is still owed.
 			err := fmt.Errorf("the model declined to answer%s; rephrase the request or switch models with /model", detailSuffix(resp.RefusalDetail))
 			opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "refused", Provider: providerName})
-			return conversationState{conversation: resp.Conversation, pendingToolResults: req.ToolResults}, err
+			return conversationState{conversation: resp.Conversation, pendingToolResults: req.ToolResults, pendingText: carried}, err
 		}
 
 		var results []provider.ToolResult
@@ -570,6 +580,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			req.Conversation = next.conversation
 			req.ToolResults = nil
 			req.UserText = failure
+			carried = ""
 			continue
 		}
 		if opts.checkpoint != nil {
@@ -594,6 +605,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
 		req.UserImages = nil
+		carried = ""
 		if opts.compact != nil {
 			if compacted, ok := opts.compact(ctx); ok {
 				req.Conversation = compacted
@@ -613,22 +625,29 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			if text := opts.takeSteering(); text != "" {
 				opts.sink.User(text)
 				opts.record(historyEntry{Type: "user", Content: text, Provider: providerName})
-				if req.UserText != "" {
-					text = req.UserText + "\n\n" + text
-				}
-				req.UserText = text
+				carried = joinNonEmpty(carried, text)
+				req.UserText = joinNonEmpty(req.UserText, text)
 			}
 		}
 		if opts.takeNotices != nil {
 			if text := opts.takeNotices(); text != "" {
 				opts.record(historyEntry{Type: "user", Content: text, Provider: providerName})
-				if req.UserText != "" {
-					text = req.UserText + "\n\n" + text
-				}
-				req.UserText = text
+				carried = joinNonEmpty(carried, text)
+				req.UserText = joinNonEmpty(req.UserText, text)
 			}
 		}
 	}
+}
+
+// joinNonEmpty joins a and b with a blank line, or returns the one that is not empty.
+func joinNonEmpty(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "\n\n" + b
 }
 
 // resultImages collects the images tool results carry, in order.

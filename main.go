@@ -550,6 +550,11 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		opts.takeSteering = takeQueuedText
 	}
 
+	if len(cfg.agentNotices) > 0 {
+		// The reports go before the prompt; the history keeps them too, so a summary of
+		// the conversation, or its export, has what the model acted on.
+		recordHistory(historyEntry{Type: "user", Content: strings.Join(cfg.agentNotices, "\n\n"), Provider: p.Name()})
+	}
 	sent := cfg.conversation.conversation
 	next, err := sendPromptStream(ctx, p, prompt, cfg.conversation, opts)
 	cfg.conversation = next
@@ -567,6 +572,8 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	// already started goes on from where it was instead of starting over.
 	moved := turnStarted || conversationMoved(sent, next.conversation)
 	owed := next.pendingToolResults
+	// Steered messages and agents' reports the failed request carried go with the retry.
+	pendingText := next.pendingText
 	if len(owed) == 0 && turnStarted {
 		// A request after compacting partway through carried them as text.
 		owed = lastOwed
@@ -581,6 +588,7 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
+	cfg.conversation.pendingText = pendingText
 	if moved {
 		// The note, any ! output and the prompt's images went with the turn's first
 		// request. The retry carries the owed results as text, so their images go with it.
@@ -922,6 +930,7 @@ func main() {
 	cfg.interactive = terminal.StdinIsTerminal()
 	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive}
 	cfg.approver.autoApprove.Store(opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH"))
+	cfg.approver.sessionAutoApprove.Store(cfg.approver.autoApprove.Load())
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
 	// Before the exit paths are set up, so every one of them stops the agents.

@@ -15,17 +15,24 @@ var reportEscaper = newFoldReplacer(
 	"</system-reminder", "&lt;/system-reminder",
 )
 
+// CapReport cuts an agent's reply to limit bytes on a rune boundary, and says so at the
+// end, pointing at the full transcript. A reply within limit is returned as it is.
+func CapReport(id, text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + fmt.Sprintf("\n[report truncated at %d KB; the full transcript is in /agents %s]", limit>>10, id)
+}
+
 // WrapReport frames an agent's report for the parent model: cut to limit bytes (none
 // when limit is 0), escaped, marked as a subagent's output, and pointed at the full
 // transcript.
 func WrapReport(id, label, text string, limit int) string {
-	if limit > 0 && len(text) > limit {
-		cut := limit
-		for cut > 0 && !utf8.RuneStart(text[cut]) {
-			cut--
-		}
-		text = text[:cut] + fmt.Sprintf("\n[report truncated at %d KB; the full transcript is in /agents %s]", limit>>10, id)
-	}
+	text = CapReport(id, text, limit)
 	text = reportEscaper.Replace(text)
 	text = strings.ReplaceAll(text, "Human:", "Human：")
 	var b strings.Builder

@@ -254,6 +254,7 @@ func (m *Manager) startTurnLocked(a *Agent, prompt string) error {
 	a.gen++
 	gen := a.gen
 	a.delivered = false
+	a.kicked = false
 	a.state = Running
 	a.activity = ""
 	a.updated = time.Now()
@@ -306,7 +307,7 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	if gen != a.gen || !a.state.Busy() {
 		return "", false
 	}
-	a.report = head(reply, m.cfg.ReportCap)
+	a.report = CapReport(a.ID, reply, m.cfg.ReportCap)
 	a.delivered = false
 	a.err = err
 	a.turns++
@@ -336,7 +337,10 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	a.activity = ""
 	a.turnCancel = nil
 	close(a.turnDone)
-	if a.Background && a.state != Stopped && (a.owed || a.ID != m.attached) {
+	// A background turn is announced; so is a turn the model is owed that started from
+	// the inbox once a slot freed, since nobody follows it the way a foreground spawn or
+	// send is followed.
+	if a.state != Stopped && (a.Background && (a.owed || a.ID != m.attached) || a.kicked && a.owed) {
 		m.addNoticeLocked(a, a.owed)
 	}
 	// A message from the model still waiting starts a turn it is owed the report of.
@@ -354,7 +358,7 @@ func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {
 	m.notices = append(m.notices, Notice{
 		AgentID:    a.ID,
 		ParentConv: a.ParentConv,
-		Text:       WrapReport(a.ID, a.Label, text, m.cfg.ReportCap),
+		Text:       WrapReport(a.ID, a.Label, text, 0),
 		ForModel:   forModel,
 	})
 	if len(m.notices) > maxNotices {
@@ -375,6 +379,7 @@ func (m *Manager) kickLocked() {
 			if err = m.startTurnLocked(a, joinMessages(inbox)); err != nil {
 				a.inbox = inbox
 			} else {
+				a.kicked = true
 				a.echoUserLocked(inbox)
 				m.nudge()
 			}
@@ -436,6 +441,23 @@ func (m *Manager) Counts() (running, waitingApproval, total int) {
 	return running, waitingApproval, len(m.agents)
 }
 
+// Active is how many agents are running a turn, have a runner that has not returned
+// yet (a stopped one winding down), or hold messages that start a turn once a slot
+// frees. Any of them may still start or run a turn.
+func (m *Manager) Active() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, a := range m.agents {
+		a.mu.Lock()
+		if a.goroutines > 0 || a.state.Busy() || len(a.inbox) > 0 {
+			n++
+		}
+		a.mu.Unlock()
+	}
+	return n
+}
+
 // Delivery is what became of a message Send accepted.
 type Delivery int
 
@@ -483,6 +505,9 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 	a.inbox = append(a.inbox, message{text: text, fromUser: fromUser})
 	if !fromUser {
 		a.owed = true
+		// The user's "always" covered the work they saw this agent asked to do, not
+		// whatever the model sends it next.
+		a.AutoApprove.Store(false)
 	}
 	a.updated = time.Now()
 	defer m.nudge()
@@ -518,16 +543,19 @@ func (m *Manager) SetAttached(id string) {
 }
 
 // MarkDelivered records that the agent's latest report reached the model, so a wait
-// on the agent says so instead of giving it again.
+// on the agent says so instead of giving it again, and its notice is not given either.
 func (m *Manager) MarkDelivered(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if a, ok := m.agents[id]; ok {
-		a.mu.Lock()
-		if !a.state.Busy() {
-			a.delivered = true
-		}
-		a.mu.Unlock()
+	a, ok := m.agents[id]
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	busy := a.state.Busy()
+	a.mu.Unlock()
+	if !busy {
+		m.consumeNoticesLocked([]Result{{ID: id}})
 	}
 }
 
@@ -758,7 +786,9 @@ type WaitResult struct {
 // ends (with its cause), or with ErrApprovalPending as soon as an agent waits for
 // approval. On ErrApprovalPending the caller serves the broker and calls Wait again
 // with the time left. The reports it returns are taken from the pending notices, so
-// none is delivered twice.
+// none is delivered twice, except on ErrApprovalPending and ctx's end: the caller
+// may never pass those on, so they stay pending until the caller hands them to the
+// model and calls MarkDelivered.
 func (m *Manager) Wait(ctx context.Context, ids []string, all bool, timeout time.Duration) (WaitResult, error) {
 	m.mu.Lock()
 	targets, err := m.waitTargetsLocked(ids)
@@ -779,15 +809,15 @@ func (m *Manager) Wait(ctx context.Context, ids []string, all bool, timeout time
 		}
 		m.mu.Unlock()
 		if m.Broker.Len() > 0 {
-			return m.partial(targets), ErrApprovalPending
+			return m.partial(targets, false), ErrApprovalPending
 		}
 		select {
 		case <-ended:
 		case <-m.Broker.Pending():
 		case <-ctx.Done():
-			return m.partial(targets), context.Cause(ctx)
+			return m.partial(targets, false), context.Cause(ctx)
 		case <-timer.C:
-			res := m.partial(targets)
+			res := m.partial(targets, true)
 			res.TimedOut = true
 			return res, nil
 		}
@@ -795,12 +825,14 @@ func (m *Manager) Wait(ctx context.Context, ids []string, all bool, timeout time
 }
 
 // partial is what Wait returns when it stops early: the finished agents' reports,
-// taken as delivered.
-func (m *Manager) partial(targets []string) WaitResult {
+// taken as delivered when consume is set.
+func (m *Manager) partial(targets []string, consume bool) WaitResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	res := m.collectLocked(targets)
-	m.consumeNoticesLocked(res.Done)
+	if consume {
+		m.consumeNoticesLocked(res.Done)
+	}
 	return res
 }
 
@@ -816,7 +848,10 @@ func (m *Manager) waitTargetsLocked(ids []string) ([]string, error) {
 	var targets []string
 	for _, id := range m.order {
 		a := m.agents[id]
-		if a.State().Busy() || m.hasModelNoticeLocked(id) {
+		a.mu.Lock()
+		running := a.runningLocked()
+		a.mu.Unlock()
+		if running || m.hasModelNoticeLocked(id) {
 			targets = append(targets, id)
 		}
 	}
@@ -841,7 +876,7 @@ func (m *Manager) collectLocked(targets []string) WaitResult {
 			continue
 		}
 		a.mu.Lock()
-		if a.state.Busy() {
+		if a.runningLocked() {
 			res.Running = append(res.Running, id)
 		} else {
 			res.Done = append(res.Done, Result{ID: id, Label: a.Label, State: a.state, Report: a.report, Err: a.err, Delivered: a.delivered})
@@ -878,4 +913,10 @@ func (m *Manager) consumeNoticesLocked(done []Result) {
 		}
 	}
 	m.notices = kept
+}
+
+// runningLocked reports whether a has a turn in flight, or messages waiting for a slot
+// that start one. Callers hold a.mu.
+func (a *Agent) runningLocked() bool {
+	return a.state.Busy() || a.state != Stopped && len(a.inbox) > 0
 }

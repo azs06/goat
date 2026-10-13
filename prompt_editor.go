@@ -642,7 +642,9 @@ func editPrompt(ctx context.Context, input *lineReader, history []string, footer
 		key, woke, err := input.readKeyOr(ctx, changed, pending)
 		switch {
 		case err != nil:
-		case woke && interrupt():
+		case woke && !editor.pasting && interrupt():
+			// Never in the middle of a paste: the rest of it would arrive as keys
+			// typed into the next prompt, and its first newline would send the line.
 			err = errUIEvent
 		case woke:
 			if events.footer != nil {
