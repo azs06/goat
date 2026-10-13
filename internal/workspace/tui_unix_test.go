@@ -235,3 +235,41 @@ func TestTUIOutputKeepsCharactersSplitBetweenReads(t *testing.T) {
 		}
 	}
 }
+
+func TestStopAllBackgroundEndsATerminalSessionsJobs(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// goat closing mid-call (SIGTERM, SIGHUP) stops what is running through
+	// StopAllBackground; a run_tui shell's jobs are in groups of their own.
+	marker := fmt.Sprintf("sleep %d", 6000+os.Getpid()%1000)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTUI(context.Background(), TUIRun{
+			Command: `HISTFILE=/dev/null bash --norc --noprofile -i`,
+			Steps: []TUIStep{
+				{Keys: marker + ` & echo job=started<Enter>`, WaitFor: "job=started", WaitMS: 5000},
+				{WaitFor: "never shown", WaitMS: 30000},
+			},
+		})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if out, _ := exec.Command("pgrep", "-f", marker).Output(); len(strings.TrimSpace(string(out))) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	StopAllBackground()
+	if out, _ := exec.Command("pgrep", "-f", marker).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		exec.Command("pkill", "-f", marker).Run()
+		t.Fatalf("the job %q outlived goat's shutdown: %s", marker, out)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run_tui did not return after its session was ended")
+	}
+}

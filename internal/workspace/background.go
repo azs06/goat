@@ -26,12 +26,14 @@ type GroupProcess struct {
 	Command string
 }
 
-// background holds the groups run_bash commands left running, oldest first, and the
-// groups of the commands running right now.
+// background holds the groups run_bash commands left running, oldest first, the
+// groups of the commands running right now, and how to end the run_tui sessions
+// running right now.
 var background struct {
-	mu      sync.Mutex
-	groups  []BackgroundGroup
-	running map[int]bool
+	mu       sync.Mutex
+	groups   []BackgroundGroup
+	running  map[int]bool
+	sessions map[int]func()
 }
 
 // settleWindow is how long a command's group may take to empty after its shell exits
@@ -54,6 +56,24 @@ func untrackRunning(pgid int) {
 	background.mu.Lock()
 	defer background.mu.Unlock()
 	delete(background.running, pgid)
+}
+
+// trackSession and untrackSession bracket a run_tui call, so goat can end its whole
+// terminal session if it is closed mid-call: an interactive shell's jobs run in groups
+// of their own, which stopping the shell's group does not reach.
+func trackSession(leader int, end func()) {
+	background.mu.Lock()
+	defer background.mu.Unlock()
+	if background.sessions == nil {
+		background.sessions = map[int]func(){}
+	}
+	background.sessions[leader] = end
+}
+
+func untrackSession(leader int) {
+	background.mu.Lock()
+	defer background.mu.Unlock()
+	delete(background.sessions, leader)
 }
 
 // rememberIfAlive records the process group of a command whose shell has exited when
@@ -124,7 +144,14 @@ func StopAllBackground() []BackgroundGroup {
 	for pgid := range background.running {
 		pgids = append(pgids, pgid)
 	}
+	var sessions []func()
+	for _, end := range background.sessions {
+		sessions = append(sessions, end)
+	}
 	background.mu.Unlock()
+	for _, end := range sessions {
+		end()
+	}
 	for _, group := range groups {
 		pgids = append(pgids, group.PGID)
 	}

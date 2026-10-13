@@ -113,6 +113,8 @@ func RunTUI(ctx context.Context, run TUIRun) (string, error) {
 			terminal.Close()
 		})
 	}
+	trackSession(cmd.Process.Pid, closeTerminal)
+	defer untrackSession(cmd.Process.Pid)
 	stepsDone := make(chan struct{})
 	go func() {
 		select {
