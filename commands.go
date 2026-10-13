@@ -59,6 +59,7 @@ func init() {
 		{name: "theme", usage: "/theme [name]", description: "Pick the theme, or switch to a built-in one such as one-dark (saved in config.json)", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
 		{name: "undo", usage: "/undo [preview|skip]", description: "Undo the latest file change (/undo skip gives up on one that cannot be restored)", callback: commandUndo},
+		{name: "verify", usage: "/verify [command|run|off]", description: "Show or set the command goat runs to check a turn's changes (saved in config.json)", callback: commandVerify},
 	}
 
 	commands = map[string]*cliCommand{}
@@ -452,6 +453,9 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	}
 	if c.approver != nil {
 		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
+	}
+	if command, source := verifyCommand(); command != "" {
+		rows = append(rows, [2]string{"Verify:", escapeControlChars(command) + style.Muted.Render(" ("+source+")")})
 	}
 	if wd, err := os.Getwd(); err == nil {
 		home, _ := os.UserHomeDir()

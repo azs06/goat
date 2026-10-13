@@ -45,6 +45,9 @@ type config struct {
 	approver    *bashApprover
 
 	lastPrompt string
+	// commandText is the line of the command being run, for commands that need its
+	// spacing and quotes kept, such as /verify.
+	commandText string
 	// promptHistory holds the prompts Up brings back, oldest first.
 	promptHistory []string
 	// lastModelChoices are the models the last /model listing numbered.
@@ -461,6 +464,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	if cfg.approver != nil {
 		opts.approveBash = cfg.approver.approve
 	}
+	// Plan mode changes nothing, so there is nothing to check.
+	if !cfg.planMode {
+		opts.verify = verifyGate()
+	}
 	// Messages queued while the turn works go to the model with the next tool results.
 	if cfg.interactive && style.Enabled() {
 		opts.takeSteering = takeQueuedText
@@ -554,6 +561,7 @@ func handleInput(cfg *config, text string) error {
 		case isShell:
 			return runShellEscape(ctx, cfg, shellCommand)
 		case cmd != nil:
+			cfg.commandText = text
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)

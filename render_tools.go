@@ -57,6 +57,8 @@ func toolDisplayName(name string) string {
 		return "Code"
 	case "read_output":
 		return "Output"
+	case verifyToolName:
+		return "Verify"
 	default:
 		return name
 	}
@@ -128,6 +130,8 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		if lines > 1 {
 			flags = append(flags, plural(lines, "line"))
 		}
+	case verifyToolName:
+		summary = str("command")
 	case "run_bash":
 		summary = str("command")
 		if workdir := str("workdir"); workdir != "" && workdir != "." {
@@ -304,6 +308,11 @@ func summarizeToolOutput(call provider.ToolCall, output string) (string, []strin
 		if strings.HasPrefix(header, "Bash output for ") {
 			lines := strings.Split(rest, "\n")
 			return lines[0], lines[1:], false
+		}
+	case verifyToolName:
+		// It runs through run_bash's runner; a failure is shown as an error instead.
+		if strings.HasPrefix(header, "Bash output for ") {
+			return "Passed", strings.Split(rest, "\n"), false
 		}
 	case "find_files", "grep_files":
 		if strings.HasPrefix(header, "Found ") {
