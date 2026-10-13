@@ -358,6 +358,7 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/undo [preview\|skip]` | Undo the latest file change. `preview` shows what would be restored; `skip` gives up on a change that cannot be restored. |
 | `/ps [stop n\|all]` (`/jobs`) | List the commands goat left running in the background, such as a dev server started with `&`, and stop them: pick one with the arrow keys and Enter, or `/ps stop 2` (by number, or by the group ID it lists), `/ps stop all`. The footer shows how many are running. |
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
+| `/verify [command\|run\|off]` | Show or set the workspace's verify command (see [Verification](#verification)): `/verify go test ./...` sets it, saved in config.json; `/verify run` runs it now; `/verify off` removes it. |
 | `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
@@ -392,6 +393,8 @@ workspace.
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
 | `view_image` | Look at an image file (PNG, JPEG, GIF or WebP), such as a screenshot a test saved; only for models that read images |
+| `read_output` | Read a tool output that was shortened for the model, a range of lines at a time |
+| `run_tui` | Run a program in an emulated terminal, type keys into it and read the screen back as text, after you approve it; not on Windows |
 | `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
 
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
@@ -400,6 +403,87 @@ searches everything. Every tool that changes files accepts `preview=true`, which
 diff without changing anything. A turn can make up to 40 rounds of tool calls; past that
 goat stops and asks you to send another message to continue.
 
+The model gets each tool result cut to about 6,000 characters and 120 lines for
+`run_bash`, and 16,000 characters and 400 lines for the others, keeping the start and the
+end. A result that was cut ends with a note giving its number, and `read_output` reads the
+rest from goat's history, the same record `/output` shows. Its numbers count every tool
+output in the workspace's history, so a note still works after the conversation is
+compacted; `/output N` counts back from the latest instead. The history keeps about the
+first and last 16,000 characters of each output. After changing code, the model is asked to run the
+project's build and tests, or the checks its instructions name, and to show the command
+and its result before saying the work is done.
+
+### Checking terminal programs
+
+`run_tui` lets goat see a terminal program the way you would, including goat itself.
+It starts the command in a pseudo-terminal (100x30 unless the call sets `cols` and
+`rows`), takes its steps in order, and returns the screen as text with the cursor's
+position. Each step can type `keys` (text, with special keys such as `<Enter>`,
+`<Esc>`, `<Up>`, `<C-c>` or `<M-x>`, and `<lt>` for a literal `<`), then wait until the
+screen shows `wait_for` text or for `wait_ms`, and ask for a `snapshot` of the screen
+after it:
+
+```json
+{"command": "go run .", "steps": [
+  {"wait_for": "Welcome to G.O.A.T"},
+  {"keys": "/status<Enter>", "wait_for": "Workspace:", "snapshot": true},
+  {"keys": "/exit<Enter>"}
+]}
+```
+
+Before typing, and before it reads the final screen, goat waits for the program's output
+to settle. A `wait_for` that never appears fails the call, with the screen as it was, so
+the model sees what went wrong. After the last step goat gives the program two seconds to
+exit, then closes the terminal (SIGHUP, then SIGKILL) and stops whatever it started. A call
+is stopped after 60 seconds.
+
+You approve `run_tui` like `run_bash`, and the approval shows the keys it will type, since
+typing into a shell can do as much as a command. It is refused in plan mode, the program
+gets the same environment as `run_bash` commands (without credentials), and it gets a
+scratch `XDG_STATE_HOME`, so a goat started this way keeps its history and session away
+from yours. The terminal is emulated by [vt10x](https://github.com/hinshun/vt10x), which
+counts every character as one column: lines with emoji or other wide characters can look
+one column off. `run_tui` needs Unix pseudo-terminals and is not offered on Windows.
+
+## Verification
+
+Give goat a command that checks the work, and it runs that command itself whenever the
+model finishes a turn that may have changed something:
+
+```
+/verify go vet ./... && go test ./...
+```
+
+- **When:** only after a turn that changed files, ran a shell command or ran a script.
+  Reads and previews don't count, and plan mode never runs it.
+- **On failure:** goat sends the command's output (head and tail) back to the model, which
+  fixes the problem in the same turn, and goat runs the check again.
+- **When it gives up:** after 3 runs in one turn, or when the model stops without changing
+  anything after a failure. goat then reports that verification still fails.
+  - `goat -p` exits with status 1 in that case.
+  - In `-p` mode, stdout holds each reply the model gave on the way.
+- **Where it runs:** the workspace, with the same rules as `run_bash`.
+  - Credentials are removed from its environment.
+  - Ctrl-C stops it, along with everything it started.
+  - It has its own time limit: 5 minutes by default, set with `verify_timeout`.
+- **Where to see it:** each run is shown like a tool call (`Verify(...)`), and `/output`
+  shows its full output.
+
+The command is yours and runs without asking, so goat takes it only from your own settings:
+- config.json's `verify` field, which maps each workspace to its command;
+- `GOAT_VERIFY`, which applies to every workspace and wins over `verify`. `GOAT_VERIFY=off`
+  turns verification off for a run.
+
+goat never reads it from the workspace, so a cloned repository cannot get a command run.
+
+```json
+{
+  "verify": {
+    "~/code/goat": "go vet ./... && go test ./...",
+    "~/code/web": "npm test"
+  }
+}
+```
 ## Images
 
 Models that read images can be shown them two ways: the agent calls `view_image` on a
@@ -722,14 +806,17 @@ directory already has is left in `.goat/` instead, with a warning.
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
   still be undone.
 - In plan mode (`/plan`, `--plan`) nothing in the workspace changes: file tools only run
-  as previews and `run_bash` is refused.
+  as previews and `run_bash` and `run_tui` are refused.
+- `run_tui` is approved the same way as `run_bash`, with the keys it will type shown under
+  the command, and follows the same rules for the state and config directories.
 - A `run_code` script can only call goat's own tools, each with the checks above; the
   engine it runs in gives it no other access to files, the network, the environment or
   processes.
 - `run_bash` asks before each command. Answer `y` to run it, `n` to decline, `a` to allow
   every command for the rest of the session, or type feedback to decline with a reason the
-  model sees. Commands time out after 30 seconds, and everything a command started is
-  killed with it. Changes made through `run_bash` are not snapshotted. A command that
+  model sees. Commands time out after 30 seconds unless the call asks for longer with
+  `timeout` (in seconds, up to 10 minutes), as a build or test suite may need, and
+  everything a command started is killed with it; Ctrl-C stops a command at any time. Changes made through `run_bash` are not snapshotted. A command that
   mentions goat's state directory (or `.goat`) is always confirmed, even when commands
   otherwise run without asking.
 - What a command leaves running in the background, such as a server started with `&`
@@ -835,6 +922,8 @@ when that is set), which never holds keys:
 | `anthropic_fallbacks` | `true` | Server-side refusal fallbacks for Claude models | `GOAT_ANTHROPIC_FALLBACKS` (`on`/`off`) |
 | `anthropic_cache_ttl` | `"5m"` | Lifetime of Claude prompt cache entries, `"5m"` or `"1h"` | `GOAT_ANTHROPIC_CACHE_TTL` |
 | `reduced_motion` | `false` | Keep the spinner still (it updates once a second) | `GOAT_REDUCED_MOTION` |
+| `verify` | | Workspaces (full paths, `~/` works) and the command that checks each one's changes (see [Verification](#verification)); `/verify` sets it | `GOAT_VERIFY`, for every workspace (`off` turns it off) |
+| `verify_timeout` | `300` | Seconds the verify command may run | `GOAT_VERIFY_TIMEOUT` |
 | `base_urls` | | `openai`, `anthropic` or `deepseek` at a proxy or a compatible API (see [Safety](#safety) for the checks) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `DEEPSEEK_BASE_URL` |
 | `providers` | | Other providers (see [Setup](#optional-add-other-providers)) | |
 
@@ -887,7 +976,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
 | `internal/terminal/` | Terminal modes (echo, cbreak) and size |
 | `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules, the handler that runs each one, and `run_code` |
-| `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
+| `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash` and `run_tui`, and mutations snapshotted for undo; keeping credentials out of tools |
 
 ## Development
 

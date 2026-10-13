@@ -29,6 +29,10 @@ Deferred enhancements to implement later:
   - OpenAI's Responses API keeps earlier turns on its side (`previous_response_id`), so after an image went to a vision model, switching to one of OpenAI's text-only models (`o3-mini`, `o1-mini`, `gpt-3.5`, `gpt-4`, typed by name; none is in `/model`'s list) still hands it those images, and its requests can fail. Compacting when an OpenAI conversation with images moves to a text-only model would fix it (Codex review of PR #24).
   - Ctrl-V and dragging a file were checked only through the editor's key handling in tests, not in iTerm, Terminal.app or a Linux terminal; the macOS clipboard read (`osascript`) and PowerShell's were not run against a real clipboard.
   - Show pasted images inline in terminals that can (kitty, iTerm2), as pi does.
+- run_tui follow-ups:
+  - Wide characters (emoji, CJK) take one column in vt10x, so a line with them can look one column off; a width-aware emulator would fix it.
+  - Windows: offer run_tui through ConPTY.
+  - Return colors or styles as well as text, for checking a theme.
 
 Notes:
 - Session compaction runs automatically, before a prompt or between tool rounds, once the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, and is also available manually via `compact`.

@@ -311,7 +311,7 @@ var helpGroups = []struct {
 }{
 	{"Conversation", []string{"clear", "resume", "retry", "compact", "paste", "copy", "export"}},
 	{"Model", []string{"model", "effort", "status"}},
-	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "ps", "approve", "tools"}},
+	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "ps", "approve", "verify", "tools"}},
 	{"goat", []string{"theme", "history", "help", "exit"}},
 }
 

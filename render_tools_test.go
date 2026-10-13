@@ -45,6 +45,8 @@ func TestRenderToolHeaderPlain(t *testing.T) {
 		{toolTestCall("move_file", `{"source_path":"a.go","destination_path":"b.go","preview":true}`), "* Move(a.go -> b.go) [preview]"},
 		{toolTestCall("edit_file", `{"path":"x.go","old_text":"a","new_text":"b","replace_all":true}`), "* Update(x.go) [replace all]"},
 		{toolTestCall("undo_last_change", `{}`), "* Undo"},
+		{toolTestCall("run_bash", `{"command":"go test ./...","timeout":300}`), "* Bash(go test ./...) [timeout 300s]"},
+		{toolTestCall("read_output", `{"output":3,"offset":121,"limit":40}`), "* Output(3) [lines 121-160]"},
 		{toolTestCall("mystery", `{"a": 1}`), `* mystery({"a": 1})`},
 		{toolTestCall("read_file", `not json`), "* Read(not json)"},
 	}

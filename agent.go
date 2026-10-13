@@ -72,6 +72,14 @@ type turnOptions struct {
 	vision bool
 	// images go with the prompt, such as ones pasted at the prompt.
 	images []provider.Image
+	// verify, when set, checks the work when the model finishes a turn that may have
+	// changed the workspace. It returns the message to send the model when the check
+	// fails, which the turn then goes on with, or "" when it passed.
+	verify func(ctx context.Context) (string, error)
+	// verified, when set, holds what verify knows about the turn. A turn retried after
+	// compacting passes the same one, so changes made before the retry are still
+	// checked and earlier runs still count.
+	verified *verifyState
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -287,7 +295,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID}
+		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
 		var shown []provider.Image
 		toolOpts.Vision = opts.vision
 		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
@@ -313,7 +321,14 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName, Images: len(shown)})
 			result.Output = toolOutput
 		}
+		full := result.Output
 		result.Output = prepareToolOutputForModel(toolCall.Name, result.Output)
+		// The history keeps the whole output, so the model can read what was cut.
+		if result.Output != full && toolCall.Name != "read_output" {
+			if n, ok := latestToolOutputNumber(); ok {
+				result.Output += tools.ShortenedNote(n)
+			}
+		}
 		results = append(results, result)
 	}
 
@@ -409,6 +424,10 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 	}
 
+	verified := opts.verified
+	if verified == nil {
+		verified = &verifyState{}
+	}
 	for round := 1; ; round++ {
 		resp, printedText, err := executeStreamedResponse(ctx, p, req)
 		// The markdown renderer ends every line itself; plain streamed text may not.
@@ -435,6 +454,9 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		switch resp.Stop {
 		case provider.StopToolUse:
 			results = runToolCalls(ctx, providerName, opts, resp)
+			for _, call := range resp.ToolCalls {
+				verified.changed = verified.changed || changesWorkspace(call)
+			}
 		case provider.StopMaxTokens:
 			stopErr = errors.New("the response was cut off at the output token limit")
 		case provider.StopContextExceeded:
@@ -451,8 +473,32 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			recordHistory(withUsage(historyEntry{Type: "assistant", Content: resp.Text, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 			if stopErr != nil {
 				recordHistory(historyEntry{Type: "error", Content: stopErr.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+				return next, stopErr
 			}
-			return next, stopErr
+			if opts.verify == nil || !verified.changed && !verified.failed {
+				return next, nil
+			}
+			failure, err := verifyTurn(ctx, opts, verified, round)
+			if err != nil {
+				status := "error"
+				if ctx.Err() != nil {
+					status = "interrupted"
+				}
+				recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: status, Provider: providerName})
+				return next, err
+			}
+			if failure == "" {
+				return next, nil
+			}
+			// The model answers the failure in the same turn.
+			if opts.checkpoint != nil {
+				opts.checkpoint(next)
+			}
+			recordHistory(historyEntry{Type: "user", Content: failure, Provider: providerName})
+			req.Conversation = next.conversation
+			req.ToolResults = nil
+			req.UserText = failure
+			continue
 		}
 		if opts.checkpoint != nil {
 			opts.checkpoint(next)

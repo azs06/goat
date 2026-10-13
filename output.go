@@ -24,30 +24,67 @@ type toolRun struct {
 	output historyEntry
 }
 
-// recentToolRuns returns the conversation's tool calls that have output, newest first.
-func recentToolRuns(entries []historyEntry) []toolRun {
-	entries = historyEntriesSinceLastReset(entries)
+// pairToolRuns pairs the tool calls in entries with their outputs, oldest first. A call
+// pairs with the first later output of the same conversation, tool and response; calls
+// that never got an output are left out.
+func pairToolRuns(entries []historyEntry) []toolRun {
+	type key struct{ conversation, tool, response string }
 	var runs []toolRun
-	var pending []historyEntry
+	pending := map[key][]historyEntry{}
 	for _, entry := range entries {
+		k := key{entry.ConversationID, entry.ToolName, entry.ResponseID}
 		switch entry.Type {
 		case "tool_call":
-			pending = append(pending, entry)
+			pending[k] = append(pending[k], entry)
 		case "tool_output":
 			// Outputs follow their calls in order.
-			for i, call := range pending {
-				if call.ToolName == entry.ToolName && call.ResponseID == entry.ResponseID {
-					runs = append(runs, toolRun{call: call, output: entry})
-					pending = append(pending[:i], pending[i+1:]...)
-					break
-				}
+			if calls := pending[k]; len(calls) > 0 {
+				runs = append(runs, toolRun{call: calls[0], output: entry})
+				pending[k] = calls[1:]
 			}
 		}
 	}
+	return runs
+}
+
+// recentToolRuns returns the conversation's tool calls that have output, newest first.
+func recentToolRuns(entries []historyEntry) []toolRun {
+	runs := pairToolRuns(historyEntriesSinceLastReset(entries))
 	for i, j := 0, len(runs)-1; i < j; i, j = i+1, j-1 {
 		runs[i], runs[j] = runs[j], runs[i]
 	}
 	return runs
+}
+
+// toolOutputByNumber is the nth tool output in the workspace's history, counting from 1
+// at its start, for read_output. It reads the history, the same record /output shows.
+// Numbering the whole history, not the conversation, keeps a number valid after the
+// conversation is compacted: the note that gives it can be carried into the new one.
+func toolOutputByNumber(n int) (string, string, error) {
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		return "", "", err
+	}
+	runs := pairToolRuns(entries)
+	if n < 1 || n > len(runs) {
+		if len(runs) == 0 {
+			return "", "", fmt.Errorf("there is no output %d; no tool output has been recorded yet", n)
+		}
+		return "", "", fmt.Errorf("there is no output %d; the latest is %d", n, len(runs))
+	}
+	run := runs[n-1]
+	return run.title(), run.output.Content, nil
+}
+
+// latestToolOutputNumber is the number read_output knows the latest tool output by, or
+// false when the history cannot be read.
+func latestToolOutputNumber() (int, bool) {
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		return 0, false
+	}
+	n := len(pairToolRuns(entries))
+	return n, n > 0
 }
 
 func (r toolRun) title() string {

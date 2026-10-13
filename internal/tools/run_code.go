@@ -70,7 +70,12 @@ var codeDocs = map[string]codemode.Doc{
 	"run_bash":         {Returns: `"Bash output for \"<command>\" in <dir>:\n<stdout and stderr>" ("(no output)" when empty).`, Throws: "On a non-zero exit (the message is \"goat.run_bash: exit status N\" followed by the output), a timeout, or a signal. A command the user declines stops the whole script."},
 	"find_files":       {Returns: `"Found N file(s) under <path>:\n<one path per line>", then "\n(truncated after N result(s))" when limited; "No files found ..." when there are none.`},
 	ViewImage:          {Returns: `"Image <path> (<width>x<height> <format>, <size>) is attached."; the image itself reaches you with run_code's result, not the script.`, Throws: "When the file is not an image, or the model in use cannot see images."},
+	"read_output":      {Returns: `"Output N, <title> (lines A-B of T):\n<lines>", then "\n(more follows; continue with offset B+1)" when there is more.`, Throws: "When no output has that number."},
 	"grep_files":       {Returns: `"Found N match(es) for \"<query>\" under <path>:\n<path>:<line>:<text> per line", then "\n(truncated after N match(es))" when limited; "No matches found ..." when there are none.`},
+	RunTUI: {
+		Returns: `"Terminal screen for \"<command>\" in <dir> (<cols>x<rows>, <how it ended>):\n<screen>", with "After step N:\n<screen>" blocks before "Final screen:" when steps asked for snapshots, then a "(cursor at line L, column C)" line.`,
+		Throws:  "When a wait_for text does not appear in time, the program exits before a step can type, or the call times out; the message ends with the screen as it was. A command the user declines stops the whole script.",
+	},
 }
 
 // CodeModeGuide is the system prompt section that describes run_code: the goat API and
@@ -118,6 +123,8 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 
 	nested := opts
 	nested.Nested = nil
+	// calling is the tool of the call being run; calls run one at a time.
+	calling := "run_bash"
 	if approve := opts.ApproveBash; approve != nil {
 		nested.ApproveBash = func(callCtx context.Context, command, workdir string) error {
 			// Waiting for the user does not count against the script's run time.
@@ -125,7 +132,7 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 			err := approve(callCtx, command, workdir)
 			resume()
 			if err != nil && callCtx.Err() == nil {
-				stop(fmt.Errorf("goat.run_bash: %w", err))
+				stop(fmt.Errorf("goat.%s: %w", calling, err))
 			}
 			return err
 		}
@@ -146,6 +153,7 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 			var output string
 			if err == nil {
 				nested.CallID = call.ID
+				calling = name
 				output, err = Execute(ctx, call, nested)
 			}
 			if done != nil {

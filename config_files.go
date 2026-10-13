@@ -56,6 +56,7 @@ var configSettings = []configSetting{
 	{"anthropic_fallbacks", "GOAT_ANTHROPIC_FALLBACKS", parseBoolSetting("on", "off")},
 	{"anthropic_cache_ttl", "GOAT_ANTHROPIC_CACHE_TTL", parseChoiceSetting("5m", "1h")},
 	{"auto_compact_tokens", "GOAT_AUTO_COMPACT_TOKENS", parseCountSetting},
+	{"verify_timeout", "GOAT_VERIFY_TIMEOUT", parseCountSetting},
 }
 
 // configStartup holds config.json's model and effort. They are defaults for a start
@@ -67,7 +68,7 @@ var configStartup struct {
 
 // configFields lists config.json's fields, for errors.
 func configFields() string {
-	names := []string{"model", "effort", "base_urls", "providers"}
+	names := []string{"model", "effort", "base_urls", "providers", "verify"}
 	for _, setting := range configSettings {
 		names = append(names, setting.field)
 	}
@@ -145,6 +146,12 @@ func applyConfig(data []byte, source string) ([]provider.Entry, error) {
 				}
 				values[variable] = strings.TrimSpace(value)
 			}
+		case "verify":
+			parsed, err := parseVerifySetting(field.Value, field.ValueLine)
+			if err != nil {
+				return nil, err
+			}
+			verifyCommands = parsed
 		case "providers":
 			parsed, err := provider.ParseEntries(field.Value)
 			if err != nil {

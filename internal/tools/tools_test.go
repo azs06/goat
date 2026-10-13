@@ -90,13 +90,16 @@ func TestEveryToolHasAHandler(t *testing.T) {
 func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 	want := map[string]PlanModePolicy{
 		"read_dir": PlanModeAllowed, "tree_dir": PlanModeAllowed, "read_file": PlanModeAllowed,
-		"find_files": PlanModeAllowed, "grep_files": PlanModeAllowed, "view_image": PlanModeAllowed,
+		"find_files": PlanModeAllowed, "grep_files": PlanModeAllowed, "read_output": PlanModeAllowed, "view_image": PlanModeAllowed,
 		"write_file": PlanModePreview, "edit_file": PlanModePreview, "edit_json_file": PlanModePreview,
 		"copy_file": PlanModePreview, "move_file": PlanModePreview, "delete_file": PlanModePreview,
 		"copy_dir": PlanModePreview, "move_dir": PlanModePreview, "delete_dir": PlanModePreview,
 		"undo_last_change": PlanModePreview,
 		"run_bash":         PlanModeBlocked,
 		"run_code":         PlanModePerCall,
+	}
+	if workspace.TUIAvailable {
+		want[RunTUI] = PlanModeBlocked
 	}
 	if len(want) != len(allToolNames()) {
 		t.Fatalf("the policy table covers %d of %d tools", len(want), len(allToolNames()))

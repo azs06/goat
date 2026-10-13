@@ -5,8 +5,10 @@ go 1.25.1
 require (
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/anthropics/anthropic-sdk-go v1.80.0
+	github.com/creack/pty v1.1.24
 	github.com/dlclark/regexp2/v2 v2.5.2
 	github.com/dop251/goja v0.0.0-20260917113740-793a2a65c13b
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.30.0
 	github.com/tidwall/gjson v1.18.0

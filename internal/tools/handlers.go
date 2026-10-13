@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/azs06/goat/internal/provider"
 	"github.com/azs06/goat/internal/workspace"
@@ -28,6 +29,8 @@ type Options struct {
 	// AttachImage, when set, receives each image a tool shows the model, to go with the
 	// call's result.
 	AttachImage func(provider.Image)
+	// Outputs, when set, lets read_output find earlier tool outputs.
+	Outputs OutputSource
 }
 
 // toolHandler runs one tool with its raw JSON arguments, already validated against the
@@ -53,6 +56,7 @@ var toolHandlers = map[string]toolHandler{
 	"find_files":       runFindFiles,
 	"grep_files":       runGrepFiles,
 	ViewImage:          runViewImage,
+	"read_output":      runReadOutput,
 }
 
 // Execute validates and runs one tool call. In plan mode only the read-only tools and
@@ -278,10 +282,14 @@ func runUndoLastChange(_ context.Context, raw string, _ Options) (string, error)
 	return workspace.UndoLastChange()
 }
 
+// maxBashTimeoutSeconds is the longest timeout a run_bash call may ask for.
+const maxBashTimeoutSeconds = 600
+
 func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Command string `json:"command"`
 		Workdir string `json:"workdir"`
+		Timeout int    `json:"timeout"`
 	}](raw)
 	if err != nil {
 		return "", err
@@ -294,7 +302,11 @@ func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 			return "", err
 		}
 	}
-	return workspace.RunBash(ctx, args.Command, args.Workdir)
+	if args.Timeout <= 0 {
+		return workspace.RunBash(ctx, args.Command, args.Workdir)
+	}
+	timeout := time.Duration(min(args.Timeout, maxBashTimeoutSeconds)) * time.Second
+	return workspace.RunBashFor(ctx, args.Command, args.Workdir, timeout)
 }
 
 func runFindFiles(_ context.Context, raw string, _ Options) (string, error) {
