@@ -4,10 +4,17 @@ package workspace
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hinshun/vt10x"
 )
 
 func TestRunTUITypesAndReadsTheScreen(t *testing.T) {
@@ -110,5 +117,75 @@ func TestRunTUIKeepsCredentialsAndGoatsStateAway(t *testing.T) {
 
 	if _, err := RunTUI(context.Background(), TUIRun{Command: "pwd", Workdir: "../elsewhere"}); err == nil {
 		t.Fatal("expected a workdir outside the workspace to be refused")
+	}
+}
+
+func TestRunTUIEndsTheJobsOfAnInteractiveShell(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// bash -i puts a background job in a process group of its own; cancelling the call
+	// must end it along with the shell.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := make(chan string, 1)
+	go func() {
+		out, err := RunTUI(ctx, TUIRun{
+			Command: `HISTFILE=/dev/null bash --norc --noprofile -i`,
+			Steps: []TUIStep{
+				{Keys: `sleep 4242 & echo job=started<Enter>`, WaitFor: "job=started", WaitMS: 5000},
+				{WaitMS: 20000},
+			},
+		})
+		jobs <- fmt.Sprint(out, err)
+	}()
+
+	var pid int
+	deadline := time.Now().Add(10 * time.Second)
+	for pid == 0 && time.Now().Before(deadline) {
+		out, _ := exec.Command("pgrep", "-f", "sleep 4242").Output()
+		if fields := strings.Fields(string(out)); len(fields) > 0 {
+			pid, _ = strconv.Atoi(fields[0])
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if pid == 0 {
+		cancel()
+		t.Fatalf("the background job never started:\n%s", <-jobs)
+	}
+	cancel()
+	<-jobs
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("the shell's background job %d outlived the call", pid)
+}
+
+// byteReader gives out one byte per Read, as a terminal may split a character's bytes.
+type byteReader struct{ data []byte }
+
+func (r *byteReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	p[0] = r.data[0]
+	r.data = r.data[1:]
+	return 1, nil
+}
+
+func TestTUIOutputKeepsCharactersSplitBetweenReads(t *testing.T) {
+	session := &tuiSession{screen: vt10x.New(vt10x.WithSize(20, 2)), read: make(chan struct{})}
+	session.copyOutput(&byteReader{data: []byte("é ❯ 🐐 ok")})
+	if got := session.text(); !strings.Contains(got, "é ❯ 🐐 ok") {
+		t.Fatalf("got %q", got)
+	}
+	for _, test := range []struct {
+		in   string
+		want int
+	}{{"ab", 2}, {"a\xc3", 1}, {"a\xe2\x9d", 1}, {"\xe2\x9d\xaf", 3}, {"a\xff", 2}, {"", 0}} {
+		if got := completeRunes([]byte(test.in)); got != test.want {
+			t.Errorf("completeRunes(%q) = %d, want %d", test.in, got, test.want)
+		}
 	}
 }

@@ -6,13 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
@@ -72,7 +75,11 @@ func RunTUI(ctx context.Context, run TUIRun) (string, error) {
 		"XDG_STATE_HOME="+stateDir,
 	)
 	configureProcessGroup(cmd)
-	terminal, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(run.Cols), Rows: uint16(run.Rows)})
+	// goat ends the whole terminal session itself once the steps stop, timed out or
+	// not (endSession); killing only the shell's group here first would leave the jobs
+	// of an interactive shell running, no longer attached to the terminal.
+	cmd.Cancel = func() error { return nil }
+	terminal, ttyName, err := startInTerminal(cmd, run.Cols, run.Rows)
 	if err != nil {
 		return "", fmt.Errorf("start %q in a terminal: %w", run.Command, err)
 	}
@@ -95,13 +102,7 @@ func RunTUI(ctx context.Context, run TUIRun) (string, error) {
 	report, stepErr := session.runSteps(runCtx, run.Steps)
 
 	still := !session.hasExited()
-	if still {
-		hangUp(cmd.Process.Pid, session.exited)
-	}
-	// Whatever the program started and left behind goes too, as with a closed terminal.
-	if groupAlive(cmd.Process.Pid) {
-		stopGroups([]int{cmd.Process.Pid})
-	}
+	endSession(cmd.Process.Pid, ttyName, session.exited)
 	terminal.Close()
 	// A process that left the group can still hold the terminal open and keep the read
 	// going; goat does not wait for it.
@@ -152,20 +153,44 @@ type tuiSession struct {
 	read chan struct{}
 }
 
-func (s *tuiSession) copyOutput(terminal *os.File) {
+// copyOutput feeds the program's output to the screen until it ends. A character whose
+// UTF-8 bytes are split between two reads waits for the rest: the emulator would drop
+// the part it got.
+func (s *tuiSession) copyOutput(output io.Reader) {
 	defer close(s.read)
 	buf := make([]byte, 32*1024)
+	var pending []byte
 	for {
-		n, err := terminal.Read(buf)
+		n, err := output.Read(buf)
 		if n > 0 {
-			s.screen.Write(buf[:n])
+			data := append(pending, buf[:n]...)
+			whole := completeRunes(data)
+			s.screen.Write(data[:whole])
+			pending = append([]byte(nil), data[whole:]...)
 			s.lastActivity.Store(time.Now().UnixNano())
 			s.wrote.Store(true)
 		}
 		if err != nil {
+			if len(pending) > 0 {
+				s.screen.Write(pending)
+			}
 			return
 		}
 	}
+}
+
+// completeRunes is how much of p ends on a whole UTF-8 character; what follows is the
+// start of one whose other bytes have not arrived yet.
+func completeRunes(p []byte) int {
+	for i := len(p) - 1; i >= 0 && i >= len(p)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(p[i]) {
+			if utf8.FullRune(p[i:]) {
+				return len(p)
+			}
+			return i
+		}
+	}
+	return len(p)
 }
 
 func (s *tuiSession) hasExited() bool {
@@ -311,14 +336,69 @@ func (s *tuiSession) text() string {
 	return screenText(s.screen.String())
 }
 
-// hangUp ends a program left running, the way closing a terminal window would: SIGHUP
-// to its process group, then SIGKILL if it has not exited within a second.
-func hangUp(pgid int, exited <-chan struct{}) {
-	syscall.Kill(-pgid, syscall.SIGHUP)
+// startInTerminal starts cmd as the leader of a new session whose controlling terminal
+// is a new pseudo-terminal of cols by rows. It returns the terminal's controlling side
+// and the name of the program's side, such as /dev/ttys004.
+func startInTerminal(cmd *exec.Cmd, cols, rows int) (*os.File, string, error) {
+	terminal, tty, err := pty.Open()
+	if err != nil {
+		return nil, "", err
+	}
+	defer tty.Close()
+	if err := pty.Setsize(terminal, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+		terminal.Close()
+		return nil, "", err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	if err := cmd.Start(); err != nil {
+		terminal.Close()
+		return nil, "", err
+	}
+	return terminal, tty.Name(), nil
+}
+
+// endSession ends whatever still runs on the terminal, the way closing a terminal
+// window would: SIGHUP to every process group on it, then SIGKILL to the groups left
+// after a second. A job-control shell (bash -i) puts each background job in a group of
+// its own, so the group leader leads is not enough. The others are found by the
+// terminal they are attached to, before anything is signalled, since a job loses its
+// terminal once the shell leading the session exits.
+func endSession(leader int, tty string, exited <-chan struct{}) {
+	groups := terminalGroups(leader, tty)
+	alive := func(pgid int) bool {
+		err := syscall.Kill(-pgid, 0)
+		return err == nil || errors.Is(err, syscall.EPERM)
+	}
+	for _, pgid := range groups {
+		if alive(pgid) {
+			syscall.Kill(-pgid, syscall.SIGHUP)
+		}
+	}
+	left := waitForGroups(groups, alive, time.Second)
+	for _, pgid := range left {
+		syscall.Kill(-pgid, syscall.SIGKILL)
+	}
 	select {
 	case <-exited:
 	case <-time.After(time.Second):
-		syscall.Kill(-pgid, syscall.SIGKILL)
-		<-exited
 	}
+}
+
+// terminalGroups lists the process groups attached to the terminal named tty, leader's
+// first. Without ps (or a ps without -t), it is leader's alone.
+func terminalGroups(leader int, tty string) []int {
+	groups := []int{leader}
+	out, err := exec.Command("ps", "-t", strings.TrimPrefix(tty, "/dev/"), "-o", "pgid=").Output()
+	if err != nil {
+		return groups
+	}
+	for _, field := range strings.Fields(string(out)) {
+		pgid, err := strconv.Atoi(field)
+		if err == nil && pgid > 1 && !slices.Contains(groups, pgid) {
+			groups = append(groups, pgid)
+		}
+	}
+	return groups
 }
