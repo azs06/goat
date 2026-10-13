@@ -47,6 +47,23 @@ func TestReadOutputReadsAPartAtATime(t *testing.T) {
 	}
 }
 
+func TestReadOutputCapsItsLines(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 2000; i++ {
+		lines = append(lines, fmt.Sprintf("%d", i))
+	}
+	source := func(int) (string, string, error) { return "Bash(seq)", strings.Join(lines, "\n"), nil }
+	out, err := readOutput(t, source, `{"output": 1, "limit": 1000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(out, "\n")
+	want := fmt.Sprintf("(more follows; continue with offset %d)", ReadOutputMaxLines+1)
+	if len(got) != ReadOutputMaxLines+2 || got[len(got)-2] != fmt.Sprint(ReadOutputMaxLines) || got[len(got)-1] != want {
+		t.Fatalf("expected %d lines ending at line %d, got %d lines ending %q", ReadOutputMaxLines, ReadOutputMaxLines, len(got)-2, got[len(got)-2:])
+	}
+}
+
 func TestReadOutputStaysWithinItsBudget(t *testing.T) {
 	long := strings.Repeat("x", 5000)
 	source := func(int) (string, string, error) {

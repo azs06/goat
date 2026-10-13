@@ -19,6 +19,12 @@ const readOutputCharBudget = 12000
 // readOutputDefaultLines is how many lines read_output returns without a limit.
 const readOutputDefaultLines = 300
 
+// ReadOutputMaxLines is the most lines one read_output result holds, whatever limit the
+// model asks for. With the header and the "more follows" line it stays under the line
+// budget the model's tool results are cut to (400, in agent.go), so a part is never cut
+// again and the offset it suggests never skips lines.
+const ReadOutputMaxLines = 390
+
 // ShortenedNote ends a tool result goat cut down for the model, telling it how to read
 // the rest. n is the output's number for read_output.
 func ShortenedNote(n int) string {
@@ -54,6 +60,7 @@ func runReadOutput(_ context.Context, raw string, opts Options) (string, error) 
 	if limit <= 0 {
 		limit = readOutputDefaultLines
 	}
+	limit = min(limit, ReadOutputMaxLines)
 
 	// Stop early rather than overrun the budget; the model asks for the next part.
 	var b strings.Builder

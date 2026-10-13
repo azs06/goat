@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -52,6 +53,26 @@ func TestModelReadsTheRestOfAShortenedOutput(t *testing.T) {
 	}
 	if strings.Contains(sent[2], "line-127") || strings.Contains(sent[2], "shows all of it") {
 		t.Errorf("expected only the requested lines and no second note:\n%s", sent[2])
+	}
+}
+
+// A part of any size the model asks for reaches it whole, so the offset it suggests
+// continues exactly after the lines the model saw.
+func TestReadOutputPartsAreNeverShortenedAgain(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 5000; i++ {
+		lines = append(lines, fmt.Sprintf("%d", i))
+	}
+	source := func(int) (string, string, error) { return "Bash(seq)", strings.Join(lines, "\n"), nil }
+	out, err := tools.Execute(context.Background(), provider.ToolCall{Name: "read_output", Arguments: `{"output": 1, "limit": 5000}`}, tools.Options{Outputs: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown := prepareToolOutputForModel("read_output", out); shown != out {
+		t.Fatalf("a read_output part was shortened for the model: %d lines, %d chars", strings.Count(out, "\n")+1, len(out))
+	}
+	if tools.ReadOutputMaxLines+2 > maxToolOutputLinesForModel {
+		t.Fatalf("ReadOutputMaxLines (%d) plus its header and footer exceeds the model's line budget (%d)", tools.ReadOutputMaxLines, maxToolOutputLinesForModel)
 	}
 }
 
