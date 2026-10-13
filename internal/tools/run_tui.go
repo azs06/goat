@@ -16,7 +16,9 @@ import (
 const RunTUI = "run_tui"
 
 func init() {
-	toolHandlers[RunTUI] = runTUI
+	if workspace.TUIAvailable {
+		toolHandlers[RunTUI] = runTUI
+	}
 }
 
 func runTUISpec() provider.ToolSpec {
