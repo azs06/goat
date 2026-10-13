@@ -67,14 +67,16 @@ func runReadOutput(_ context.Context, raw string, opts Options) (string, error) 
 	last := first - 1
 	for last < len(lines) && last-first+1 < limit {
 		line := lines[last]
-		if b.Len() > 0 && b.Len()+len(line)+1 > readOutputCharBudget {
-			break
-		}
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
 		if len(line) > readOutputCharBudget {
 			line = line[:readOutputCharBudget] + fmt.Sprintf(" [... line cut after %d bytes ...]", readOutputCharBudget)
+		}
+		// Count lines, not bytes, to know whether one came before: a part may start
+		// with empty lines.
+		if last >= first {
+			if b.Len()+len(line)+1 > readOutputCharBudget {
+				break
+			}
+			b.WriteByte('\n')
 		}
 		b.WriteString(line)
 		last++

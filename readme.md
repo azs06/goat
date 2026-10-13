@@ -398,8 +398,10 @@ goat stops and asks you to send another message to continue.
 The model gets each tool result cut to about 6,000 characters and 120 lines for
 `run_bash`, and 16,000 characters and 400 lines for the others, keeping the start and the
 end. A result that was cut ends with a note giving its number, and `read_output` reads the
-rest from goat's history, the same record `/output` shows. The history keeps about the first and
-last 16,000 characters of each output. After changing code, the model is asked to run the
+rest from goat's history, the same record `/output` shows. Its numbers count every tool
+output in the workspace's history, so a note still works after the conversation is
+compacted; `/output N` counts back from the latest instead. The history keeps about the
+first and last 16,000 characters of each output. After changing code, the model is asked to run the
 project's build and tests, or the checks its instructions name, and to show the command
 and its result before saying the work is done.
 

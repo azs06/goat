@@ -98,3 +98,23 @@ func TestRunBashTakesItsOwnTimeout(t *testing.T) {
 		t.Fatalf("got %q %v", out, err)
 	}
 }
+
+// A part that starts with empty lines keeps them, so its lines match the header's
+// numbers and the offsets the model continues from.
+func TestReadOutputKeepsLeadingEmptyLines(t *testing.T) {
+	source := func(int) (string, string, error) { return "Bash(x)", "\n\nvalue", nil }
+	out, err := readOutput(t, source, `{"output": 1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Output 1, Bash(x) (lines 1-3 of 3):\n\n\nvalue"; out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+	out, err = readOutput(t, source, `{"output": 1, "offset": 2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Output 1, Bash(x) (lines 2-3 of 3):\n\nvalue"; out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}

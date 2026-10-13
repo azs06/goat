@@ -283,7 +283,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: conversationToolOutput}
+		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
 		var nested *nestedRenderer
 		if toolCall.Name == tools.RunCode {
 			nested = &nestedRenderer{}
