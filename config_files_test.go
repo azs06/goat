@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -254,7 +255,8 @@ func TestAuthFileWarnsAboutUnknownProvidersAndOpenPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(warnings, "\n")
-	if !strings.Contains(joined, "open to other users") || !strings.Contains(joined, `the name "gone" is not a provider`) || strings.Contains(joined, "SECRET") {
+	// File modes mean nothing on Windows, so there it has only the name to warn about.
+	if strings.Contains(joined, "open to other users") == (runtime.GOOS == "windows") || !strings.Contains(joined, `the name "gone" is not a provider`) || strings.Contains(joined, "SECRET") {
 		t.Fatalf("got %q", warnings)
 	}
 }

@@ -23,12 +23,13 @@ func TestMainProcess(t *testing.T) {
 }
 
 // runGoat runs main in a child process in workspace, feeding it stdin, and returns its
-// stdout, stderr and exit code.
+// stdout, stderr and exit code. The workspace is its home directory: HOME, and
+// USERPROFILE on Windows.
 func runGoat(t *testing.T, workspace, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestMainProcess$")
 	cmd.Dir = workspace
-	cmd.Env = append(cleanGoatEnv(), "GOAT_TEST_MAIN=1", "GOAT_TEST_ARGS="+strings.Join(args, " "), "HOME="+workspace, "XDG_CONFIG_HOME="+workspace+"/config", "XDG_STATE_HOME="+workspace+"/state")
+	cmd.Env = append(cleanGoatEnv(), "GOAT_TEST_MAIN=1", "GOAT_TEST_ARGS="+strings.Join(args, " "), "HOME="+workspace, "USERPROFILE="+workspace, "XDG_CONFIG_HOME="+workspace+"/config", "XDG_STATE_HOME="+workspace+"/state")
 	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr strings.Builder

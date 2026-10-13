@@ -134,14 +134,15 @@ func TestEnvFilesWithoutFiles(t *testing.T) {
 }
 
 func TestGoatConfigDir(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/cfg")
-	if dir := goatConfigDir(); dir != filepath.Join("/cfg", "goat") {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if dir := goatConfigDir(); dir != filepath.Join(cfg, "goat") {
 		t.Errorf("got %q", dir)
 	}
-	if path := globalEnvPath(); path != filepath.Join("/cfg", "goat", ".env") {
+	if path := globalEnvPath(); path != filepath.Join(cfg, "goat", ".env") {
 		t.Errorf("got %q", path)
 	}
-	if path := userPricesPath(); path != filepath.Join("/cfg", "goat", "prices.json") {
+	if path := userPricesPath(); path != filepath.Join(cfg, "goat", "prices.json") {
 		t.Errorf("got %q", path)
 	}
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -206,7 +207,7 @@ func TestProcessSendsKeysOnlyWhereTheGlobalFileSays(t *testing.T) {
 // the workspace.
 func runGoatWithHome(t *testing.T, workDir, home, stdin string) (string, string, int) {
 	t.Helper()
-	return runGoat(t, workDir, stdin, []string{"HOME=" + home, "XDG_CONFIG_HOME=" + filepath.Join(home, "config")})
+	return runGoat(t, workDir, stdin, []string{"HOME=" + home, "USERPROFILE=" + home, "XDG_CONFIG_HOME=" + filepath.Join(home, "config")})
 }
 
 func TestEnvFilesKeepAShellCredential(t *testing.T) {
@@ -292,6 +293,9 @@ func TestSharedFileWarningQuotesThePath(t *testing.T) {
 }
 
 func TestProcessReadsDisplaySettingsFromTheGlobalEnvFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("goat never styles output on Windows")
+	}
 	workDir := t.TempDir()
 	config := filepath.Join(workDir, "config", "goat")
 	os.MkdirAll(config, 0o700)

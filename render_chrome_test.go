@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ func TestShortenHome(t *testing.T) {
 		{"/tmp", "", "/tmp"},
 	}
 	for _, tc := range cases {
+		tc.path, tc.home, tc.want = filepath.FromSlash(tc.path), filepath.FromSlash(tc.home), filepath.FromSlash(tc.want)
 		if got := shortenHome(tc.path, tc.home); got != tc.want {
 			t.Errorf("shortenHome(%q, %q) = %q, want %q", tc.path, tc.home, got, tc.want)
 		}

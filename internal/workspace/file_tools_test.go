@@ -399,14 +399,18 @@ func TestRunBashCommandUsesRelativeWorkdir(t *testing.T) {
 	if err := os.Mkdir(subdir, 0755); err != nil {
 		t.Fatalf("create subdir: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(subdir, "marker.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
 
-	output, err := RunBash(context.Background(), "pwd", "nested")
+	// ls rather than pwd: Git Bash on Windows prints its own spelling of the path.
+	output, err := RunBash(context.Background(), "ls", "nested")
 	if err != nil {
 		t.Fatalf("run bash command: %v", err)
 	}
 
-	if !strings.Contains(output, filepath.Join(root, "nested")) {
-		t.Fatalf("expected output to contain resolved workdir, got %q", output)
+	if !strings.Contains(output, "marker.txt") {
+		t.Fatalf("expected the command to run in the resolved workdir, got %q", output)
 	}
 }
 

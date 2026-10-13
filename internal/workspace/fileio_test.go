@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 	info, _ := os.Stat(path)
 	data, _ := os.ReadFile(path)
-	if string(data) != "new" || info.Mode().Perm() != 0o755 {
+	if string(data) != "new" || runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 		t.Fatalf("got %q with mode %v", data, info.Mode().Perm())
 	}
 
