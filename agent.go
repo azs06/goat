@@ -395,13 +395,10 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		UserText:     prompt,
 		UserImages:   opts.images,
 	}
-	if !opts.vision {
-		// New images are not sent, and the ones the conversation holds from an earlier
-		// model go as a note; the stored transcript keeps them.
-		req.ToolResults = withoutImages(req.ToolResults)
-		req.UserImages = nil
-		req.TextOnly = true
-	}
+	// A model that cannot see gets a note in each image's place. Only the request
+	// changes: the stored transcript and the results still owed keep their images, so
+	// they go again after a switch back to a model that sees.
+	req.TextOnly = !opts.vision
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
@@ -420,7 +417,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 		if err != nil {
 			recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: req.Conversation.ResponseID, Status: "error", Provider: providerName})
-			if isContextOverflowError(err) {
+			if isContextOverflowError(err) || provider.IsRequestTooLarge(err) {
 				err = fmt.Errorf("%w (%v)", errContextExceeded, shortError(err))
 			}
 			return conversationState{conversation: req.Conversation, pendingToolResults: req.ToolResults}, err
@@ -514,20 +511,6 @@ func resultImages(results []provider.ToolResult) []provider.Image {
 		all = append(all, result.Images...)
 	}
 	return all
-}
-
-// withoutImages drops the images of results owed to a model that cannot see them, as
-// after a /model switch.
-func withoutImages(results []provider.ToolResult) []provider.ToolResult {
-	if len(resultImages(results)) == 0 {
-		return results
-	}
-	stripped := make([]provider.ToolResult, len(results))
-	for i, result := range results {
-		result.Images = nil
-		stripped[i] = result
-	}
-	return stripped
 }
 
 func detailSuffix(detail string) string {

@@ -627,7 +627,7 @@ func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(s
 		}
 		sent = append(append([]json.RawMessage(nil), messages[:len(messages)-1]...), marked)
 	}
-	params.Messages = replayMessages(expandImageRefs(sent, req.TextOnly))
+	params.Messages = replayMessages(expandImageRefs(sent, req.TextOnly, anthropicImageBudget))
 
 	streamed, printed, err := p.streamWithFallbackRetry(ctx, params, onText)
 	if err != nil {

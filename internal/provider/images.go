@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/openai/openai-go/v3"
 )
 
 // Image is a picture for the model: a file in goat's state directory, already scaled to
@@ -86,27 +90,6 @@ func (img Image) storedPath() (string, error) {
 	return path, nil
 }
 
-// load reads the image's data as base64, only from goat's image store.
-func (img Image) load() (string, error) {
-	path, err := img.storedPath()
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(data), nil
-}
-
-func (img Image) dataURL() (string, error) {
-	encoded, err := img.load()
-	if err != nil {
-		return "", err
-	}
-	return "data:" + img.MediaType + ";base64," + encoded, nil
-}
-
 func missingImageText(path string) string {
 	return fmt.Sprintf("[image %s is no longer available]", filepath.Base(path))
 }
@@ -114,16 +97,99 @@ func missingImageText(path string) string {
 // textOnlyImageText stands in for an image when the model cannot see images.
 const textOnlyImageText = "[an image was here; the current model cannot see images]"
 
+// leftOutImageText stands in for an older image that did not fit a request's budget.
+const leftOutImageText = "[an earlier image was left out to keep the request small]"
+
+// imageBudget bounds the images one request carries, by their base64 size and their
+// number. Each image fits the APIs by itself, but enough of them can pass a request
+// size limit, which the server answers with an error the conversation cannot get past:
+// every later request would carry them again. The newest images go; older ones become
+// a note. Twenty images also stay under Anthropic's lower size limit for requests with
+// more than twenty.
+type imageBudget struct {
+	bytes int
+	count int
+}
+
+var (
+	// Anthropic takes requests up to 32 MB; DeepSeek's Messages endpoint 48 MiB.
+	anthropicImageBudget = imageBudget{bytes: 20 << 20, count: 20}
+	// The Responses API takes up to 50 MB of images in one request.
+	responsesImageBudget = imageBudget{bytes: 20 << 20, count: 20}
+	// Chat Completions servers vary, and most document no limit.
+	chatImageBudget = imageBudget{bytes: 10 << 20, count: 20}
+)
+
+// plannedImage is what goes in one image's place in a request: its base64 data, or a
+// note when it cannot or need not go.
+type plannedImage struct {
+	encoded string
+	note    string
+}
+
+// planImages decides, newest first, which of a request's images go, reading them only
+// from goat's image store. With textOnly set none go. An image goat cannot read gets a
+// note, and once the budget is spent every older image gets one too.
+func planImages(images []Image, textOnly bool, budget imageBudget) []plannedImage {
+	plans := make([]plannedImage, len(images))
+	count, used, full := 0, 0, false
+	for i := len(images) - 1; i >= 0; i-- {
+		img := images[i]
+		if textOnly {
+			plans[i].note = textOnlyImageText
+			continue
+		}
+		path, err := img.storedPath()
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(path)
+		}
+		if err != nil {
+			plans[i].note = missingImageText(img.Path)
+			continue
+		}
+		size := base64.StdEncoding.EncodedLen(int(info.Size()))
+		if full || count >= budget.count || used+size > budget.bytes {
+			full = true
+			plans[i].note = leftOutImageText
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			plans[i].note = missingImageText(img.Path)
+			continue
+		}
+		count++
+		used += size
+		plans[i].encoded = base64.StdEncoding.EncodeToString(data)
+	}
+	return plans
+}
+
 // expandImageRefs puts the data of the images a stored transcript refers to into the
 // messages sent, but only where goat itself puts images: the content of a user message
 // and, in Anthropic's format, the content of a tool_result inside one. Anything else
 // that looks like an image, such as an object inside a model's tool call, is sent as
 // stored and never read. Anthropic image blocks take the base64 data; Chat Completions
-// image_url parts take a data URL. An image goat cannot send, or any image when
-// textOnly is set, becomes a note in its place. Messages without images are sent byte
-// for byte as stored.
-func expandImageRefs(messages []json.RawMessage, textOnly bool) []json.RawMessage {
-	var out []json.RawMessage
+// image_url parts take a data URL. The newest images go while they fit the budget; an
+// image goat cannot send, an older one past the budget, or any image when textOnly is
+// set becomes a note in its place. Messages without images are sent byte for byte as
+// stored.
+func expandImageRefs(messages []json.RawMessage, textOnly bool, budget imageBudget) []json.RawMessage {
+	// slot is where one image block sits: blocks[index].
+	type slot struct {
+		blocks []any
+		index  int
+	}
+	var slots []slot
+	var images []Image
+	collect := func(blocks []any, index int) {
+		if img, ok := imageRefBlock(blocks[index]); ok {
+			slots = append(slots, slot{blocks, index})
+			images = append(images, img)
+		}
+	}
+	decoded := map[int]map[string]any{}
 	for i, message := range messages {
 		if !bytes.Contains(message, []byte(imageRefPrefix)) {
 			continue
@@ -138,80 +204,78 @@ func expandImageRefs(messages []json.RawMessage, textOnly bool) []json.RawMessag
 		if !ok {
 			continue
 		}
+		decoded[i] = value
+		// In the order the model reads them, so the budget keeps the newest.
 		for j, block := range blocks {
-			blocks[j] = expandImageBlock(block, textOnly)
-			if result, ok := blocks[j].(map[string]any); ok && result["type"] == "tool_result" {
+			if result, ok := block.(map[string]any); ok && result["type"] == "tool_result" {
 				if inner, ok := result["content"].([]any); ok {
 					for k := range inner {
-						inner[k] = expandImageBlock(inner[k], textOnly)
+						collect(inner, k)
 					}
 				}
+				continue
 			}
+			collect(blocks, j)
 		}
-		expanded, err := json.Marshal(value)
-		if err != nil {
+	}
+	if len(decoded) == 0 {
+		return messages
+	}
+
+	for k, plan := range planImages(images, textOnly, budget) {
+		s := slots[k]
+		if plan.note != "" {
+			s.blocks[s.index] = map[string]any{"type": "text", "text": plan.note}
 			continue
 		}
-		if out == nil {
-			out = append([]json.RawMessage(nil), messages...)
-		}
-		out[i] = expanded
+		fillImageBlock(s.blocks[s.index].(map[string]any), images[k], plan.encoded)
 	}
-	if out == nil {
-		return messages
+
+	out := append([]json.RawMessage(nil), messages...)
+	for i, value := range decoded {
+		if expanded, err := json.Marshal(value); err == nil {
+			out[i] = expanded
+		}
 	}
 	return out
 }
 
-// expandImageBlock fills in one content block if it is an image that refers to a stored
-// file, or, when textOnly is set, replaces it with a note; any other block comes back
-// as it was.
-func expandImageBlock(block any, textOnly bool) any {
+// imageRefBlock reports a content block that is an image referring to a stored file:
+// an Anthropic image block or a Chat Completions image_url part.
+func imageRefBlock(block any) (Image, bool) {
 	v, ok := block.(map[string]any)
 	if !ok {
-		return block
+		return Image{}, false
 	}
+	var ref string
 	switch v["type"] {
 	case "image":
 		// {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ref}}
-		source, ok := v["source"].(map[string]any)
-		if !ok {
-			return block
-		}
-		ref, ok := source["data"].(string)
-		img, isRef := parseImageRef(ref)
-		if !ok || !isRef {
-			return block
-		}
-		if textOnly {
-			return map[string]any{"type": "text", "text": textOnlyImageText}
-		}
-		encoded, err := img.load()
-		if err != nil {
-			return map[string]any{"type": "text", "text": missingImageText(img.Path)}
-		}
-		source["data"] = encoded
+		source, _ := v["source"].(map[string]any)
+		ref, _ = source["data"].(string)
 	case "image_url":
 		// {"type": "image_url", "image_url": {"url": ref}}
-		part, ok := v["image_url"].(map[string]any)
-		if !ok {
-			return block
-		}
-		ref, ok := part["url"].(string)
-		img, isRef := parseImageRef(ref)
-		if !ok || !isRef {
-			return block
-		}
-		if textOnly {
-			return map[string]any{"type": "text", "text": textOnlyImageText}
-		}
-		url, err := img.dataURL()
-		if err != nil {
-			return map[string]any{"type": "text", "text": missingImageText(img.Path)}
-		}
-		part["url"] = url
+		part, _ := v["image_url"].(map[string]any)
+		ref, _ = part["url"].(string)
+	default:
+		return Image{}, false
 	}
-	return v
+	return parseImageRef(ref)
+}
+
+// fillImageBlock puts an image's base64 data into its block in place of the reference.
+func fillImageBlock(block map[string]any, img Image, encoded string) {
+	switch block["type"] {
+	case "image":
+		block["source"].(map[string]any)["data"] = encoded
+	case "image_url":
+		block["image_url"].(map[string]any)["url"] = dataURL(img, encoded)
+	}
+}
+
+// dataURL is an image's base64 data as a data URL.
+func dataURL(img Image, encoded string) string {
+	return "data:" + img.MediaType + ";base64," + encoded
 }
 
 // CountImageRefs counts the images a stored conversation holds, for size estimates.
@@ -230,4 +294,18 @@ func toolResultImages(results []ToolResult) []Image {
 		all = append(all, result.Images...)
 	}
 	return all
+}
+
+// IsRequestTooLarge reports a server refusing a request for its size (HTTP 413), as one
+// carrying many images can be. A compacted conversation carries none of them.
+func IsRequestTooLarge(err error) bool {
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		return anthropicErr.StatusCode == http.StatusRequestEntityTooLarge
+	}
+	var openaiErr *openai.Error
+	if errors.As(err, &openaiErr) {
+		return openaiErr.StatusCode == http.StatusRequestEntityTooLarge
+	}
+	return false
 }

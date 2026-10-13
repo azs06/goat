@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -64,7 +71,7 @@ func TestExpandImageRefsFillsInTheData(t *testing.T) {
 	anthropicMessage, _ := newAnthropicUserMessage(userMessageContent{text: "look", userImages: []Image{img, gone}}, nil)
 	chat, _ := chatUserMessage("look", []Image{img}, nil)
 
-	out := expandImageRefs([]json.RawMessage{plain, anthropicMessage, chat}, false)
+	out := expandImageRefs([]json.RawMessage{plain, anthropicMessage, chat}, false, anthropicImageBudget)
 	if string(out[0]) != string(plain) {
 		t.Errorf("a message without images changed: %s", out[0])
 	}
@@ -279,7 +286,7 @@ func TestExpandImageRefsReadsOnlyGoatsImages(t *testing.T) {
 			map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageRefPrefix + "image/png;" + img.Path}},
 		}}), imageRefPrefix},
 	} {
-		out := string(expandImageRefs([]json.RawMessage{test.message}, false)[0])
+		out := string(expandImageRefs([]json.RawMessage{test.message}, false, anthropicImageBudget)[0])
 		if strings.Contains(out, hidden) || strings.Contains(out, testPNGBase64) || !strings.Contains(out, test.sent) {
 			t.Errorf("%s: sent %s", name, out)
 		}
@@ -290,13 +297,13 @@ func TestExpandImageRefsReadsOnlyGoatsImages(t *testing.T) {
 		map[string]any{"type": "tool_result", "tool_use_id": "t", "content": []any{block(img.Path, "image/png")}},
 		block(img.Path, "image/png"),
 	}})
-	if out := string(expandImageRefs([]json.RawMessage{own}, false)[0]); strings.Count(out, testPNGBase64) != 2 {
+	if out := string(expandImageRefs([]json.RawMessage{own}, false, anthropicImageBudget)[0]); strings.Count(out, testPNGBase64) != 2 {
 		t.Errorf("goat's own images were not filled in: %s", out)
 	}
 
 	// Without a store nothing is read.
 	ImageStore = nil
-	if out := string(expandImageRefs([]json.RawMessage{own}, false)[0]); strings.Contains(out, testPNGBase64) {
+	if out := string(expandImageRefs([]json.RawMessage{own}, false, anthropicImageBudget)[0]); strings.Contains(out, testPNGBase64) {
 		t.Errorf("an image was read with no store set: %s", out)
 	}
 }
@@ -314,7 +321,7 @@ func TestExpandImageRefsSendsNotesToAModelThatCannotSee(t *testing.T) {
 	anthropicMessage, _ := newAnthropicUserMessage(content, nil)
 	chat, _ := chatUserMessage("look", []Image{img}, nil)
 
-	out := expandImageRefs([]json.RawMessage{anthropicMessage, chat, inResults}, true)
+	out := expandImageRefs([]json.RawMessage{anthropicMessage, chat, inResults}, true, anthropicImageBudget)
 	for i, message := range out {
 		text := string(message)
 		if strings.Contains(text, testPNGBase64) || strings.Contains(text, `"type":"image"`) || strings.Contains(text, `"type":"image_url"`) {
@@ -344,5 +351,118 @@ func TestExpandImageRefsSendsNotesToAModelThatCannotSee(t *testing.T) {
 		if strings.Count(string(out[i]), textOnlyImageText) != 2 {
 			t.Errorf("both the tool's and the prompt's image need a note: %s", out[i])
 		}
+	}
+}
+
+// storedImages writes n distinct images to the image store, oldest first, and returns
+// them with their base64 data.
+func storedImages(t *testing.T, n int) ([]Image, []string) {
+	t.Helper()
+	dir := useImageStore(t)
+	var images []Image
+	var encoded []string
+	for i := range n {
+		data := append(append([]byte(nil), testPNG...), fmt.Sprintf("image %d", i)...)
+		path := filepath.Join(dir, fmt.Sprintf("shot-%d.png", i))
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		images = append(images, Image{Path: path, MediaType: "image/png"})
+		encoded = append(encoded, base64.StdEncoding.EncodeToString(data))
+	}
+	return images, encoded
+}
+
+func TestExpandImageRefsKeepsTheNewestImagesWithinTheBudget(t *testing.T) {
+	images, encoded := storedImages(t, 5)
+	// One image per message, as a long session of screenshots would leave them: three
+	// in Anthropic's shape (one inside a tool_result), then two in Chat Completions'.
+	first, _ := newAnthropicUserMessage(userMessageContent{text: "a", userImages: images[:1]}, nil)
+	second, _ := newAnthropicUserMessage(userMessageContent{results: []ToolResult{{CallID: "toolu_1", Output: "b", Images: images[1:2]}}, toolImagesInResults: true}, nil)
+	third, _ := newAnthropicUserMessage(userMessageContent{text: "c", userImages: images[2:3]}, nil)
+	fourth, _ := chatUserMessage("d", nil, images[3:4])
+	fifth, _ := chatUserMessage("e", nil, images[4:5])
+	messages := []json.RawMessage{first, second, third, fourth, fifth}
+
+	size := base64.StdEncoding.EncodedLen(len(testPNG) + len("image 0"))
+	for _, test := range []struct {
+		name   string
+		budget imageBudget
+	}{
+		{"by size", imageBudget{bytes: 3*size + size/2, count: 20}},
+		{"by count", imageBudget{bytes: 1 << 30, count: 3}},
+	} {
+		out := expandImageRefs(messages, false, test.budget)
+		all := ""
+		for _, message := range out {
+			all += string(message)
+		}
+		for i, data := range encoded {
+			kept := strings.Contains(all, data)
+			if want := i >= 2; kept != want {
+				t.Errorf("%s: image %d sent = %v, want %v", test.name, i, kept, want)
+			}
+		}
+		if strings.Count(all, leftOutImageText) != 2 {
+			t.Errorf("%s: the two oldest images need a note:\n%s", test.name, all)
+		}
+		if strings.Contains(all, imageRefPrefix) {
+			t.Errorf("%s: a reference was sent: %s", test.name, all)
+		}
+	}
+	// The stored messages keep every reference.
+	for i, message := range messages {
+		if !strings.Contains(string(message), imageRefPrefix) {
+			t.Errorf("stored message %d lost its image: %s", i, message)
+		}
+	}
+}
+
+func TestOpenAIInputKeepsTheNewestImagesWithinTheBudget(t *testing.T) {
+	images, encoded := storedImages(t, 3)
+	previous := responsesImageBudget
+	responsesImageBudget = imageBudget{bytes: 1 << 30, count: 2}
+	t.Cleanup(func() { responsesImageBudget = previous })
+
+	req := Request{
+		ToolResults: []ToolResult{{CallID: "call_a", Output: "shots", Images: images[:2]}},
+		UserText:    "and this one",
+		UserImages:  images[2:],
+	}
+	sent, _ := json.Marshal(openAIInput(req))
+	for i, data := range encoded {
+		if kept := strings.Contains(string(sent), data); kept != (i >= 1) {
+			t.Errorf("image %d sent = %v", i, kept)
+		}
+	}
+	if strings.Count(string(sent), leftOutImageText) != 1 {
+		t.Errorf("the oldest image needs a note: %s", sent)
+	}
+
+	// A model that cannot see gets notes and no images.
+	req.TextOnly = true
+	sent, _ = json.Marshal(openAIInput(req))
+	if strings.Contains(string(sent), "input_image") || strings.Count(string(sent), textOnlyImageText) != 3 {
+		t.Errorf("text-only input: %s", sent)
+	}
+}
+
+func TestIsRequestTooLarge(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		io.WriteString(w, `{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}`)
+	}))
+	t.Cleanup(server.Close)
+	p := NewAnthropicWith(true, option.WithBaseURL(server.URL), option.WithAPIKey("test-key"), option.WithMaxRetries(0))
+	_, _, err := p.Send(context.Background(), Request{Model: "claude-opus-5-5", UserText: "hi"}, nil)
+	if err == nil || !IsRequestTooLarge(err) {
+		t.Fatalf("a 413 should be recognised: %v", err)
+	}
+	if !IsRequestTooLarge(fmt.Errorf("send: %w", &openai.Error{StatusCode: http.StatusRequestEntityTooLarge})) {
+		t.Error("an OpenAI 413 should be recognised")
+	}
+	if IsRequestTooLarge(&openai.Error{StatusCode: http.StatusBadRequest}) || IsRequestTooLarge(errors.New("413 in the text alone")) {
+		t.Error("only a 413 status counts")
 	}
 }

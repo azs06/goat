@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -300,18 +301,6 @@ func TestCompactionCountsImages(t *testing.T) {
 	}
 }
 
-func TestWithoutImagesDropsThemForAModelThatCannotSee(t *testing.T) {
-	results := []provider.ToolResult{{CallID: "a", Images: []provider.Image{{Path: "x"}}}, {CallID: "b"}}
-	stripped := withoutImages(results)
-	if len(resultImages(stripped)) != 0 || len(results[0].Images) != 1 {
-		t.Error("withoutImages should copy, not change the results")
-	}
-	plain := []provider.ToolResult{{CallID: "b"}}
-	if got := withoutImages(plain); &got[0] != &plain[0] {
-		t.Error("results without images are passed through")
-	}
-}
-
 func TestStoreImageKeepsItInState(t *testing.T) {
 	chdirForTest(t, t.TempDir())
 	cfg := &config{model: provider.Model{Provider: provider.Anthropic, ID: "claude-opus-5-5"}}
@@ -466,5 +455,77 @@ func TestImagesGoAsNotesAfterSwitchingToAModelThatCannotSee(t *testing.T) {
 	}
 	if again := fake.request(3).raw; !strings.Contains(again, `"type":"image"`) || strings.Contains(again, "the current model cannot see images") {
 		t.Error("a model that sees should get the image back")
+	}
+}
+
+// Results still owed when the model changes keep their images: a model that cannot see
+// gets notes, and the images go again after a switch back to one that sees.
+func TestOwedImagesSurviveAModelThatCannotSee(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	writeTestPNG(t, filepath.Join(workDir, "shot.png"), 8, 8)
+
+	fake := newFakeAnthropic(t,
+		newSSE("msg_1").toolUse("toolu_1", "view_image", `{"path":"shot.png"}`).stop("tool_use", ""),
+		newSSE("msg_2").text("Noted.").stop("end_turn", ""),
+		newSSE("msg_3").text("I see it.").stop("end_turn", ""),
+	)
+	// The request after the tool ran fails, and so does the text-only model's first try,
+	// leaving the view_image result owed both times.
+	calls := 0
+	fake.reject = func(map[string]any) (int, string, bool) {
+		calls++
+		if calls == 2 || calls == 3 {
+			return http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"try again later"}}`, true
+		}
+		return 0, "", false
+	}
+	p := fake.provider(true)
+	conv, err := sendPromptStream(context.Background(), p, "look", conversationState{}, turnOptions{model: "claude-opus-5-5", vision: true})
+	if err == nil || len(resultImages(conv.pendingToolResults)) != 1 {
+		t.Fatalf("expected the image result to be owed: %v %+v", err, conv.pendingToolResults)
+	}
+
+	conv, err = sendPromptStream(context.Background(), p, "and now?", conv, turnOptions{model: "text-only-model"})
+	if err == nil {
+		t.Fatal("expected the scripted failure")
+	}
+	if len(resultImages(conv.pendingToolResults)) != 1 {
+		t.Fatal("a failed request to a model that cannot see dropped the owed image")
+	}
+	if sent := fake.request(2).raw; strings.Contains(sent, `"type":"image"`) || !strings.Contains(sent, "the current model cannot see images") {
+		t.Errorf("a model that cannot see was sent the image, or no note: %s", sent)
+	}
+
+	conv, err = sendPromptStream(context.Background(), p, "and now?", conv, turnOptions{model: "text-only-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent := fake.request(3).raw; strings.Contains(sent, `"type":"image"`) {
+		t.Errorf("a model that cannot see was sent the image: %s", sent)
+	}
+	if provider.CountImageRefs(conv.conversation) != 1 {
+		t.Error("the stored conversation should keep the owed image")
+	}
+
+	if _, err := sendPromptStream(context.Background(), p, "again", conv, turnOptions{model: "claude-opus-5-5", vision: true}); err != nil {
+		t.Fatal(err)
+	}
+	if again := fake.request(4).raw; !strings.Contains(again, `"type":"image"`) {
+		t.Error("back on a model that sees, the owed image should go again")
+	}
+}
+
+// A request refused for its size is handled like one over the context window, so the
+// conversation is compacted instead of failing the same way on every request.
+func TestRequestTooLargeIsTreatedAsContextExceeded(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	fake := newFakeAnthropic(t)
+	fake.reject = func(map[string]any) (int, string, bool) {
+		return http.StatusRequestEntityTooLarge, `{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}`, true
+	}
+	_, err := sendPromptStream(context.Background(), fake.provider(true), "look", conversationState{}, turnOptions{model: "claude-opus-5-5", vision: true})
+	if !errors.Is(err, errContextExceeded) {
+		t.Fatalf("got %v", err)
 	}
 }

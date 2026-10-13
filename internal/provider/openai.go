@@ -186,6 +186,15 @@ func openAIInput(req Request) responses.ResponseNewParamsInputUnion {
 		return responses.ResponseNewParamsInputUnion{OfString: openai.String(req.UserText)}
 	}
 
+	// The conversation's earlier images live on OpenAI's side; this request's own go
+	// newest first while they fit, in the order they are sent.
+	plans := planImages(append(toolResultImages(req.ToolResults), req.UserImages...), req.TextOnly, responsesImageBudget)
+	nextPlan := func() plannedImage {
+		plan := plans[0]
+		plans = plans[1:]
+		return plan
+	}
+
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(req.ToolResults)+1)
 	for _, result := range req.ToolResults {
 		output := responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(result.Output)}
@@ -193,10 +202,10 @@ func openAIInput(req Request) responses.ResponseNewParamsInputUnion {
 			// The Responses API takes a tool's images in its output, after the text.
 			list := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output}}}
 			for _, img := range result.Images {
-				if url, err := img.dataURL(); err == nil {
-					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(url), Detail: responses.ResponseInputImageContentDetailAuto}})
+				if plan := nextPlan(); plan.note == "" {
+					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(dataURL(img, plan.encoded)), Detail: responses.ResponseInputImageContentDetailAuto}})
 				} else {
-					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: missingImageText(img.Path)}})
+					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: plan.note}})
 				}
 			}
 			output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: list}
@@ -214,10 +223,10 @@ func openAIInput(req Request) responses.ResponseNewParamsInputUnion {
 			content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: req.UserText}})
 		}
 		for _, img := range req.UserImages {
-			if url, err := img.dataURL(); err == nil {
-				content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(url), Detail: responses.ResponseInputImageDetailAuto}})
+			if plan := nextPlan(); plan.note == "" {
+				content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(dataURL(img, plan.encoded)), Detail: responses.ResponseInputImageDetailAuto}})
 			} else {
-				content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: missingImageText(img.Path)}})
+				content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: plan.note}})
 			}
 		}
 		items = append(items, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))

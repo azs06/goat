@@ -435,6 +435,12 @@ inside the tool result; Chat Completions servers and DeepSeek take images only i
 messages, so there it follows the tool results in one. A summary from compaction keeps
 only the fact that images were there.
 
+One request carries at most 20 images and about 20 MB of them (10 MB to Chat
+Completions servers): the newest go, and older ones are replaced with a note, so a long
+session of screenshots never grows past what the API accepts. If a server still refuses
+a request as too large, goat compacts the conversation and retries, as it does when the
+context window is full.
+
 ### Checking a web page
 
 goat has no browser of its own, but a browser command line run through `run_bash` lets
