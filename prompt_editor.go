@@ -628,7 +628,9 @@ func editPrompt(ctx context.Context, input *lineReader, history []string, footer
 		case woke && interrupt():
 			err = errUIEvent
 		case woke:
-			footer = events.footer()
+			if events.footer != nil {
+				footer = events.footer()
+			}
 			fmt.Print(editor.render(footer, width))
 			continue
 		default:
