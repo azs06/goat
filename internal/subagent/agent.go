@@ -181,6 +181,10 @@ func (a *Agent) TakeInbox() []string {
 	for _, msg := range a.inbox {
 		texts = append(texts, msg.text)
 	}
+	// The model's message steers this turn, so its report is owed to the model.
+	if hasModelMessage(a.inbox) {
+		a.owed = true
+	}
 	a.inbox = nil
 	return texts
 }

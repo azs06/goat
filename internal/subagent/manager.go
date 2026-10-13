@@ -109,8 +109,9 @@ func (c Config) withDefaults() Config {
 const maxNotices = 32
 
 // noticeCap bounds the notices nobody has taken yet. Main takes them after every tool
-// round and between turns, and in between an agent adds at most two (a turn ending, and
-// one its queued message starts when a slot frees), while at most MaxLive agents plus
+// round and between turns, and in between an agent adds a few (a turn ending, one a
+// message that raced its end continues, and one its queued message starts when a slot
+// frees), while at most MaxLive agents plus
 // the MaxRunning just spawned are live. The cap stays above that, so a report is never
 // dropped, which would also leave its agent free to be evicted unseen; it only guards
 // against a bug piling notices up.
@@ -124,6 +125,9 @@ func (c Config) noticeCap() int {
 type Notice struct {
 	AgentID, ParentConv, Text string
 	ForModel                  bool
+	// turn is the agent's turn count when the report was made, so delivering the
+	// agent's latest report drops its notice and leaves an earlier one still owed.
+	turn int
 }
 
 // Manager owns every subagent and the goroutines their turns run on.
@@ -324,6 +328,12 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	a.turns++
 	a.updated = time.Now()
 	if mayContinue && len(a.inbox) > 0 && ctx.Err() == nil && !m.closed {
+		// The report the model is owed is given now: the turn the inbox starts makes a
+		// new one, and only a message from the model makes that one owed too.
+		if a.owed {
+			m.addNoticeLocked(a, true)
+		}
+		a.owed = hasModelMessage(a.inbox)
 		next := joinMessages(a.inbox)
 		a.echoUserLocked(a.inbox)
 		a.inbox = nil
@@ -371,6 +381,7 @@ func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {
 		ParentConv: a.ParentConv,
 		Text:       WrapReport(a.ID, a.Label, text, 0),
 		ForModel:   forModel,
+		turn:       a.turns,
 	})
 	if limit := m.cfg.noticeCap(); len(m.notices) > limit {
 		m.notices = append([]Notice(nil), m.notices[len(m.notices)-limit:]...)
@@ -515,7 +526,11 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 	}
 	a.inbox = append(a.inbox, message{text: text, fromUser: fromUser})
 	if !fromUser {
-		a.owed = true
+		// A running turn is owed to the model once it takes the message (TakeInbox);
+		// one it leaves in the inbox starts the next turn, which is owed instead.
+		if !a.state.Busy() {
+			a.owed = true
+		}
 		// The user's "always" covered the work they saw this agent asked to do, not
 		// whatever the model sends it next.
 		a.AutoApprove.Store(false)
@@ -898,28 +913,28 @@ func (m *Manager) collectLocked(targets []string) WaitResult {
 }
 
 // consumeNoticesLocked takes the reports in done as delivered: their notices are
-// dropped and a later wait says they were given already.
+// dropped and a later wait says they were given already. Only the notice of an agent's
+// latest report goes; one of an earlier turn, which the model has not seen, stays.
 func (m *Manager) consumeNoticesLocked(done []Result) {
 	if len(done) == 0 {
 		return
 	}
+	// latest is the turn of each live agent's report; -1 for a dismissed agent, all of
+	// whose notices go.
+	latest := make(map[string]int, len(done))
 	for _, r := range done {
+		latest[r.ID] = -1
 		if a, ok := m.agents[r.ID]; ok {
 			a.mu.Lock()
 			a.delivered = true
+			latest[r.ID] = a.turns
 			a.mu.Unlock()
 		}
 	}
 	kept := m.notices[:0:0]
 	for _, n := range m.notices {
-		delivered := false
-		for _, r := range done {
-			if r.ID == n.AgentID {
-				delivered = true
-				break
-			}
-		}
-		if !delivered {
+		turn, ok := latest[n.AgentID]
+		if !ok || turn >= 0 && n.turn != turn {
 			kept = append(kept, n)
 		}
 	}

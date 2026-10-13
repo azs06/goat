@@ -471,7 +471,7 @@ func (h *agentHost) Send(ctx context.Context, id, message string) (string, error
 	case delivery == subagent.Started:
 		return fmt.Sprintf("%s started a new turn in the background. Its report will be delivered to you automatically when it finishes; do not guess its results.", id), nil
 	case delivery == subagent.Steered:
-		return fmt.Sprintf("%s is running; it reads the message at its next step.", id), nil
+		return fmt.Sprintf("%s is running; it reads the message at its next step, or answers it in a turn of its own if it was already finishing. Either way you get the report of its current work too.", id), nil
 	}
 	return fmt.Sprintf("%s has the message and starts once a running agent finishes (at most %d run at once).", id, h.m.Config().MaxRunning), nil
 }
@@ -702,9 +702,17 @@ func (h *agentHost) turnNotices() string {
 // collectAgentNotices, between turns, shows the agents that finished and keeps their
 // reports for the next message.
 func collectAgentNotices(cfg *config) {
-	cfg.agentNotices = append(cfg.agentNotices, cfg.agents.takeNotices(func(line string) {
+	taken := cfg.agents.takeNotices(func(line string) {
 		fmt.Fprintln(activityOut, formatNotice(line))
-	})...)
+	})
+	if len(taken) == 0 {
+		return
+	}
+	// The reports go before the next prompt; the history keeps them too, once however
+	// often that prompt is tried, so a summary of the conversation, or its export, has
+	// what the model acted on.
+	recordHistory(historyEntry{Type: "user", Content: strings.Join(taken, "\n\n"), Provider: cfg.model.Provider})
+	cfg.agentNotices = append(cfg.agentNotices, taken...)
 }
 
 // agentNoticesNote goes before the next prompt with the reports of the background

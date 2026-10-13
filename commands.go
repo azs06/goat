@@ -612,7 +612,8 @@ func carryOverToModel(c *config, target provider.Model, next provider.Conversati
 	c.model = target
 	// The conversation goes on under a new id; its agents still report to it.
 	previousConversation := activeConversationID
-	startConversation(c, conversationState{conversation: next})
+	// Text a failed request carried goes on with the conversation, as through a compaction.
+	startConversation(c, conversationState{conversation: next, pendingText: c.conversation.pendingText})
 	c.agents.carryLineage(previousConversation)
 	recordCompactionSeed(c, next, summary)
 }
