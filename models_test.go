@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -243,7 +244,7 @@ func TestSessionRoundTripAndCorruptFile(t *testing.T) {
 	saveSession(cfg)
 
 	info, err := os.Stat(filepath.Join(statePath(t, ""), "session.json"))
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("expected a private session file, got %v (%v)", info.Mode().Perm(), err)
 	}
 	saved, err := loadSessionFile(sessionPath)

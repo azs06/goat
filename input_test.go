@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -18,14 +19,19 @@ func TestStateDirCommandsAlwaysAsk(t *testing.T) {
 }
 
 func TestConfigDirCommandsAlwaysAsk(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/srv/cfg")
+	cfg := "/srv/cfg"
+	if runtime.GOOS == "windows" {
+		cfg = `C:\srv\cfg`
+	}
+	t.Setenv("XDG_CONFIG_HOME", cfg)
 	approver := &bashApprover{autoApprove: true}
 	for _, command := range []string{
 		"cat ~/.config/goat/.env",
 		"cat $HOME/.config/goat/.env",
 		`type %USERPROFILE%\.config\goat\.env`,
 		"cat $XDG_CONFIG_HOME/goat/.env",
-		"ls /srv/cfg/goat",
+		"ls " + filepath.Join(cfg, "goat"),
+		"ls " + filepath.ToSlash(filepath.Join(cfg, "goat")),
 	} {
 		if err := approver.approve(context.Background(), command, "."); err == nil || !strings.Contains(err.Error(), "API keys") {
 			t.Errorf("%q: expected the command to need approval, got %v", command, err)

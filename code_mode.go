@@ -25,7 +25,7 @@ func commandCodeMode(ctx context.Context, c *config, args []string) error {
 		c.codeMode = !c.codeMode
 	}
 	if c.codeMode {
-		fmt.Println(formatNotice("Code mode on: goat can batch tool calls in one run_code script. ") + style.Muted.Render("/codemode again to turn it off."))
+		fmt.Println(formatNotice("Code mode on: goat can batch tool calls in one run_code script. ") + style.Muted.Render("Scripts run inside goat, and a runaway one can still crash it; goat -c continues. /codemode again to turn it off."))
 	} else {
 		fmt.Println(formatSuccess("Code mode off: goat calls tools one at a time."))
 	}

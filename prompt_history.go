@@ -62,7 +62,7 @@ func rememberPrompt(history []string, prompt string) []string {
 	if err != nil {
 		return history
 	}
-	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o700); err != nil {
 		return history
 	}
 	encoded, err := json.Marshal(prompt)

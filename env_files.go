@@ -57,7 +57,8 @@ func mentionsDir(command, workdir, dir string, needles ...string) bool {
 		lower = strings.ReplaceAll(strings.ReplaceAll(lower, "//", "/"), "/./", "/")
 	}
 	if dir != "" {
-		needles = append(needles, strings.ToLower(dir))
+		// Shells on Windows take C:/Users/... as well as C:\Users\...
+		needles = append(needles, strings.ToLower(dir), strings.ToLower(filepath.ToSlash(dir)))
 		if abs, err := filepath.Abs(workdir); err == nil {
 			if within(abs, dir) {
 				return true

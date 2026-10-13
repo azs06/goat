@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -36,8 +37,9 @@ func TestApplyThemeLoadsGoatTheme(t *testing.T) {
 
 func TestThemePathUsesXDGConfigHome(t *testing.T) {
 	t.Setenv("GOAT_THEME", "")
-	t.Setenv("XDG_CONFIG_HOME", "/cfg")
-	if path, explicit := themePath(); path != "/cfg/goat/theme.json" || explicit {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if path, explicit := themePath(); path != filepath.Join(cfg, "goat", "theme.json") || explicit {
 		t.Fatalf("themePath() = %q, %v", path, explicit)
 	}
 }
@@ -89,7 +91,7 @@ func TestThemeCommandSwitchesAndSaves(t *testing.T) {
 	if !strings.Contains(string(data), `"code_mode": true`) || !strings.Contains(string(data), `"theme": "one-dark"`) {
 		t.Fatalf("expected config.json to keep its settings and gain the theme:\n%s", data)
 	}
-	if info, _ := os.Stat(configFile); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(configFile); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("expected config.json to keep its permissions, got %v", info.Mode().Perm())
 	}
 	if _, err := applyConfig(data, "config.json"); err != nil {
@@ -284,6 +286,7 @@ func TestThemeFileUnderHomeIsSavedWithTilde(t *testing.T) {
 	isolateThemeSettings(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	file := filepath.Join(home, "dotfiles", "goat-theme.json")
 	os.MkdirAll(filepath.Dir(file), 0o700)

@@ -286,7 +286,7 @@ func createOperationSnapshot(record operationRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(resolvedSnapshotRoot, 0755); err != nil {
+	if err := os.MkdirAll(resolvedSnapshotRoot, 0700); err != nil {
 		return err
 	}
 
@@ -527,7 +527,7 @@ func saveOperationRecords(records []operationRecord) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0700); err != nil {
 		return err
 	}
 
@@ -594,7 +594,7 @@ func keepOperationSnapshot(record operationRecord) string {
 	if err != nil {
 		return "(unknown)"
 	}
-	_ = os.WriteFile(filepath.Join(filepath.Dir(resolvedSnapshotRoot), keepSnapshotMarker), nil, 0644)
+	_ = os.WriteFile(filepath.Join(filepath.Dir(resolvedSnapshotRoot), keepSnapshotMarker), nil, 0600)
 	return filepath.ToSlash(relPath)
 }
 

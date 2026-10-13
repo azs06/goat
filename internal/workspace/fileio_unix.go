@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-func hardLinkCount(info os.FileInfo) uint64 {
+func hardLinkCount(_ string, info os.FileInfo) uint64 {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		return uint64(stat.Nlink)
 	}

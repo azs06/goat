@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestStateLivesOutsideTheWorkspace(t *testing.T) {
 	if strings.HasPrefix(resolved, workspace) || !strings.HasPrefix(resolved, StateHome()) || filepath.Base(resolved) != "history.jsonl" {
 		t.Fatalf("got %s", resolved)
 	}
-	if info, err := os.Stat(filepath.Dir(resolved)); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(filepath.Dir(resolved)); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("expected a private state directory, got %v %v", info, err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, StateDirName)); err == nil {
@@ -36,14 +37,16 @@ func TestStateLivesOutsideTheWorkspace(t *testing.T) {
 }
 
 func TestStateHomeFollowsXDG(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", "/srv/state")
-	if home := StateHome(); home != "/srv/state/goat" {
-		t.Fatalf("got %s", home)
+	state, home := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	if got := StateHome(); got != filepath.Join(state, "goat") {
+		t.Fatalf("got %s", got)
 	}
 	t.Setenv("XDG_STATE_HOME", "relative/state")
-	t.Setenv("HOME", "/home/someone")
-	if home := StateHome(); home != "/home/someone/.local/state/goat" {
-		t.Fatalf("a relative XDG_STATE_HOME should be ignored, got %s", home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if got := StateHome(); got != filepath.Join(home, ".local", "state", "goat") {
+		t.Fatalf("a relative XDG_STATE_HOME should be ignored, got %s", got)
 	}
 }
 
@@ -132,10 +135,10 @@ func TestCopyStateEntryCopiesATree(t *testing.T) {
 	t.Cleanup(func() { removeCopy(to) })
 	// Undo restores the modes snapshots recorded, so a copy keeps them exactly.
 	info, err := os.Stat(filepath.Join(to, "snapshots", "1", "before", "a.txt"))
-	if err != nil || info.Mode().Perm() != 0o664 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o664 {
 		t.Fatalf("got %v %v", info, err)
 	}
-	if info, err := os.Stat(filepath.Join(to, "snapshots", "1", "before", "locked")); err != nil || info.Mode().Perm() != 0o555 {
+	if info, err := os.Stat(filepath.Join(to, "snapshots", "1", "before", "locked")); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o555 {
 		t.Fatalf("got %v %v", info, err)
 	}
 	os.Symlink("/etc", filepath.Join(from, "link"))

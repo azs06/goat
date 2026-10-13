@@ -1,9 +1,9 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package workspace
 
 import "os"
 
-func hardLinkCount(info os.FileInfo) uint64 {
+func hardLinkCount(string, os.FileInfo) uint64 {
 	return 1
 }

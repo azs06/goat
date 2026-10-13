@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,11 @@ func TestHistoryCacheReadsOnlyNewLines(t *testing.T) {
 	first, err := loadConversationHistoryEntries()
 	if err != nil || len(first) != 1 {
 		t.Fatalf("got %d entries (%v)", len(first), err)
+	}
+	if info, err := os.Stat(statePath(t, "history.jsonl")); err != nil {
+		t.Fatal(err)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatalf("expected a private history file, got %v", info.Mode().Perm())
 	}
 	recordHistory(historyEntry{Type: "assistant", Content: "two"})
 	second, _ := loadConversationHistoryEntries()

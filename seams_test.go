@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestSimpleCommands(t *testing.T) {
 			}
 		}
 	})
-	for _, want := range []string{"Conversation", "grep_files", "/history.jsonl", "without asking"} {
+	for _, want := range []string{"Conversation", "grep_files", string(filepath.Separator) + "history.jsonl", "without asking"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

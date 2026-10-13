@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,7 +16,8 @@ import (
 // output and dependencies. In a git repository git itself decides; elsewhere the root
 // .gitignore is read with the common subset of its syntax.
 type ignoreFilter struct {
-	// files and dirs are what git lists as tracked or not ignored; nil outside git.
+	// files and dirs are what git lists as tracked or not ignored, with forward slashes
+	// as git and workspaceRelativePath write them; nil outside git.
 	files, dirs map[string]bool
 	patterns    []ignorePattern
 }
@@ -38,13 +40,13 @@ func loadIgnoreFilter() *ignoreFilter {
 	cmd.Env = CommandEnvironment(os.Environ())
 	if out, err := cmd.Output(); err == nil {
 		filter.files, filter.dirs = map[string]bool{}, map[string]bool{".": true}
-		for _, path := range bytes.Split(out, []byte{0}) {
-			if len(path) == 0 {
+		for _, entry := range bytes.Split(out, []byte{0}) {
+			if len(entry) == 0 {
 				continue
 			}
-			rel := filepath.FromSlash(string(path))
+			rel := string(entry)
 			filter.files[rel] = true
-			for dir := filepath.Dir(rel); dir != "." && !filter.dirs[dir]; dir = filepath.Dir(dir) {
+			for dir := path.Dir(rel); dir != "." && !filter.dirs[dir]; dir = path.Dir(dir) {
 				filter.dirs[dir] = true
 			}
 		}
@@ -81,13 +83,13 @@ func (f *ignoreFilter) ignored(rel string, isDir bool) bool {
 	if f == nil || rel == "." {
 		return false
 	}
+	slashed := filepath.ToSlash(rel)
 	if f.files != nil {
 		if isDir {
-			return !f.dirs[rel]
+			return !f.dirs[slashed]
 		}
-		return !f.files[rel]
+		return !f.files[slashed]
 	}
-	slashed := filepath.ToSlash(rel)
 	for _, pattern := range f.patterns {
 		if pattern.dirOnly && !isDir {
 			continue
