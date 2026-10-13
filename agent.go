@@ -293,7 +293,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		recordHistory(withUsage(historyEntry{Type: "tool_call", ToolName: toolCall.Name, Arguments: toolCall.Arguments, ResponseID: resp.ID, Provider: providerName}, resp.Usage, opts.model))
 
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
-		started, waitedBefore := time.Now(), inputWaitTotal
+		started, waitedBefore := time.Now(), time.Duration(inputWaitTotal.Load())
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
 		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
 		var shown []provider.Image
@@ -309,7 +309,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		if nested != nil {
 			nested.finish()
 		}
-		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
+		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(time.Duration(inputWaitTotal.Load())-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
 		// A run_code script that fails after a nested view_image still shows its image.
 		result.Images = shown

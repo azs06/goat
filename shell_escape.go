@@ -55,7 +55,7 @@ func runShellEscape(ctx context.Context, cfg *config, command string) error {
 	}
 	// Lines piped into goat may come from anywhere, so they run commands only when
 	// run_bash commands would run without asking.
-	if !cfg.interactive && (cfg.approver == nil || !cfg.approver.autoApprove) {
+	if !cfg.interactive && (cfg.approver == nil || !cfg.approver.autoApprove.Load()) {
 		return errors.New("! runs shell commands only on an interactive terminal, or with -y")
 	}
 

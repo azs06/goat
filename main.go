@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
@@ -37,8 +39,10 @@ type config struct {
 	// promptFingerprint is the fingerprint the conversation was built with.
 	promptFingerprint string
 
-	// providers holds the API clients, created on first use.
-	providers map[string]provider.Provider
+	// providers holds the API clients, created on first use. providersMu guards it,
+	// since turns running beside the main one look clients up too.
+	providersMu sync.Mutex
+	providers   map[string]provider.Provider
 
 	input       *lineReader
 	interactive bool
@@ -86,6 +90,8 @@ type config struct {
 // provider returns the client for a provider, creating it the first time. Providers
 // without credentials are refused.
 func (c *config) provider(name string) (provider.Provider, error) {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
 	if p, ok := c.providers[name]; ok {
 		return p, nil
 	}
@@ -113,6 +119,25 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	}
 	c.providers[name] = p
 	return p, nil
+}
+
+// cachedProvider is the client already made for a provider, or nil.
+func (c *config) cachedProvider(name string) provider.Provider {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
+	return c.providers[name]
+}
+
+// forgetProviders drops the cached clients drop reports true for, so they are made
+// again on next use.
+func (c *config) forgetProviders(drop func(name string) bool) {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
+	for name := range c.providers {
+		if drop(name) {
+			delete(c.providers, name)
+		}
+	}
 }
 
 func (c *config) currentProvider() (provider.Provider, error) {
@@ -331,17 +356,33 @@ func envFlag(name string) bool {
 	return err == nil && enabled
 }
 
+// uiMu guards activeInputGuard and activeKeyCapture, which goroutines other than
+// main may look at.
+var uiMu sync.Mutex
+
 // activeInputGuard is the guard of the command or turn currently running, if any.
 var activeInputGuard *terminal.InputGuard
+
+func currentInputGuard() *terminal.InputGuard {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	return activeInputGuard
+}
+
+func setActiveInputGuard(guard *terminal.InputGuard) {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	activeInputGuard = guard
+}
 
 func runWithInputGuard(cbreak bool, work func() error) error {
 	guard, err := terminal.BeginInputGuard(cbreak)
 	if err != nil {
 		return err
 	}
-	activeInputGuard = guard
+	setActiveInputGuard(guard)
 	defer func() {
-		activeInputGuard = nil
+		setActiveInputGuard(nil)
 		if closeErr := guard.Close(); closeErr != nil {
 			warnf("failed to restore terminal input state: %v", closeErr)
 		}
@@ -354,15 +395,15 @@ func runWithInputGuard(cbreak bool, work func() error) error {
 // the middle of a turn, and returns the function that turns it off again.
 func suspendInputGuard() func() {
 	resumeSpinner := pauseSpinner()
-	capture := activeKeyCapture
+	capture := currentKeyCapture()
 	capture.pause()
 	suspended := time.Now()
-	guard := activeInputGuard
+	guard := currentInputGuard()
 	if err := guard.Suspend(); err != nil {
 		warnf("failed to restore terminal echo: %v", err)
 	}
 	return func() {
-		inputWaitTotal += time.Since(suspended)
+		inputWaitTotal.Add(int64(time.Since(suspended)))
 		if err := guard.Resume(); err != nil {
 			warnf("failed to disable terminal echo: %v", err)
 		}
@@ -372,8 +413,9 @@ func suspendInputGuard() func() {
 }
 
 // inputWaitTotal is the total time spent waiting on the user's answers mid-turn, so
-// a tool's elapsed time can leave out how long its approval took.
-var inputWaitTotal time.Duration
+// a tool's elapsed time can leave out how long its approval took. It counts
+// nanoseconds.
+var inputWaitTotal atomic.Int64
 
 // ask shows a question and reads one line of answer while a command runs.
 func (c *config) ask(ctx context.Context, question string) (string, error) {
@@ -633,7 +675,7 @@ func printWelcome(cfg *config) {
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		fmt.Println(formatNotice("Project instructions: " + strings.Join(sources, ", ") + " (sent with each new conversation)."))
 	}
-	if cfg.approver.autoApprove {
+	if cfg.approver.autoApprove.Load() {
 		message := "run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH)."
 		if style.Enabled() {
 			message = formatWarning(message)
@@ -685,7 +727,7 @@ func footerParts(cfg *config) []string {
 			parts = append(parts, "~"+formatTokenCount(estimateConversationTokens(entries))+" ctx")
 		}
 	}
-	if cfg.approver != nil && cfg.approver.autoApprove {
+	if cfg.approver != nil && cfg.approver.autoApprove.Load() {
 		parts = append(parts, "auto-approve on")
 	}
 	return append(parts, shortcutsFooterPart)
@@ -855,7 +897,8 @@ func main() {
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
 	cfg.interactive = terminal.StdinIsTerminal()
-	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
+	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive}
+	cfg.approver.autoApprove.Store(opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH"))
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
 	stopBackgroundOnSignal()

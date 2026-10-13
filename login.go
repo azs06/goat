@@ -508,11 +508,9 @@ func applyLogin(c *config, name, key string) string {
 	authOrigins[name] = displayPath(authPath())
 	delete(authCommands, name)
 	// Clients made with the old key, including entries that share it, are made again.
-	for cached := range c.providers {
-		if cached == name || sharesCredential(cached, name) {
-			delete(c.providers, cached)
-		}
-	}
+	c.forgetProviders(func(cached string) bool {
+		return cached == name || sharesCredential(cached, name)
+	})
 	return ""
 }
 

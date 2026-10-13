@@ -44,7 +44,7 @@ type nestedRenderer struct {
 const nestedIndent = "  "
 
 func (r *nestedRenderer) Start(call provider.ToolCall) func(string, error) {
-	started, waitedBefore := time.Now(), inputWaitTotal
+	started, waitedBefore := time.Now(), time.Duration(inputWaitTotal.Load())
 	if r.shown >= maxNestedCallsShown {
 		r.hidden++
 		return func(string, error) {}
@@ -53,7 +53,7 @@ func (r *nestedRenderer) Start(call provider.ToolCall) func(string, error) {
 	width := toolRenderWidth() - len(nestedIndent)
 	r.print(indentBlock(renderToolHeader(call, width), nestedIndent))
 	return func(output string, err error) {
-		elapsed := time.Since(started) - (inputWaitTotal - waitedBefore)
+		elapsed := time.Since(started) - (time.Duration(inputWaitTotal.Load()) - waitedBefore)
 		first, _, _ := strings.Cut(renderToolResult(call, output, err, elapsed, width), "\n")
 		r.print(nestedIndent + first)
 	}

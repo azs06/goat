@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/azs06/goat/internal/style"
@@ -132,13 +133,14 @@ var errBashCommandDeclined = errors.New("the user declined to run this command")
 type bashApprover struct {
 	input       *lineReader
 	interactive bool
-	autoApprove bool
+	// autoApprove is atomic because turns running beside the main one read it.
+	autoApprove atomic.Bool
 }
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
 	touchesState := mentionsStateDir(command, workdir)
 	touchesKeys := mentionsConfigDir(command, workdir)
-	if a.autoApprove && !touchesState && !touchesKeys {
+	if a.autoApprove.Load() && !touchesState && !touchesKeys {
 		return nil
 	}
 	if !a.interactive {
@@ -185,7 +187,7 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	case "y", "yes":
 		return nil
 	case "a", "always":
-		a.autoApprove = true
+		a.autoApprove.Store(true)
 		return nil
 	case "", "n", "no":
 		return errBashCommandDeclined
