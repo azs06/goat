@@ -160,7 +160,7 @@ func TestRecordToolOutputNumberedIsUniqueUnderConcurrency(t *testing.T) {
 			for i := range each {
 				response := fmt.Sprintf("r%d-%d", g, i)
 				opts.record(historyEntry{Type: "tool_call", ToolName: "read_file", ResponseID: response})
-				n, ok := recordToolOutputNumbered(opts.stamp(historyEntry{Type: "tool_output", ToolName: "read_file", Content: response, ResponseID: response, Status: "ok"}))
+				n, ok := recordToolOutputNumbered(opts.stamp(historyEntry{Type: "tool_output", ToolName: "read_file", Content: response, ResponseID: response, Status: "ok"}), warnf)
 				if !ok {
 					t.Error("expected a number")
 					return

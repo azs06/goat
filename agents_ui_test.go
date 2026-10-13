@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -316,6 +317,9 @@ func TestStopAndDismissFromTheUser(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 	waitFor(t, "the turns to return", func() bool { return returned.Load() == 2 })
+	// The runners returned, but their goroutines let go of the agents just after; until
+	// then an agent cannot be dismissed.
+	waitFor(t, "the turn goroutines to end", func() bool { return h.m.Active() == 0 })
 	out = captureTerminal(t, func() {
 		if err := commandAgents(context.Background(), cfg, []string{"dismiss", "finished"}); err != nil {
 			t.Error(err)
@@ -530,13 +534,13 @@ func TestEditPromptGivesWayToAgentEventsAndKeepsTheText(t *testing.T) {
 		t.Fatalf("got %v %q, partial %q", r.err, r.text, input.partial)
 	}
 
-	// A context ended by something other than the user keeps the text too.
+	// A context ended to make the prompt give way keeps the text too.
 	ctx, cancel := context.WithCancelCause(context.Background())
 	checks.Store(0)
 	result = editInBackground(t, ctx, input, events)
 	io.WriteString(keys, "xy")
 	waitFor(t, "two keys", func() bool { return checks.Load() == 3 })
-	cancel(errors.New("goat is exiting"))
+	cancel(fmt.Errorf("an agent event: %w", errPromptYield))
 	if r := <-result; !errors.Is(r.err, context.Canceled) || input.partial != "xy" {
 		t.Fatalf("got %v, partial %q", r.err, input.partial)
 	}
@@ -556,6 +560,18 @@ func TestCtrlCAtTheIdlePromptClearsTheLine(t *testing.T) {
 	cancel()
 	if r := <-result; !errors.Is(r.err, context.Canceled) || input.partial != "" {
 		t.Fatalf("Ctrl-C should clear the line as before: %v, partial %q", r.err, input.partial)
+	}
+
+	// A toolchain whose signal.NotifyContext cancels with a cause naming the signal is
+	// still the user's Ctrl-C: the line is cleared.
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	checks.Store(0)
+	result = editInBackground(t, ctx, input, events)
+	io.WriteString(keys, "typed")
+	waitFor(t, "the keys", func() bool { return checks.Load() == 6 })
+	cancelCause(errors.New("interrupt signal received"))
+	if r := <-result; !errors.Is(r.err, context.Canceled) || input.partial != "" {
+		t.Fatalf("Ctrl-C with a cause should clear the line: %v, partial %q", r.err, input.partial)
 	}
 
 	// Ctrl-G gives way to the picker and keeps the text for the prompt after it.

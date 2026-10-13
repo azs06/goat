@@ -61,6 +61,9 @@ type agentHost struct {
 	// model switch carry it on under a new id, and the agents it spawned before still
 	// report to it. /clear and /resume start another one and empty it.
 	lineage map[string]bool
+	// adopted holds the agents of an earlier conversation that main's current one sent
+	// a message to: their reports go to it too. Emptied with lineage.
+	adopted map[string]bool
 }
 
 // runningAgents is the session's host, for stopping its agents on every way out.
@@ -104,13 +107,20 @@ func (h *agentHost) backgroundAllowed() bool {
 func (h *agentHost) runChild(ctx context.Context, a *subagent.Agent, prompt string) (string, error) {
 	var settings childSettings
 	var conv conversationState
-	if box, ok := a.Conv().(*childBox); ok && box != nil {
+	box, ok := a.Conv().(*childBox)
+	if ok && box != nil {
 		settings, conv = box.settings, box.conv
 	} else {
 		h.mu.Lock()
-		settings = h.pending[a.ConvID]
+		settings, ok = h.pending[a.ConvID]
 		delete(h.pending, a.ConvID)
 		h.mu.Unlock()
+		if ok {
+			// Kept at once: a first turn that fails before it saves the conversation,
+			// such as on a provider that cannot be set up, must not leave every later
+			// turn without a model.
+			a.SetConv(&childBox{settings: settings})
+		}
 	}
 	if settings.model.IsZero() {
 		return "", errors.New("no model is selected for the subagent")
@@ -435,6 +445,18 @@ func (h *agentHost) Status(id string) (string, error) {
 // Send gives an agent a message. A foreground agent that starts a new turn with it is
 // followed like a spawn; otherwise the call returns at once.
 func (h *agentHost) Send(ctx context.Context, id, message string) (string, error) {
+	if a, err := h.m.Get(id); err == nil && !h.inMainLineage(a.ParentConv) {
+		// An agent an earlier conversation spawned: the report of the turn this message
+		// starts is owed to the current one, which takeNotices would otherwise only show.
+		// Adopted before the message is delivered, so a turn that ends at once is not
+		// missed.
+		h.mu.Lock()
+		if h.adopted == nil {
+			h.adopted = map[string]bool{}
+		}
+		h.adopted[id] = true
+		h.mu.Unlock()
+	}
 	delivery, err := h.m.Deliver(id, message, false)
 	if err != nil {
 		return "", err
@@ -570,7 +592,7 @@ func (h *agentHost) takeNotices(show func(string)) []string {
 	var texts []string
 	for _, n := range h.m.TakeNotices("") {
 		show(h.noticeLine(n))
-		if n.ForModel && h.inMainLineage(n.ParentConv) {
+		if n.ForModel && (h.inMainLineage(n.ParentConv) || h.isAdopted(n.AgentID)) {
 			texts = append(texts, noticeHeader(n.AgentID)+"\n"+n.Text)
 			h.m.MarkDelivered(n.AgentID)
 		}
@@ -587,6 +609,14 @@ func (h *agentHost) inMainLineage(conv string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.lineage[conv]
+}
+
+// isAdopted reports whether main's current conversation took over agent id's reports
+// by sending it a message (Send).
+func (h *agentHost) isAdopted(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.adopted[id]
 }
 
 // carryLineage records that main's conversation went on from previous under a new id,
@@ -612,6 +642,7 @@ func (h *agentHost) leaveLineage() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	clear(h.lineage)
+	clear(h.adopted)
 }
 
 // busyWriters are the general agents still running, which may still change the

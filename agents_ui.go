@@ -308,7 +308,9 @@ func (h *agentHost) stopFromUser(target string) error {
 	if strings.EqualFold(target, "all") {
 		var stopped []string
 		for _, info := range h.m.List() {
-			if info.Evicted || !info.State.Busy() {
+			// An idle agent with messages waiting for a slot starts once one frees, so
+			// it is stopped too.
+			if info.Evicted || !info.State.Busy() && info.Inbox == 0 {
 				continue
 			}
 			if err := h.m.Stop(info.ID); err == nil {

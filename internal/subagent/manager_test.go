@@ -645,3 +645,20 @@ func TestDefaultConfigReadsMaxRunningFromTheEnvironment(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// With more agents allowed to run at once (GOAT_MAX_RUNNING_AGENTS), every finished
+// background agent's report is kept until it is taken, and none of them is evicted.
+func TestNoticesAreKeptForEveryRunningAgent(t *testing.T) {
+	const n = 40
+	m := NewManager(Config{MaxRunning: n}, instantRunner)
+	defer m.StopAll(time.Second)
+	for i := 0; i < n; i++ {
+		if _, err := m.Spawn(SpawnOptions{Label: fmt.Sprint("agent ", i), Background: true, Prompt: "go"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "every report", func() bool { return m.Active() == 0 && m.NoticeCount() == n })
+	if notices := m.TakeNotices(""); len(notices) != n {
+		t.Fatalf("got %d notices, want %d", len(notices), n)
+	}
+}

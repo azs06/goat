@@ -16,6 +16,9 @@ import (
 type Options struct {
 	// PlanMode refuses tools that change anything; read-only tools and previews run.
 	PlanMode bool
+	// LivePlanMode, when set, is asked on every call whether plan mode is on, in place
+	// of PlanMode, so a run_code script's later calls follow a change made while it runs.
+	LivePlanMode func() bool
 	// CodeMode lets run_code run. Without it run_code is refused with ErrCodeModeOff.
 	CodeMode bool
 	// ApproveBash, when set, is asked before every run_bash command; a non-nil error
@@ -91,7 +94,11 @@ func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (str
 	if toolCall.Name == "undo_last_change" && opts.Subagent {
 		return "", errSubagentUndo
 	}
-	if opts.PlanMode && !allowedInPlanMode(toolCall) {
+	planMode := opts.PlanMode
+	if opts.LivePlanMode != nil {
+		planMode = opts.LivePlanMode()
+	}
+	if planMode && !allowedInPlanMode(toolCall) {
 		return "", ErrPlanMode
 	}
 	return handler(ctx, toolCall.Arguments, opts)

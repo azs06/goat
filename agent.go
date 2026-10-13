@@ -115,7 +115,17 @@ type turnOptions struct {
 
 // record saves entry to the history as part of the turn's conversation.
 func (o turnOptions) record(entry historyEntry) {
-	recordHistory(o.stamp(entry))
+	recordHistoryWarn(o.stamp(entry), o.warnf)
+}
+
+// warnf warns about the turn through its sink: on the terminal for main, in the
+// agent's events for a subagent, whose goroutine must never touch the terminal.
+func (o turnOptions) warnf(format string, args ...any) {
+	if o.sink == nil {
+		warnf(format, args...)
+		return
+	}
+	sinkWarnf(o.sink, format, args...)
 }
 
 // stamp marks entry as part of the turn's conversation when the turn has its own.
@@ -362,7 +372,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		if opts.livePlanMode != nil {
 			planMode = opts.livePlanMode()
 		}
-		toolOpts := tools.Options{PlanMode: planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber, Agents: opts.agents, Subagent: opts.subagent}
+		toolOpts := tools.Options{PlanMode: planMode, LivePlanMode: opts.livePlanMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputsWarning(opts.warnf), Agents: opts.agents, Subagent: opts.subagent}
 		var shown []provider.Image
 		toolOpts.Vision = opts.vision
 		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
@@ -397,7 +407,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// The history keeps the whole output, so the model can read what was cut. Other
 		// agents append to the same history, so the number is taken as it is recorded.
 		if result.Output != full && toolCall.Name != "read_output" {
-			if n, ok := recordToolOutputNumbered(opts.stamp(output)); ok {
+			if n, ok := recordToolOutputNumbered(opts.stamp(output), opts.warnf); ok {
 				result.Output += tools.ShortenedNote(n)
 			}
 		} else {

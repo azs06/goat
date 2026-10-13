@@ -104,8 +104,19 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// maxNotices bounds the finished-agent notices nobody has taken yet.
+// maxNotices is the least bound on the finished-agent notices nobody has taken yet;
+// noticeCap raises it with the limits.
 const maxNotices = 32
+
+// noticeCap bounds the notices nobody has taken yet. Main takes them after every tool
+// round and between turns, and in between an agent adds at most two (a turn ending, and
+// one its queued message starts when a slot frees), while at most MaxLive agents plus
+// the MaxRunning just spawned are live. The cap stays above that, so a report is never
+// dropped, which would also leave its agent free to be evicted unseen; it only guards
+// against a bug piling notices up.
+func (c Config) noticeCap() int {
+	return max(maxNotices, 4*(c.MaxLive+c.MaxRunning))
+}
 
 // Notice is a finished background agent's report, waiting to be given to the
 // conversation that spawned it. ForModel is false for a turn only the user asked for,
@@ -361,8 +372,8 @@ func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {
 		Text:       WrapReport(a.ID, a.Label, text, 0),
 		ForModel:   forModel,
 	})
-	if len(m.notices) > maxNotices {
-		m.notices = append([]Notice(nil), m.notices[len(m.notices)-maxNotices:]...)
+	if limit := m.cfg.noticeCap(); len(m.notices) > limit {
+		m.notices = append([]Notice(nil), m.notices[len(m.notices)-limit:]...)
 	}
 }
 
