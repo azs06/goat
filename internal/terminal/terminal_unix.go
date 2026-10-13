@@ -106,8 +106,9 @@ func Columns() int {
 
 // EnterCbreak turns off line buffering and echo on stdin so the prompt editor sees
 // each key as it is typed. Enter arrives as "\r", told apart from Ctrl-J's "\n". ISIG
-// stays on, so Ctrl-C still raises SIGINT. The returned function restores the previous
-// state.
+// stays on, so Ctrl-C still raises SIGINT. IEXTEN goes off: on macOS it makes Ctrl-V
+// "insert the next key literally" and Ctrl-O discard output even without ICANON, and
+// the editor reads Ctrl-V itself. The returned function restores the previous state.
 func EnterCbreak() (func(), error) {
 	fd := int(os.Stdin.Fd())
 	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
@@ -115,7 +116,7 @@ func EnterCbreak() (func(), error) {
 		return nil, err
 	}
 	updated := *original
-	updated.Lflag &^= unix.ICANON | unix.ECHO
+	updated.Lflag &^= unix.ICANON | unix.ECHO | unix.IEXTEN
 	updated.Iflag &^= unix.ICRNL
 	updated.Cc[unix.VMIN] = 1
 	updated.Cc[unix.VTIME] = 0

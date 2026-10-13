@@ -90,7 +90,7 @@ func TestEveryToolHasAHandler(t *testing.T) {
 func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 	want := map[string]PlanModePolicy{
 		"read_dir": PlanModeAllowed, "tree_dir": PlanModeAllowed, "read_file": PlanModeAllowed,
-		"find_files": PlanModeAllowed, "grep_files": PlanModeAllowed, "read_output": PlanModeAllowed,
+		"find_files": PlanModeAllowed, "grep_files": PlanModeAllowed, "read_output": PlanModeAllowed, "view_image": PlanModeAllowed,
 		"write_file": PlanModePreview, "edit_file": PlanModePreview, "edit_json_file": PlanModePreview,
 		"copy_file": PlanModePreview, "move_file": PlanModePreview, "delete_file": PlanModePreview,
 		"copy_dir": PlanModePreview, "move_dir": PlanModePreview, "delete_dir": PlanModePreview,

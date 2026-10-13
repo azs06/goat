@@ -46,6 +46,8 @@ type historyEntry struct {
 	// ConversationID ties the entry to one conversation, so a conversation brought back
 	// with /resume finds its own history again. Empty for older entries.
 	ConversationID string `json:"conversation_id,omitempty"`
+	// Images counts the images that went with a prompt or came back from a tool.
+	Images int `json:"images,omitempty"`
 }
 
 // withUsage records a response's token usage on entry.

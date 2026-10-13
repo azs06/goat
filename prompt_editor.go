@@ -142,6 +142,29 @@ type promptEditor struct {
 	draft        string
 	// cursorRow is the row of the cursor below the prompt line as last drawn.
 	cursorRow int
+	// images, when set, attaches images to the message: Ctrl-V (or Alt-V, for
+	// terminals that keep Ctrl-V for their own paste) takes the clipboard's image, and a
+	// pasted path to an image file, as dragging a file onto the terminal pastes, becomes
+	// one. The image's label goes in the text in its place.
+	images imageAttacher
+	// pasteFrom is where the text being pasted started.
+	pasteFrom int
+	// notice replaces the footer until the next key, such as why no image was attached.
+	notice string
+}
+
+// imageAttacher attaches images at the prompt; see promptEditor.images.
+type imageAttacher interface {
+	pasteClipboard() (label string, err error)
+	attachPasted(text string) (label string, ok bool)
+}
+
+// insertImageLabel puts an image's label at the cursor, apart from the words around it.
+func (e *promptEditor) insertImageLabel(label string) {
+	if e.pos > 0 && !unicode.IsSpace(e.buf[e.pos-1]) {
+		label = " " + label
+	}
+	e.insert(label + " ")
 }
 
 func (e *promptEditor) completions() []completion {
@@ -295,12 +318,20 @@ const (
 // handleKey applies one key. done is true once the text is submitted; err is io.EOF
 // when Ctrl-D is pressed on an empty line.
 func (e *promptEditor) handleKey(key string) (done bool, err error) {
+	e.notice = ""
 	switch key {
 	case pasteStart:
 		e.pasting = true
+		e.pasteFrom = e.pos
 		return false, nil
 	case pasteEnd:
 		e.pasting = false
+		if e.images != nil && e.pasteFrom < e.pos && e.pos <= len(e.buf) {
+			if label, ok := e.images.attachPasted(string(e.buf[e.pasteFrom:e.pos])); ok {
+				e.deleteRange(e.pasteFrom, e.pos)
+				e.insertImageLabel(label)
+			}
+		}
 		return false, nil
 	}
 	if !e.pasting {
@@ -410,6 +441,14 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 		e.deleteRange(e.pos, e.lineEnd())
 	case "\x17", "\x1b\x7f": // Ctrl-W, Alt-Backspace: delete the word before the cursor
 		e.deleteRange(e.wordStart(), e.pos)
+	case "\x16", "\x1bv": // Ctrl-V, Alt-V: attach the clipboard's image
+		if e.images != nil {
+			if label, err := e.images.pasteClipboard(); err != nil {
+				e.notice = err.Error()
+			} else {
+				e.insertImageLabel(label)
+			}
+		}
 	default:
 		// Other control keys and unknown escape sequences are ignored, so they never
 		// end up in the prompt.
@@ -492,6 +531,9 @@ func (e *promptEditor) render(footer string, width int) string {
 	b.WriteString("\n" + renderRule(width-1))
 
 	below := []string{footer}
+	if e.notice != "" {
+		below = []string{style.Muted.Render(style.TruncateToWidth(e.notice, width-1))}
+	}
 	if items := e.completions(); len(items) > 0 {
 		below = renderCompletionMenu(items, e.selected, width)
 	} else if e.showShortcuts {
@@ -520,7 +562,7 @@ func (e *promptEditor) clear() string {
 // editPrompt draws the prompt frame and edits one line in cbreak mode. ok is false when
 // the terminal cannot be put in cbreak mode, and nothing has been drawn. On return the
 // frame has been cleared.
-func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int) (text string, ok bool, err error) {
+func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int, attacher imageAttacher) (text string, ok bool, err error) {
 	restore, err := terminal.EnterCbreak()
 	if err != nil {
 		return "", false, nil
@@ -528,7 +570,7 @@ func editPrompt(ctx context.Context, input *lineReader, history []string, footer
 	defer restore()
 
 	// A line whose ReadLine was cancelled is where the user left off.
-	editor := &promptEditor{history: history, historyIndex: len(history)}
+	editor := &promptEditor{history: history, historyIndex: len(history), images: attacher}
 	editor.setText(input.partial)
 	input.partial = ""
 

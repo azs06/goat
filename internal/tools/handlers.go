@@ -24,6 +24,11 @@ type Options struct {
 	CallID string
 	// Nested, when set, is told about each call a run_code script makes.
 	Nested NestedObserver
+	// Vision is set when the model in use reads images; view_image refuses without it.
+	Vision bool
+	// AttachImage, when set, receives each image a tool shows the model, to go with the
+	// call's result.
+	AttachImage func(provider.Image)
 	// Outputs, when set, lets read_output find earlier tool outputs.
 	Outputs OutputSource
 }
@@ -50,6 +55,7 @@ var toolHandlers = map[string]toolHandler{
 	"run_bash":         runBash,
 	"find_files":       runFindFiles,
 	"grep_files":       runGrepFiles,
+	ViewImage:          runViewImage,
 	"read_output":      runReadOutput,
 }
 

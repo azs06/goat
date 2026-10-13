@@ -95,6 +95,49 @@ func unansweredChatCalls(messages []json.RawMessage) []storedContentBlock {
 	return calls
 }
 
+// chatContentPart is one part of a user message whose content is a list, which images
+// need.
+type chatContentPart struct {
+	Type     string             `json:"type"`
+	Text     string             `json:"text,omitempty"`
+	ImageURL *chatImageURLField `json:"image_url,omitempty"`
+}
+
+type chatImageURLField struct {
+	URL string `json:"url"`
+}
+
+// chatUserMessage builds the user message after the tool messages, or nil when there
+// is nothing to send. Tool messages hold text only, so a tool's images travel here,
+// introduced by a note, before the user's own text and images. Without images it is a
+// plain text message, as before.
+func chatUserMessage(text string, toolImages, userImages []Image) (json.RawMessage, error) {
+	if len(toolImages) == 0 && len(userImages) == 0 {
+		if text == "" {
+			return nil, nil
+		}
+		return json.Marshal(chatMessage{Role: "user", Content: text})
+	}
+	var parts []chatContentPart
+	addImages := func(images []Image) {
+		for _, img := range images {
+			parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURLField{URL: img.ref()}})
+		}
+	}
+	if len(toolImages) > 0 {
+		parts = append(parts, chatContentPart{Type: "text", Text: toolImagesNote})
+		addImages(toolImages)
+	}
+	if text != "" {
+		parts = append(parts, chatContentPart{Type: "text", Text: text})
+	}
+	addImages(userImages)
+	return json.Marshal(struct {
+		Role    string            `json:"role"`
+		Content []chatContentPart `json:"content"`
+	}{"user", parts})
+}
+
 func chatTools(specs []ToolSpec) []openai.ChatCompletionToolUnionParam {
 	tools := make([]openai.ChatCompletionToolUnionParam, 0, len(specs))
 	for _, spec := range specs {
@@ -224,24 +267,23 @@ func chatUsage(usage openai.CompletionUsage) Usage {
 func (p *chatProvider) Send(ctx context.Context, req Request, onText func(string)) (*Response, bool, error) {
 	history := req.Conversation.Messages
 	messages := append([]json.RawMessage(nil), history...)
-	for _, result := range toolResultsFor(unansweredChatCalls(history), req.ToolResults) {
+	results := toolResultsFor(unansweredChatCalls(history), req.ToolResults)
+	for _, result := range results {
 		message, err := json.Marshal(chatMessage{Role: "tool", ToolCallID: result.CallID, Content: result.Output})
 		if err != nil {
 			return nil, false, err
 		}
 		messages = append(messages, message)
 	}
-	if req.UserText != "" {
-		message, err := json.Marshal(chatMessage{Role: "user", Content: req.UserText})
-		if err != nil {
-			return nil, false, err
-		}
-		messages = append(messages, message)
+	if user, err := chatUserMessage(req.UserText, toolResultImages(results), req.UserImages); err != nil {
+		return nil, false, err
+	} else if user != nil {
+		messages = append(messages, user)
 	}
 
 	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(req.Model),
-		Messages: chatRequestMessages(req.System, messages),
+		Messages: chatRequestMessages(req.System, expandImageRefs(messages, req.TextOnly, chatImageBudget)),
 	}
 	if len(req.Tools) > 0 {
 		params.Tools = chatTools(req.Tools)

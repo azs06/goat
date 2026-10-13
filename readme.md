@@ -200,6 +200,9 @@ OpenRouter, need no entry, only a key; an entry with the same name replaces goat
   needs. `config.json` never holds a key itself, and an entry never gets a built-in
   provider's key unless `key_env` names it.
 - `models` are offered by `/model`. Without it, `/model` offers whatever the server lists.
+- `images` says which models read images: `true` for all of them, or a list such as
+  `["llava:13b"]`. Without it goat sends the entry's models no images (see
+  [Images](#images)).
 - Pick a model as `name:model`, e.g. `/model ollama:qwen3-coder` or
   `goat -m ollama:qwen3-coder`; a model only one entry lists needs no prefix.
 
@@ -272,6 +275,7 @@ git branch with the number of changed files, and the conversation's approximate 
 | Left/Right, Home/End, Ctrl-A/Ctrl-E | Move the cursor; Home and End stay on the current line |
 | Alt-Left/Alt-Right, Alt-B/Alt-F | Move by word |
 | Ctrl-U, Ctrl-K, Ctrl-W | Delete to the start of the line, to the end, or the word before the cursor |
+| Ctrl-V, Alt-V | Attach the image on the clipboard to the message, as `[image 1]` (see [Images](#images)) |
 | `?` | On an empty prompt, show these keys |
 
 Typing `/` opens a menu of matching commands; after a command and a space it suggests the
@@ -343,7 +347,8 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/clear` (`/new`, `/reset`) | Start a new conversation under a fresh welcome banner; the old one is kept. |
 | `/resume` | Swap back to the previous conversation; `/resume` again swaps back. |
 | `/compact [focus]` | Summarize the conversation into a fresh, smaller context, optionally focusing on a topic. |
-| `/retry` | Send the last prompt again. |
+| `/retry` | Send the last prompt again, with any images that went with it. |
+| `/paste` | Attach the image on the clipboard to your next message; Ctrl-V does the same at the prompt. See [Images](#images). |
 | `/output [n]` | Show a tool call's full output; tool results on screen only show the first lines. Without `n`, pick from the recent calls; `1` is the latest. Output taller than the terminal is paged: Space for the next page, Enter for a line, `G` for the rest, `q` to stop. |
 | `/plan [on\|off]` | Plan mode: goat reads and investigates but changes nothing. File tools only run as previews and `run_bash` is refused; the footer shows `plan mode`. `goat --plan` starts in it. |
 | `/codemode [on\|off]` | Code mode: the model can batch tool calls in one `run_code` script (see [Code mode](#code-mode)); the footer shows `code mode`. `goat --codemode` or `GOAT_CODEMODE=1` starts in it. |
@@ -387,6 +392,7 @@ workspace.
 | `copy_dir`, `move_dir`, `delete_dir` | Directory operations |
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
+| `view_image` | Look at an image file (PNG, JPEG, GIF or WebP), such as a screenshot a test saved; only for models that read images |
 | `read_output` | Read a tool output that was shortened for the model, a range of lines at a time |
 | `run_tui` | Run a program in an emulated terminal, type keys into it and read the screen back as text, after you approve it; not on Windows |
 | `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
@@ -478,6 +484,63 @@ goat never reads it from the workspace, so a cloned repository cannot get a comm
   }
 }
 ```
+## Images
+
+Models that read images can be shown them two ways: the agent calls `view_image` on a
+file in the workspace, or you attach one to your message. `/status` says whether the
+current model reads images. goat sends them to OpenAI's GPT models, Claude, DeepSeek's
+`deepseek-flash` (and V4.1 Flash; `deepseek-v4-pro` reads no images), OpenCode Go's
+vision models, and the presets' models known to read them, such as Gemini. A
+`config.json` entry gets them only when its `images` setting names the model.
+
+- **Ctrl-V** (or Alt-V) at the prompt attaches the image on the clipboard, such as a
+  screenshot, and puts `[image 1]` where the cursor was. Delete the label and the image
+  is not sent.
+- **Drag an image file** onto the terminal: the pasted path becomes an attached image
+  rather than text.
+- **`/paste`** attaches the clipboard's image to your next message, for terminals where
+  the prompt editor is not available (Windows, or `NO_COLOR`).
+
+The clipboard is read with `osascript` on macOS, `wl-paste` or `xclip` on Linux, and
+PowerShell on Windows. With a model that reads no images, goat says so instead of
+attaching, and `view_image` tells the model it cannot see them. After `/model` switches
+to such a model, the images the conversation already holds go as a short note in their
+place; switch back and they are sent again.
+
+Images larger than about 1568 pixels on the long side, or 1.15 megapixels, are scaled
+down first, as Claude requires (it costs about 1,600 tokens); PNG, JPEG, GIF and WebP
+are accepted, and an animated GIF goes as its first frame, since OpenAI takes only still
+ones. goat keeps a copy in its [state directory](#conversations-and-state), and
+the saved conversation names that copy rather than holding the image, so `session.json`
+stays small; each request reads it again. goat sends an image only from those copies,
+and only where it put one itself, so nothing a model writes can make goat send another
+file. On Claude, an image `view_image` returns goes
+inside the tool result; Chat Completions servers and DeepSeek take images only in user
+messages, so there it follows the tool results in one. A summary from compaction keeps
+only the fact that images were there.
+
+One request carries at most 20 images and about 20 MB of them (10 MB to Chat
+Completions servers): the newest go, and older ones are replaced with a note, so a long
+session of screenshots never grows past what the API accepts. If a server still refuses
+a request as too large, goat compacts the conversation and retries, as it does when the
+context window is full.
+
+### Checking a web page
+
+goat has no browser of its own, but a browser command line run through `run_bash` lets
+the agent check a web app it changed, for example
+[agent-browser](https://github.com/vercel-labs/agent-browser) or
+[playwright-cli](https://github.com/microsoft/playwright-cli). Start the dev server in
+the background, then tell goat, or put in `AGENTS.md`, something like:
+
+```text
+Check the page after the change: run `agent-browser open http://localhost:3000`, then
+`agent-browser snapshot` to read the page as text, and `agent-browser screenshot
+shot.png`, then view_image shot.png to see it.
+```
+
+The snapshot is text, so any model can use it; the screenshot needs a model that reads
+images. The commands go through `run_bash` approval like any other.
 
 ## Code mode
 
@@ -905,6 +968,8 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go` | The interactive line editor, arrow-key pickers, messages queued during a turn and input reading |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
 | `render_*.go`, `spinner.go`, `messages.go`, `theme.go` | Drawing the transcript, the spinner, status messages and theme loading |
+| `image_attachments.go`, `clipboard_image.go` | Images attached at the prompt, `/paste`, and reading the clipboard's image |
+| `internal/images/` | Checking, scaling and storing images for the model |
 | `internal/codemode/` | The JavaScript sandbox `run_code` scripts run in: limits, console capture and the generated `goat` API declaration |
 | `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |

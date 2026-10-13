@@ -68,6 +68,10 @@ type turnOptions struct {
 	// contextNote, when set, goes before the prompt in the turn's first request, such as
 	// the output of the ! commands the user ran since the last message.
 	contextNote string
+	// vision is set when the model reads images: view_image works, and images reach it.
+	vision bool
+	// images go with the prompt, such as ones pasted at the prompt.
+	images []provider.Image
 	// verify, when set, checks the work when the model finishes a turn that may have
 	// changed the workspace. It returns the message to send the model when the check
 	// fails, which the turn then goes on with, or "" when it passed.
@@ -292,6 +296,9 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
 		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
+		var shown []provider.Image
+		toolOpts.Vision = opts.vision
+		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
 		var nested *nestedRenderer
 		if toolCall.Name == tools.RunCode {
 			nested = &nestedRenderer{}
@@ -304,12 +311,14 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		}
 		logToolCallResult(toolCall, toolOutput, err, time.Since(started)-(inputWaitTotal-waitedBefore))
 		result := provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name}
+		// A run_code script that fails after a nested view_image still shows its image.
+		result.Images = shown
 		if err != nil {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
+			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName, Images: len(shown)})
 			result.Output = fmt.Sprintf("Tool %s failed: %v", toolCall.Name, err)
 			result.IsError = true
 		} else {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName})
+			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName, Images: len(shown)})
 			result.Output = toolOutput
 		}
 		full := result.Output
@@ -388,7 +397,7 @@ func recoveryPromptText(prompt string, moved bool, owed []provider.ToolResult) s
 // should continue from, including when it also returns an error.
 func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, conv conversationState, opts turnOptions) (conversationState, error) {
 	providerName := p.Name()
-	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName})
+	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName, Images: len(opts.images)})
 
 	system, specs := promptFor(opts.codeMode)
 	req := provider.Request{
@@ -399,7 +408,12 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
+		UserImages:   opts.images,
 	}
+	// A model that cannot see gets a note in each image's place. Only the request
+	// changes: the stored transcript and the results still owed keep their images, so
+	// they go again after a switch back to a model that sees.
+	req.TextOnly = !opts.vision
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
 		req.UserText = planModeNote + req.UserText
@@ -422,7 +436,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		}
 		if err != nil {
 			recordHistory(historyEntry{Type: "error", Content: err.Error(), ResponseID: req.Conversation.ResponseID, Status: "error", Provider: providerName})
-			if isContextOverflowError(err) {
+			if isContextOverflowError(err) || provider.IsRequestTooLarge(err) {
 				err = fmt.Errorf("%w (%v)", errContextExceeded, shortError(err))
 			}
 			return conversationState{conversation: req.Conversation, pendingToolResults: req.ToolResults}, err
@@ -507,11 +521,14 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		req.UserImages = nil
 		if opts.compact != nil {
 			if compacted, ok := opts.compact(ctx); ok {
 				req.Conversation = compacted
 				req.ToolResults = nil
 				req.UserText = compactedToolResultsText(next.pendingToolResults)
+				// The results go as text, and their images with it.
+				req.UserImages = resultImages(next.pendingToolResults)
 				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
 				// The summary's conversation has not been told the model yet.
 				req.UserText = modelNote(opts.model, providerName) + req.UserText
@@ -531,6 +548,15 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			}
 		}
 	}
+}
+
+// resultImages collects the images tool results carry, in order.
+func resultImages(results []provider.ToolResult) []provider.Image {
+	var all []provider.Image
+	for _, result := range results {
+		all = append(all, result.Images...)
+	}
+	return all
 }
 
 func detailSuffix(detail string) string {

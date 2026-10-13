@@ -75,6 +75,12 @@ type config struct {
 	// pendingShell holds the output of the "!" commands run since the last message,
 	// ready for the model; it goes with the next message.
 	pendingShell []string
+	// promptImages are the images pasted at the prompt for the next message, and
+	// imageCount numbers their labels for the session. lastImages went with lastPrompt,
+	// for /retry.
+	promptImages []promptImage
+	imageCount   int
+	lastImages   []provider.Image
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
@@ -387,6 +393,12 @@ func (c *config) ask(ctx context.Context, question string) (string, error) {
 
 func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	cfg.lastPrompt = prompt
+	cfg.lastImages = takePromptImages(cfg, prompt)
+	return runPromptWithImages(ctx, cfg, prompt, cfg.lastImages)
+}
+
+// runPromptWithImages runs one turn for prompt with the images attached to it.
+func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userImages []provider.Image) error {
 
 	p, err := cfg.currentProvider()
 	if err != nil {
@@ -417,6 +429,8 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 		effort:      cfg.reasoningEffort,
 		planMode:    cfg.planMode,
 		codeMode:    cfg.codeMode,
+		vision:      provider.AcceptsImages(cfg.model),
+		images:      userImages,
 		contextNote: shellContextNote(cfg.pendingShell),
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
@@ -507,8 +521,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 	}
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
 	if moved {
-		// The note and any ! output went with the turn's first request.
+		// The note, any ! output and the prompt's images went with the turn's first
+		// request. The retry carries the owed results as text, so their images go with it.
 		opts.contextNote = ""
+		opts.images = resultImages(owed)
 	}
 	sent = cfg.conversation.conversation
 	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)
@@ -720,7 +736,7 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 		fmt.Println()
 	}
 	footer := renderFooter(footerParts(cfg), width)
-	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width); ok {
+	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width, sessionImages{cfg}); ok {
 		if err == nil && strings.TrimSpace(text) != "" {
 			cfg.promptHistory = rememberPrompt(cfg.promptHistory, text)
 			fmt.Println(renderUserMessage(text, width))

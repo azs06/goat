@@ -12,7 +12,7 @@ import (
 var ErrPlanMode = errors.New("plan mode is on, so this tool cannot run; describe the change in the plan instead")
 
 // readOnlyTools never change anything.
-var readOnlyTools = map[string]bool{"read_dir": true, "tree_dir": true, "read_file": true, "find_files": true, "grep_files": true, "read_output": true}
+var readOnlyTools = map[string]bool{"read_dir": true, "tree_dir": true, "read_file": true, "find_files": true, "grep_files": true, "read_output": true, ViewImage: true}
 
 // PlanModePolicy is what plan mode does with calls to a tool.
 type PlanModePolicy int

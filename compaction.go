@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/azs06/goat/internal/images"
 	"github.com/azs06/goat/internal/provider"
 )
 
@@ -70,6 +71,15 @@ func historyEntriesSinceLastReset(entries []historyEntry) []historyEntry {
 }
 
 func historyEntryCompactionText(entry historyEntry) string {
+	text := historyEntryCompactionBody(entry)
+	if entry.Images > 0 && text != "" {
+		// The summary is text; it can only say that images were there.
+		text += fmt.Sprintf(" [%d image(s) attached]", entry.Images)
+	}
+	return text
+}
+
+func historyEntryCompactionBody(entry historyEntry) string {
 	switch entry.Type {
 	case "user":
 		return fmt.Sprintf("User: %s", strings.TrimSpace(entry.Content))
@@ -147,6 +157,8 @@ func currentConversationCharCount(entries []historyEntry) int {
 	charCount := 0
 	for _, entry := range entries {
 		charCount += len([]rune(historyEntryCompactionText(entry)))
+		// An image costs about as much as this much text.
+		charCount += entry.Images * images.EstimatedTokens * charsPerTokenEstimate
 	}
 	return charCount
 }

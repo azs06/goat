@@ -32,6 +32,9 @@ type ToolResult struct {
 	Name    string `json:"name"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error,omitempty"`
+	// Images are pictures the tool returned, such as view_image's. Only a model that
+	// accepts images is given them.
+	Images []Image `json:"images,omitempty"`
 }
 
 // Usage is the token usage of one response. InputTokens excludes cached tokens.
@@ -97,6 +100,12 @@ type Request struct {
 	// sent before UserText.
 	ToolResults []ToolResult
 	UserText    string
+	// UserImages go with UserText, after it, such as an image pasted at the prompt.
+	UserImages []Image
+	// TextOnly is set when the model cannot see images. The images the conversation
+	// already holds, from an earlier model, are then sent as a note in their place; the
+	// stored transcript keeps them for a model that can.
+	TextOnly bool
 }
 
 type StopReason string

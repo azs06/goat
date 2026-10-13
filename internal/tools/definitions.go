@@ -69,6 +69,7 @@ func buildSpecs() []provider.ToolSpec {
 			map[string]any{"path": stringParam, "pattern": stringParam, "limit": limitParam, "include_ignored": booleanParam}, "path"),
 		functionTool("grep_files", "Recursively search inside files in the workspace and return matching lines as path:line:text. The query is plain text, or a Go regular expression with regex=true. glob limits the files searched (e.g. *.go, or cmd/*.go). Files .gitignore excludes are skipped unless include_ignored=true.",
 			map[string]any{"path": stringParam, "query": stringParam, "regex": booleanParam, "glob": stringParam, "case_sensitive": booleanParam, "limit": limitParam, "include_ignored": booleanParam}, "path", "query"),
+		viewImageSpec(),
 		functionTool("read_output", "Read a tool output that was shortened for you, in full or a part at a time. output is the number in the note that says it was shortened; offset (first line, starting at 1) and limit (number of lines) pick a part.",
 			map[string]any{"output": limitParam, "offset": limitParam, "limit": limitParam}, "output"),
 	}
