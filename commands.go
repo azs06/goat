@@ -37,6 +37,7 @@ var (
 
 func init() {
 	list := []*cliCommand{
+		{name: "agents", usage: "/agents [id|log id|stop id|dismiss id]", description: "List the subagents; attach to one to watch it and send it messages (ctrl-g)", aliases: []string{"tasks"}, callback: commandAgents},
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
 		{name: "ps", usage: "/ps [stop n|all]", description: "List the commands goat left running in the background, such as a dev server, and stop them", aliases: []string{"jobs"}, callback: commandProcesses},
@@ -662,6 +663,8 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 		case "undo":
 			add("preview", "show what would be restored")
 			add("skip", "give up on a change that cannot be restored")
+		case "agents":
+			agentCompletions(c, add)
 		case "theme":
 			for _, name := range style.BuiltinNames() {
 				add(name, themeHints[name])

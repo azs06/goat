@@ -25,11 +25,27 @@ type queueState struct {
 	capturing bool
 	// footer is the status under the input while a turn runs, taken when it starts:
 	// building it runs git, too slow for every redraw. Without it the input is drawn
-	// without its frame.
+	// without its frame. The subagents' part is added live at each redraw.
 	footer []string
+	// emptyHint replaces the hint on the empty input line, such as in the attach view.
+	emptyHint string
+	// openAgents is set by Ctrl-G during a turn: /agents runs once the turn is over,
+	// before anything else queued.
+	openAgents bool
 }
 
 var turnQueue queueState
+
+// lineQueued receives a value when a line is queued, for the attach view, which
+// handles each line as it comes. It holds at most one.
+var lineQueued = make(chan struct{}, 1)
+
+func nudgeLineQueued() {
+	select {
+	case lineQueued <- struct{}{}:
+	default:
+	}
+}
 
 // editorText is the line being typed; the caller holds mu.
 func (q *queueState) editorText() string {
@@ -54,6 +70,9 @@ func queueKey(key string) {
 	defer func() { editor.menuClosed = true }()
 
 	switch {
+	case !editor.pasting && key == "\x07": // Ctrl-G: the agents picker, once the turn is over
+		turnQueue.openAgents = true
+		nudgeLineQueued()
 	case !editor.pasting && (key == "\x10" || key == "\x1b[A" || key == "\x1bOA") && len(editor.buf) == 0: // Ctrl-P, Up
 		if len(turnQueue.items) > 0 {
 			last := len(turnQueue.items) - 1
@@ -67,6 +86,7 @@ func queueKey(key string) {
 		if done, _ := editor.handleKey(key); done {
 			if text := strings.TrimSpace(string(editor.buf)); text != "" {
 				turnQueue.items = append(turnQueue.items, text)
+				nudgeLineQueued()
 			}
 			editor.setText("")
 		}
@@ -97,6 +117,11 @@ func takeQueuedText() string {
 // plain text messages up to the next command, joined.
 func nextQueuedInput() (string, bool) {
 	turnQueue.mu.Lock()
+	if turnQueue.openAgents {
+		turnQueue.openAgents = false
+		turnQueue.mu.Unlock()
+		return agentsCommandLine, true
+	}
 	if len(turnQueue.items) > 0 && isQueuedCommand(turnQueue.items[0]) {
 		command := turnQueue.items[0]
 		turnQueue.items = turnQueue.items[1:]
@@ -108,12 +133,48 @@ func nextQueuedInput() (string, bool) {
 	return text, text != ""
 }
 
+// agentsCommandLine is what Ctrl-G runs.
+const agentsCommandLine = "/agents"
+
+// takeQueuedLine removes and returns the first queued line, whatever it is, or the
+// /agents of a Ctrl-G. The attach view handles lines one at a time.
+func takeQueuedLine() (string, bool) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	if turnQueue.openAgents {
+		turnQueue.openAgents = false
+		return agentsCommandLine, true
+	}
+	if len(turnQueue.items) == 0 {
+		return "", false
+	}
+	line := turnQueue.items[0]
+	turnQueue.items = turnQueue.items[1:]
+	return line, true
+}
+
+// returnQueuedLinesToEditor puts the lines still queued back in front of the text
+// being typed, so leaving the attach view sends none of them anywhere.
+func returnQueuedLinesToEditor() {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.openAgents = false
+	if len(turnQueue.items) == 0 {
+		return
+	}
+	parts := append(turnQueue.items, turnQueue.editorText())
+	turnQueue.items = nil
+	turnQueue.editor.setText(strings.TrimRight(strings.Join(parts, "\n"), "\n"))
+	turnQueue.editor.menuClosed = true
+}
+
 // returnQueueToPrompt empties the queue into the next prompt's text, after Ctrl-C or an
 // error, so nothing is sent that the user has not seen again.
 func returnQueueToPrompt(input *lineReader) {
 	turnQueue.mu.Lock()
 	parts := append(turnQueue.items, strings.TrimSpace(input.partial))
 	turnQueue.items = nil
+	turnQueue.openAgents = false
 	turnQueue.mu.Unlock()
 	var kept []string
 	for _, part := range parts {
@@ -137,7 +198,11 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 		return nil, 0
 	}
 	available := max(width-1, 10)
-	for _, item := range turnQueue.items {
+	items := turnQueue.items
+	if turnQueue.openAgents {
+		items = append([]string{agentsCommandLine}, items...)
+	}
+	for _, item := range items {
 		label := "  queued  "
 		lines = append(lines, style.Subtle.Render(label)+style.Muted.Render(style.TruncateToWidth(flattenBreaks(item), available-len(label))))
 	}
@@ -146,7 +211,10 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 	prefixWidth := style.VisibleWidth(prefix)
 	editor := turnQueue.editor
 	if len(editor.buf) == 0 {
-		hint := "type a message to send when goat is ready"
+		hint := turnQueue.emptyHint
+		if hint == "" {
+			hint = "type a message to send when goat is ready"
+		}
 		if len(turnQueue.items) > 0 {
 			hint = "enter queues another · ↑ edits the last one"
 		}
@@ -186,6 +254,9 @@ func turnFrameLines(width, maxRows int) (lines []string, cursorRow, cursor int) 
 	turnQueue.mu.Lock()
 	footer := turnQueue.footer
 	turnQueue.mu.Unlock()
+	if footer != nil {
+		footer = withAgentsPart(footer, agentsFooterPart())
+	}
 	frame := 3
 	if footer == nil || maxRows < 1+frame+1 {
 		frame = 0

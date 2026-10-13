@@ -648,6 +648,13 @@ func (m *Manager) evictAgentLocked(a *Agent) {
 	}
 }
 
+// NoticeCount is how many finished background agents' reports wait to be taken.
+func (m *Manager) NoticeCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.notices)
+}
+
 // TakeNotices removes and returns the notices for parentConv, or every notice when it
 // is empty.
 func (m *Manager) TakeNotices(parentConv string) []Notice {

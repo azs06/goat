@@ -203,8 +203,7 @@ func (h *agentHost) serveApprovals(ctx context.Context, cfg *config) {
 		// The question ends when the agent stops waiting, too.
 		askCtx, cancel := context.WithCancel(ctx)
 		stop := context.AfterFunc(req.Ctx, cancel)
-		showAgentActivity("\n" + approvalHeading(a) + "\n")
-		asker := &bashApprover{input: cfg.input, interactive: true}
+		asker := &bashApprover{input: cfg.input, interactive: true, label: renderApprovalLabel(a.ID, a.Label)}
 		err = asker.approve(askCtx, req.Command, req.Workdir)
 		stop()
 		cancel()
@@ -216,15 +215,6 @@ func (h *agentHost) serveApprovals(ctx context.Context, cfg *config) {
 		}
 		req.Answer(err)
 	}
-}
-
-// approvalHeading names the agent whose command the approval card below it shows.
-func approvalHeading(a *subagent.Agent) string {
-	mark := "◌"
-	if !style.Enabled() {
-		mark = "o"
-	}
-	return fmt.Sprintf("%s %s %s %s wants to run:", mark, a.ID, style.Glyphs().Dot, escapeControlChars(oneLine(a.Label)))
 }
 
 // limitText is the spawn_agent error when MaxRunning turns already run.

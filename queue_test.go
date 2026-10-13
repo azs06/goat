@@ -18,7 +18,12 @@ func resetTurnQueue(t *testing.T) {
 		turnQueue.editor = promptEditor{}
 		turnQueue.capturing = false
 		turnQueue.footer = nil
+		turnQueue.openAgents = false
+		turnQueue.emptyHint = ""
 		turnQueue.mu.Unlock()
+		for len(lineQueued) > 0 {
+			<-lineQueued
+		}
 	}
 	reset()
 	t.Cleanup(reset)

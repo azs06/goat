@@ -124,6 +124,7 @@ var promptShortcuts = []shortcut{
 	{"ctrl-u k w", "delete line start, end, word"},
 	{"enter", "while goat works: queue"},
 	{"ctrl-v", "attach the clipboard image"},
+	{"ctrl-g", "subagents (/agents)"},
 	{"/output", "full tool output"},
 }
 
@@ -279,6 +280,16 @@ func renderApprovalCard(command, workdir string, width int) string {
 	return b.String()
 }
 
+// renderApprovalLabel is the line above the approval card of a subagent's command,
+// naming the agent that asks: "◌ a2 · fix flaky test wants to run:".
+func renderApprovalLabel(id, label string) string {
+	mark := "◌"
+	if !style.Enabled() {
+		mark = "o"
+	}
+	return style.Warning.Render(mark) + " " + style.Strong.Render(id) + " " + style.Glyphs().Dot + " " + escapeControlChars(oneLine(label)) + " wants to run:"
+}
+
 // renderApprovalPrompt is the last row of the approval card, where the answer is typed.
 func renderApprovalPrompt() string {
 	g := style.Glyphs()
@@ -311,6 +322,7 @@ var helpGroups = []struct {
 	names []string
 }{
 	{"Conversation", []string{"clear", "resume", "retry", "compact", "paste", "copy", "export"}},
+	{"Session", []string{"agents"}},
 	{"Model", []string{"model", "effort", "status"}},
 	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "ps", "approve", "verify", "tools"}},
 	{"goat", []string{"theme", "history", "help", "exit"}},

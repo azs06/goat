@@ -793,8 +793,10 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 	if gap {
 		fmt.Println()
 	}
-	footer := renderFooter(footerParts(cfg), width)
-	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width, sessionImages{cfg}); ok {
+	parts := footerParts(cfg)
+	liveFooter := func() string { return renderFooter(withAgentsPart(parts, agentsFooterPart()), width) }
+	footer := liveFooter()
+	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width, sessionImages{cfg}, cfg.agents.promptEvents(liveFooter)); ok {
 		if err == nil && strings.TrimSpace(text) != "" {
 			cfg.promptHistory = rememberPrompt(cfg.promptHistory, text)
 			fmt.Println(renderUserMessage(text, width))
@@ -955,8 +957,9 @@ func runInteractive(cfg *config) {
 	var lastInterrupt time.Time
 	for {
 		// Background agents that finished since the last turn are shown, and their
-		// reports go with the next message.
+		// reports go with the next message; commands they asked to run are asked about.
 		collectAgentNotices(cfg)
+		serveIdleApprovals(cfg)
 		// Messages queued during the last turn run before the prompt comes back.
 		var err error
 		text, queued := nextQueuedInput()
@@ -966,6 +969,16 @@ func runInteractive(cfg *config) {
 			text, err = readPrompt(cfg, gap)
 		}
 		gap = true
+		if errors.Is(err, errUIEvent) {
+			// A subagent asked or finished while the prompt waited: dealt with at the top
+			// of the loop, then the prompt comes back with what was typed.
+			gap = false
+			continue
+		}
+		openedAgents := errors.Is(err, errOpenAgents)
+		if openedAgents {
+			text, err = agentsCommandLine, nil
+		}
 		if errors.Is(err, context.Canceled) {
 			if time.Since(lastInterrupt) < exitConfirmWindow {
 				sayGoodbye()
@@ -989,6 +1002,10 @@ func runInteractive(cfg *config) {
 
 		err = handleInput(cfg, text)
 		stopSpinner()
+		if openedAgents {
+			// The prompt left no line behind for Ctrl-G, so none goes above the next.
+			gap = false
+		}
 		if err != nil {
 			// Nothing queued is sent after a turn that was interrupted or failed; it
 			// waits in the prompt instead.
