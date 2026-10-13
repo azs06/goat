@@ -23,7 +23,7 @@ func writeFileAtomic(path string, data []byte, newMode os.FileMode) error {
 			}
 		}
 		mode = info.Mode().Perm()
-		if hardLinkCount(info) > 1 {
+		if hardLinkCount(target, info) > 1 {
 			return os.WriteFile(target, data, mode)
 		}
 	}
