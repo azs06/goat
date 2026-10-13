@@ -47,7 +47,7 @@ func TestWriteFileAtomic(t *testing.T) {
 	if err := writeFileAtomic(fresh, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if info, _ := os.Stat(fresh); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(fresh); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("new file mode %v", info.Mode().Perm())
 	}
 	entries, _ := os.ReadDir(dir)
