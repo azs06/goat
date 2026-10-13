@@ -135,10 +135,14 @@ func verifyTimeout() time.Duration {
 }
 
 // changesWorkspace reports whether a tool call may have changed the workspace: anything
-// but a read-only tool or a preview. run_code counts, since its script may change files.
+// but a read-only tool or a preview. run_bash and run_code always count: they take no
+// preview, so a "preview" argument given to them is ignored and the command still runs.
 func changesWorkspace(call provider.ToolCall) bool {
-	if tools.PlanModePolicyFor(call.Name) == tools.PlanModeAllowed {
+	switch tools.PlanModePolicyFor(call.Name) {
+	case tools.PlanModeAllowed:
 		return false
+	case tools.PlanModeBlocked, tools.PlanModePerCall:
+		return true
 	}
 	var args struct {
 		Preview bool `json:"preview"`

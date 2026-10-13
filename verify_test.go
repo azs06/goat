@@ -135,6 +135,8 @@ func TestChangesWorkspace(t *testing.T) {
 		{provider.ToolCall{Name: "edit_file", Arguments: `{"path": "a"}`}, true},
 		{provider.ToolCall{Name: "run_bash", Arguments: `{"command": "ls"}`}, true},
 		{provider.ToolCall{Name: "run_code", Arguments: `{"code": "1"}`}, true},
+		{provider.ToolCall{Name: "run_bash", Arguments: `{"command": "rm a", "preview": true}`}, true},
+		{provider.ToolCall{Name: "run_code", Arguments: `{"code": "1", "preview": true}`}, true},
 		{provider.ToolCall{Name: "write_file", Arguments: `not json`}, true},
 	} {
 		if got := changesWorkspace(test.call); got != test.want {
