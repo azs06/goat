@@ -22,6 +22,13 @@ Deferred enhancements to implement later:
   - Run on Windows: the case-insensitive variable names and key commands through cmd.exe (including quoted arguments) have only been cross-built, never run. CI now runs the tests on windows-latest as a best-effort job that does not fail the run; make it pass, then make it required.
   - Considered and rejected: hiding plain `*_TOKEN` variables such as `GH_TOKEN` from run_bash. `gh` and similar tools read them, so the agent's `gh` commands would stop working.
 
+- Image follow-ups:
+  - Stored images (the state directory's `images/`) are never removed; prune ones no saved conversation names.
+  - Live-test images on Claude (no Anthropic key was available): `view_image` sends them inside the `tool_result`; only the fake server has seen it.
+  - DeepSeek's Anthropic endpoint may take images inside `tool_result` too (its docs do not say); goat puts them after the results, which works live.
+  - Ctrl-V and dragging a file were checked only through the editor's key handling in tests, not in iTerm, Terminal.app or a Linux terminal; the macOS clipboard read (`osascript`) and PowerShell's were not run against a real clipboard.
+  - Show pasted images inline in terminals that can (kitty, iTerm2), as pi does.
+
 Notes:
 - Session compaction runs automatically, before a prompt or between tool rounds, once the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, and is also available manually via `compact`.
 - Keep preview-first workflows for mutating tools.

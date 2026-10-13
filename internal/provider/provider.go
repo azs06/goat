@@ -32,6 +32,9 @@ type ToolResult struct {
 	Name    string `json:"name"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error,omitempty"`
+	// Images are pictures the tool returned, such as view_image's. Only a model that
+	// accepts images is given them.
+	Images []Image `json:"images,omitempty"`
 }
 
 // Usage is the token usage of one response. InputTokens excludes cached tokens.
@@ -97,6 +100,8 @@ type Request struct {
 	// sent before UserText.
 	ToolResults []ToolResult
 	UserText    string
+	// UserImages go with UserText, after it, such as an image pasted at the prompt.
+	UserImages []Image
 }
 
 type StopReason string

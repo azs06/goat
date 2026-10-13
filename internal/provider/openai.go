@@ -182,22 +182,46 @@ func openAITools(specs []ToolSpec) []responses.ToolUnionParam {
 }
 
 func openAIInput(req Request) responses.ResponseNewParamsInputUnion {
-	if len(req.ToolResults) == 0 {
+	if len(req.ToolResults) == 0 && len(req.UserImages) == 0 {
 		return responses.ResponseNewParamsInputUnion{OfString: openai.String(req.UserText)}
 	}
 
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(req.ToolResults)+1)
 	for _, result := range req.ToolResults {
+		output := responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(result.Output)}
+		if len(result.Images) > 0 {
+			// The Responses API takes a tool's images in its output, after the text.
+			list := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output}}}
+			for _, img := range result.Images {
+				if url, err := img.dataURL(); err == nil {
+					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(url), Detail: responses.ResponseInputImageContentDetailAuto}})
+				} else {
+					list = append(list, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: missingImageText(img.Path)}})
+				}
+			}
+			output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: list}
+		}
 		items = append(items, responses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 				CallID: result.CallID,
-				Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: openai.String(result.Output),
-				},
+				Output: output,
 			},
 		})
 	}
-	if req.UserText != "" {
+	if len(req.UserImages) > 0 {
+		var content responses.ResponseInputMessageContentListParam
+		if req.UserText != "" {
+			content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: req.UserText}})
+		}
+		for _, img := range req.UserImages {
+			if url, err := img.dataURL(); err == nil {
+				content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(url), Detail: responses.ResponseInputImageDetailAuto}})
+			} else {
+				content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: missingImageText(img.Path)}})
+			}
+		}
+		items = append(items, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))
+	} else if req.UserText != "" {
 		items = append(items, responses.ResponseInputItemParamOfMessage(req.UserText, responses.EasyInputMessageRoleUser))
 	}
 	return responses.ResponseNewParamsInputUnion{OfInputItemList: items}

@@ -386,15 +386,52 @@ func toolResultsFor(uses []storedContentBlock, results []ToolResult) []ToolResul
 	return answered
 }
 
+// anthropicImageBlock refers to a stored image; Send puts the data in.
+func anthropicImageBlock(img Image) *anthropic.BetaImageBlockParam {
+	return &anthropic.BetaImageBlockParam{Source: anthropic.BetaImageBlockParamSourceUnion{OfBase64: &anthropic.BetaBase64ImageSourceParam{
+		Data:      img.ref(),
+		MediaType: anthropic.BetaBase64ImageSourceMediaType(img.MediaType),
+	}}}
+}
+
+// userMessageContent is what the next user message holds.
+type userMessageContent struct {
+	results    []ToolResult
+	text       string
+	userImages []Image
+	// toolImagesInResults puts a tool's images inside its tool_result, as Anthropic's
+	// own API takes them. Otherwise they follow the results as image blocks of their
+	// own, which every Messages-compatible server that reads images takes.
+	toolImagesInResults bool
+}
+
 // newAnthropicUserMessage builds the next user message. When cacheControl is set it
 // marks the message's last block as a cache breakpoint.
-func newAnthropicUserMessage(results []ToolResult, text string, cacheControl *anthropic.BetaCacheControlEphemeralParam) (json.RawMessage, error) {
+func newAnthropicUserMessage(content userMessageContent, cacheControl *anthropic.BetaCacheControlEphemeralParam) (json.RawMessage, error) {
 	var blocks []anthropic.BetaContentBlockParamUnion
-	for _, result := range results {
-		blocks = append(blocks, anthropic.NewBetaToolResultBlock(result.CallID, result.Output, result.IsError))
+	var looseImages []Image
+	for _, result := range content.results {
+		block := anthropic.NewBetaToolResultBlock(result.CallID, result.Output, result.IsError)
+		if content.toolImagesInResults {
+			for _, img := range result.Images {
+				block.OfToolResult.Content = append(block.OfToolResult.Content, anthropic.BetaToolResultBlockParamContentUnion{OfImage: anthropicImageBlock(img)})
+			}
+		} else {
+			looseImages = append(looseImages, result.Images...)
+		}
+		blocks = append(blocks, block)
 	}
-	if text != "" {
-		blocks = append(blocks, anthropic.NewBetaTextBlock(text))
+	if len(looseImages) > 0 {
+		blocks = append(blocks, anthropic.NewBetaTextBlock(toolImagesNote))
+		for _, img := range looseImages {
+			blocks = append(blocks, anthropic.BetaContentBlockParamUnion{OfImage: anthropicImageBlock(img)})
+		}
+	}
+	if content.text != "" {
+		blocks = append(blocks, anthropic.NewBetaTextBlock(content.text))
+	}
+	for _, img := range content.userImages {
+		blocks = append(blocks, anthropic.BetaContentBlockParamUnion{OfImage: anthropicImageBlock(img)})
 	}
 	if len(blocks) == 0 {
 		return nil, nil
@@ -559,8 +596,14 @@ func anthropicUsage(usage anthropic.BetaUsage) Usage {
 
 func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(string)) (*Response, bool, error) {
 	history := req.Conversation.Messages
-	results := toolResultsFor(unansweredToolUses(history), req.ToolResults)
-	userMessage, err := newAnthropicUserMessage(results, req.UserText, nil)
+	content := userMessageContent{
+		results:    toolResultsFor(unansweredToolUses(history), req.ToolResults),
+		text:       req.UserText,
+		userImages: req.UserImages,
+		// DeepSeek documents images in user messages only, and other servers vary.
+		toolImagesInResults: p.deepseek == nil && !p.entry,
+	}
+	userMessage, err := newAnthropicUserMessage(content, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -572,18 +615,19 @@ func (p *anthropicProvider) Send(ctx context.Context, req Request, onText func(s
 
 	params := p.baseParams(ctx, req.Model, req.System, req.Effort, true)
 	params.Tools = anthropicTools(req.Tools)
-	params.Messages = replayMessages(messages)
+	sent := messages
 	if p.customBaseURL && p.deepseek == nil && userMessage != nil {
 		// Without automatic caching the transcript breakpoint goes on the new message by
 		// hand. Only the request carries it: a marker kept in the stored transcript would
 		// stay behind on every later request and use up the four allowed.
 		control := p.cacheControl()
-		marked, err := newAnthropicUserMessage(results, req.UserText, &control)
+		marked, err := newAnthropicUserMessage(content, &control)
 		if err != nil {
 			return nil, false, err
 		}
-		params.Messages[len(params.Messages)-1] = param.Override[anthropic.BetaMessageParam](marked)
+		sent = append(append([]json.RawMessage(nil), messages[:len(messages)-1]...), marked)
 	}
+	params.Messages = replayMessages(expandImageRefs(sent))
 
 	streamed, printed, err := p.streamWithFallbackRetry(ctx, params, onText)
 	if err != nil {

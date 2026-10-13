@@ -122,6 +122,7 @@ var promptShortcuts = []shortcut{
 	{"alt-← →", "move by word"},
 	{"ctrl-u k w", "delete line start, end, word"},
 	{"enter", "while goat works: queue"},
+	{"ctrl-v", "attach the clipboard image"},
 	{"/output", "full tool output"},
 }
 
@@ -308,7 +309,7 @@ var helpGroups = []struct {
 	title string
 	names []string
 }{
-	{"Conversation", []string{"clear", "resume", "retry", "compact", "copy", "export"}},
+	{"Conversation", []string{"clear", "resume", "retry", "compact", "paste", "copy", "export"}},
 	{"Model", []string{"model", "effort", "status"}},
 	{"Workspace", []string{"plan", "codemode", "diff", "output", "undo", "ps", "approve", "tools"}},
 	{"goat", []string{"theme", "history", "help", "exit"}},

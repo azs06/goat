@@ -1,0 +1,225 @@
+package provider
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/openai/openai-go/v3/responses"
+)
+
+// testPNG is a 1x1 PNG.
+var testPNG, _ = base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+func storedTestImage(t *testing.T) Image {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(path, testPNG, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Image{Path: path, MediaType: "image/png"}
+}
+
+var testPNGBase64 = base64.StdEncoding.EncodeToString(testPNG)
+
+func TestImageRefsRoundTrip(t *testing.T) {
+	img := Image{Path: `C:\Users\me\shot.png`, MediaType: "image/png"}
+	if got, ok := parseImageRef(img.ref()); !ok || got != img {
+		t.Fatalf("got %+v %v", got, ok)
+	}
+	for _, text := range []string{"hello", imageRefPrefix + "image/png", imageRefPrefix + "image/png;"} {
+		if _, ok := parseImageRef(text); ok {
+			t.Errorf("%q read as a ref", text)
+		}
+	}
+}
+
+func TestExpandImageRefsFillsInTheData(t *testing.T) {
+	img := storedTestImage(t)
+	gone := Image{Path: filepath.Join(t.TempDir(), "gone.png"), MediaType: "image/png"}
+	plain := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"same bytes"}]}`)
+	anthropicMessage, _ := newAnthropicUserMessage(userMessageContent{text: "look", userImages: []Image{img, gone}}, nil)
+	chat, _ := chatUserMessage("look", []Image{img}, nil)
+
+	out := expandImageRefs([]json.RawMessage{plain, anthropicMessage, chat})
+	if string(out[0]) != string(plain) {
+		t.Errorf("a message without images changed: %s", out[0])
+	}
+	if strings.Contains(string(out[1]), imageRefPrefix) || !strings.Contains(string(out[1]), `"data":"`+testPNGBase64+`"`) {
+		t.Errorf("Anthropic image not filled in: %s", out[1])
+	}
+	if !strings.Contains(string(out[1]), "gone.png is no longer available") {
+		t.Errorf("a missing file should become a note: %s", out[1])
+	}
+	if !strings.Contains(string(out[2]), `"url":"data:image/png;base64,`+testPNGBase64+`"`) {
+		t.Errorf("Chat image not filled in: %s", out[2])
+	}
+	// The stored messages keep only the reference.
+	if !strings.Contains(string(anthropicMessage), imageRefPrefix) || strings.Contains(string(anthropicMessage), testPNGBase64) {
+		t.Errorf("the stored message should hold the reference only: %s", anthropicMessage)
+	}
+	if CountImageRefs(Conversation{Messages: []json.RawMessage{anthropicMessage, chat}}) != 3 {
+		t.Error("CountImageRefs")
+	}
+}
+
+func TestAnthropicUserMessagePlacesToolImages(t *testing.T) {
+	img := storedTestImage(t)
+	results := []ToolResult{{CallID: "toolu_1", Output: "Image shot.png is attached.", Images: []Image{img}}}
+
+	types := func(raw json.RawMessage) []string {
+		var message struct {
+			Content []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type string `json:"type"`
+				} `json:"content"`
+			} `json:"content"`
+		}
+		json.Unmarshal(raw, &message)
+		var out []string
+		for _, block := range message.Content {
+			kind := block.Type
+			for _, inner := range block.Content {
+				kind += "/" + inner.Type
+			}
+			out = append(out, kind)
+		}
+		return out
+	}
+
+	native, _ := newAnthropicUserMessage(userMessageContent{results: results, text: "next", toolImagesInResults: true}, nil)
+	if got := strings.Join(types(native), " "); got != "tool_result/text/image text" {
+		t.Errorf("Anthropic: %s", got)
+	}
+	loose, _ := newAnthropicUserMessage(userMessageContent{results: results, text: "next", userImages: []Image{img}}, nil)
+	if got := strings.Join(types(loose), " "); got != "tool_result/text text image text image" {
+		t.Errorf("other servers: %s", got)
+	}
+	if !strings.Contains(string(loose), toolImagesNote) {
+		t.Errorf("the tool's images need an introduction: %s", loose)
+	}
+}
+
+func TestChatProviderSendsToolImagesInAUserMessage(t *testing.T) {
+	img := storedTestImage(t)
+	server := newChatServer(t,
+		[]string{chunk(`{"role":"assistant","tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"view_image","arguments":"{\"path\":\"shot.png\"}"}}]}`, "tool_calls")},
+		[]string{chunk(`{"role":"assistant","content":"A red dot."}`, "stop")},
+	)
+	p := newChatProvider("local", server.URL+"/v1", "")
+	first, _, err := p.Send(context.Background(), Request{Model: "m", UserText: "what is in shot.png?"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := p.Send(context.Background(), Request{Model: "m", Conversation: first.Conversation, ToolResults: []ToolResult{{CallID: "call_a", Output: "Image shot.png is attached.", Images: []Image{img}}}}, nil)
+	if err != nil || second.Text != "A red dot." {
+		t.Fatalf("got %+v %v", second, err)
+	}
+
+	messages := server.bodies[1]["messages"].([]any)
+	tool := messages[len(messages)-2].(map[string]any)
+	user := messages[len(messages)-1].(map[string]any)
+	if tool["role"] != "tool" || tool["content"] != "Image shot.png is attached." {
+		t.Errorf("tool message: %v", tool)
+	}
+	parts := user["content"].([]any)
+	if user["role"] != "user" || len(parts) != 2 || parts[0].(map[string]any)["text"] != toolImagesNote {
+		t.Fatalf("user message: %v", user)
+	}
+	url := parts[1].(map[string]any)["image_url"].(map[string]any)["url"]
+	if url != "data:image/png;base64,"+testPNGBase64 {
+		t.Errorf("image url: %v", url)
+	}
+	// The kept transcript refers to the file rather than holding the data.
+	stored, _ := json.Marshal(second.Conversation)
+	if strings.Contains(string(stored), testPNGBase64) || !strings.Contains(string(stored), imageRefPrefix) {
+		t.Errorf("transcript: %s", stored)
+	}
+
+	// Without images the user message stays plain text.
+	if message, _ := chatUserMessage("hi", nil, nil); string(message) != `{"role":"user","content":"hi"}` {
+		t.Errorf("got %s", message)
+	}
+	if message, _ := chatUserMessage("", nil, nil); message != nil {
+		t.Errorf("got %s", message)
+	}
+}
+
+func TestOpenAIInputCarriesImages(t *testing.T) {
+	img := storedTestImage(t)
+	gone := Image{Path: filepath.Join(t.TempDir(), "gone.png"), MediaType: "image/png"}
+	input := openAIInput(Request{
+		ToolResults: []ToolResult{{CallID: "call_a", Output: "attached", Images: []Image{img, gone}}, {CallID: "call_b", Output: "plain"}},
+		UserText:    "and this one",
+		UserImages:  []Image{img},
+	})
+	encoded, _ := json.Marshal(input)
+	var items []map[string]any
+	if err := json.Unmarshal(encoded, &items); err != nil || len(items) != 3 {
+		t.Fatalf("items: %s", encoded)
+	}
+	output := items[0]["output"].([]any)
+	if len(output) != 3 || output[0].(map[string]any)["type"] != "input_text" || output[1].(map[string]any)["image_url"] != "data:image/png;base64,"+testPNGBase64 || !strings.Contains(output[2].(map[string]any)["text"].(string), "no longer available") {
+		t.Errorf("function_call_output: %v", output)
+	}
+	if items[1]["output"] != "plain" {
+		t.Errorf("a result without images stays a string: %v", items[1])
+	}
+	content := items[2]["content"].([]any)
+	if items[2]["role"] != "user" || len(content) != 2 || content[1].(map[string]any)["type"] != "input_image" {
+		t.Errorf("user message: %v", items[2])
+	}
+
+	// A prompt with an image and no tool results is a list too.
+	if list := openAIInput(Request{UserText: "look", UserImages: []Image{img}}); len(list.OfInputItemList) != 1 {
+		t.Errorf("got %+v", list)
+	}
+	var _ responses.ResponseNewParamsInputUnion = input
+}
+
+func TestAcceptsImages(t *testing.T) {
+	ResetEntries()
+	t.Cleanup(ResetEntries)
+	RegisterEntries(PresetEntries(func(string) bool { return false }))
+	local, err := ParseEntries([]byte(`{"local": {"api": "openai", "base_url": "http://localhost:11434/v1", "images": ["llava:13b"]}, "proxy": {"api": "anthropic", "base_url": "http://localhost:4000", "images": true}, "plain": {"api": "openai", "base_url": "http://localhost:1234/v1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	RegisterEntries(local)
+
+	for model, want := range map[Model]bool{
+		{OpenAI, "gpt-6-luna"}:                        true,
+		{OpenAI, "gpt-3.5-turbo"}:                     false,
+		{Anthropic, "claude-opus-5-5"}:                true,
+		{DeepSeek, "deepseek-v4-pro"}:                 false,
+		{DeepSeek, "deepseek-v4-flash"}:               false,
+		{DeepSeek, "deepseek-flash"}:                  true,
+		{DeepSeek, "deepseek-v4.1-flash"}:             true,
+		{DeepSeek, "deepseek-v4-flash-vision-exp"}:    true,
+		{OpenCodeGo, "kimi-k3"}:                       true,
+		{OpenCodeGo, "deepseek-v4-pro"}:               false,
+		{"gemini", "gemini-3-pro"}:                    true,
+		{"openrouter", "anthropic/claude-sonnet-5-5"}: true,
+		{"groq", "llama-3.3-70b"}:                     false,
+		{"local", "llava:13b"}:                        true,
+		{"local", "qwen3-coder"}:                      false,
+		{"proxy", "anything"}:                         true,
+		{"plain", "llava:13b"}:                        false,
+		{"nobody", "x"}:                               false,
+	} {
+		if got := AcceptsImages(model); got != want {
+			t.Errorf("AcceptsImages(%s) = %v, want %v", model, got, want)
+		}
+	}
+
+	for _, bad := range []string{`"yes"`, `[""]`, `{}`} {
+		if _, err := ParseEntries([]byte(`{"x": {"api": "openai", "base_url": "http://localhost:1/v1", "images": ` + bad + `}}`)); err == nil || !strings.Contains(err.Error(), "x.images") {
+			t.Errorf("images %s: got %v", bad, err)
+		}
+	}
+}

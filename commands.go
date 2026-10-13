@@ -45,6 +45,7 @@ func init() {
 		{name: "diff", usage: "/diff [staged]", description: "Show the uncommitted changes in the workspace's git repository", callback: commandDiff},
 		{name: "copy", usage: "/copy", description: "Copy the last reply to the clipboard", callback: commandCopy},
 		{name: "export", usage: "/export [file]", description: "Write the conversation to a Markdown file", callback: commandExport},
+		{name: "paste", usage: "/paste", description: "Attach the image on the clipboard to your next message (ctrl-v at the prompt)", callback: commandPaste},
 		{name: "output", usage: "/output [n]", description: "Show a tool call's full output (n=1 is the latest)", callback: commandOutput},
 		{name: "compact", usage: "/compact [focus]", description: "Summarize the conversation into a fresh, smaller context", callback: commandCompact},
 		{name: "effort", usage: "/effort [level]", description: "Pick how much the model reasons, or set a level", callback: commandEffort},
@@ -266,7 +267,8 @@ func commandRetry(ctx context.Context, c *config, args []string) error {
 		return fmt.Errorf("there is no earlier prompt to retry")
 	}
 	fmt.Println(formatNotice("Retrying: " + truncateForLog(c.lastPrompt, 120)))
-	return runPrompt(ctx, c, c.lastPrompt)
+	// The images that went with it go again.
+	return runPromptWithImages(ctx, c, c.lastPrompt, c.lastImages)
 }
 
 func commandApprove(ctx context.Context, c *config, args []string) error {
@@ -371,6 +373,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 	rows := [][2]string{
 		{"Model:", style.Highlight.Render(c.model.String())},
 		{"Effort:", effortStatusText(c)},
+		{"Images:", imagesStatusText(c.model)},
 	}
 	width := 9
 	for _, name := range provider.Names {

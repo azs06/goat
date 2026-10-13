@@ -36,6 +36,9 @@ type Entry struct {
 	// Preset marks one of goat's own presets, such as openrouter, rather than an entry
 	// from the user's files.
 	Preset bool
+	// Images is the "images" setting: which of the entry's models goat sends images
+	// to. nil when the entry does not say, which means none.
+	Images *entryImages
 
 	endpoint Endpoint
 }
@@ -152,7 +155,7 @@ var (
 )
 
 // entryFields are the fields an entry may have.
-var entryFields = []string{"api", "base_url", "key_env", "key_command", "models"}
+var entryFields = []string{"api", "base_url", "key_env", "key_command", "models", "images"}
 
 // ParseEntries reads providers.json: an object that maps each entry's name to its
 // settings, e.g.
@@ -223,6 +226,14 @@ func parseEntry(name string, raw json.RawMessage) (Entry, error) {
 				return Entry{}, fmt.Errorf("%s.models has an empty name", name)
 			}
 		}
+	}
+
+	if value, ok := fields["images"]; ok {
+		images, err := parseEntryImages(value)
+		if err != nil {
+			return Entry{}, fmt.Errorf("%s.images %v", name, err)
+		}
+		entry.Images = images
 	}
 
 	switch entry.API {

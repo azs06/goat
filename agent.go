@@ -68,6 +68,10 @@ type turnOptions struct {
 	// contextNote, when set, goes before the prompt in the turn's first request, such as
 	// the output of the ! commands the user ran since the last message.
 	contextNote string
+	// vision is set when the model reads images: view_image works, and images reach it.
+	vision bool
+	// images go with the prompt, such as ones pasted at the prompt.
+	images []provider.Image
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -284,6 +288,9 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
 		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID}
+		var shown []provider.Image
+		toolOpts.Vision = opts.vision
+		toolOpts.AttachImage = func(img provider.Image) { shown = append(shown, img) }
 		var nested *nestedRenderer
 		if toolCall.Name == tools.RunCode {
 			nested = &nestedRenderer{}
@@ -301,8 +308,9 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 			result.Output = fmt.Sprintf("Tool %s failed: %v", toolCall.Name, err)
 			result.IsError = true
 		} else {
-			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName})
+			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName, Images: len(shown)})
 			result.Output = toolOutput
+			result.Images = shown
 		}
 		result.Output = prepareToolOutputForModel(toolCall.Name, result.Output)
 		results = append(results, result)
@@ -373,7 +381,7 @@ func recoveryPromptText(prompt string, moved bool, owed []provider.ToolResult) s
 // should continue from, including when it also returns an error.
 func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, conv conversationState, opts turnOptions) (conversationState, error) {
 	providerName := p.Name()
-	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName})
+	recordHistory(historyEntry{Type: "user", Content: prompt, Provider: providerName, Images: len(opts.images)})
 
 	system, specs := promptFor(opts.codeMode)
 	req := provider.Request{
@@ -384,6 +392,12 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		Conversation: conv.conversation,
 		ToolResults:  conv.pendingToolResults,
 		UserText:     prompt,
+		UserImages:   opts.images,
+	}
+	if !opts.vision {
+		// Images the conversation holds from an earlier model stay; new ones are not sent.
+		req.ToolResults = withoutImages(req.ToolResults)
+		req.UserImages = nil
 	}
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
@@ -461,11 +475,14 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		req.Conversation = next.conversation
 		req.ToolResults = next.pendingToolResults
 		req.UserText = ""
+		req.UserImages = nil
 		if opts.compact != nil {
 			if compacted, ok := opts.compact(ctx); ok {
 				req.Conversation = compacted
 				req.ToolResults = nil
 				req.UserText = compactedToolResultsText(next.pendingToolResults)
+				// The results go as text, and their images with it.
+				req.UserImages = resultImages(next.pendingToolResults)
 				recordHistory(historyEntry{Type: "user", Content: req.UserText, Provider: providerName})
 				// The summary's conversation has not been told the model yet.
 				req.UserText = modelNote(opts.model, providerName) + req.UserText
@@ -485,6 +502,29 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			}
 		}
 	}
+}
+
+// resultImages collects the images tool results carry, in order.
+func resultImages(results []provider.ToolResult) []provider.Image {
+	var all []provider.Image
+	for _, result := range results {
+		all = append(all, result.Images...)
+	}
+	return all
+}
+
+// withoutImages drops the images of results owed to a model that cannot see them, as
+// after a /model switch.
+func withoutImages(results []provider.ToolResult) []provider.ToolResult {
+	if len(resultImages(results)) == 0 {
+		return results
+	}
+	stripped := make([]provider.ToolResult, len(results))
+	for i, result := range results {
+		result.Images = nil
+		stripped[i] = result
+	}
+	return stripped
 }
 
 func detailSuffix(detail string) string {

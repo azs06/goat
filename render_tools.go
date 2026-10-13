@@ -55,6 +55,8 @@ func toolDisplayName(name string) string {
 		return "Undo"
 	case tools.RunCode:
 		return "Code"
+	case tools.ViewImage:
+		return "View"
 	default:
 		return name
 	}
@@ -97,6 +99,8 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		case count > 0:
 			flags = append(flags, fmt.Sprintf("first %.0f lines", count))
 		}
+	case tools.ViewImage:
+		summary = str("path")
 	case "read_dir", "delete_file", "delete_dir":
 		summary = str("path")
 	case "tree_dir":
