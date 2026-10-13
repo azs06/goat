@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,13 +32,18 @@ type Options struct {
 	AttachImage func(provider.Image)
 	// Outputs, when set, lets read_output find earlier tool outputs.
 	Outputs OutputSource
+	// Agents runs the subagent tools. It is nil in subagents and run_code scripts, where
+	// those tools fail with ErrNoAgents.
+	Agents AgentHost
+	// Subagent is set for calls a subagent makes; undo_last_change is refused for them.
+	Subagent bool
 }
 
 // toolHandler runs one tool with its raw JSON arguments, already validated against the
 // tool's schema.
 type toolHandler func(ctx context.Context, rawArgs string, opts Options) (string, error)
 
-// toolHandlers maps each tool in Specs to the code that runs it.
+// toolHandlers maps each tool in CodeModeSpecs and AgentSpecs to the code that runs it.
 var toolHandlers = map[string]toolHandler{
 	"read_dir":         runReadDir,
 	"tree_dir":         runTreeDir,
@@ -57,11 +63,19 @@ var toolHandlers = map[string]toolHandler{
 	"grep_files":       runGrepFiles,
 	ViewImage:          runViewImage,
 	"read_output":      runReadOutput,
+	SpawnAgent:         runSpawnAgent,
+	AgentStatus:        runAgentStatus,
+	SendMessage:        runSendMessage,
+	WaitAgents:         runWaitAgents,
+	StopAgent:          runStopAgent,
 }
 
+// errSubagentUndo is the error for undo_last_change called by a subagent.
+var errSubagentUndo = errors.New("undo_last_change is not available to subagents; undo is workspace-wide")
+
 // Execute validates and runs one tool call. In plan mode only the read-only tools and
-// previews run, run_bash commands go through opts.ApproveBash first, and run_code only
-// runs in code mode.
+// previews run, run_bash commands go through opts.ApproveBash first, run_code only
+// runs in code mode, and subagents cannot undo.
 func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (string, error) {
 	spec, ok := findSpec(toolCall.Name)
 	handler := toolHandlers[toolCall.Name]
@@ -73,6 +87,9 @@ func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (str
 	}
 	if toolCall.Name == RunCode && !opts.CodeMode {
 		return "", ErrCodeModeOff
+	}
+	if toolCall.Name == "undo_last_change" && opts.Subagent {
+		return "", errSubagentUndo
 	}
 	if opts.PlanMode && !allowedInPlanMode(toolCall) {
 		return "", ErrPlanMode

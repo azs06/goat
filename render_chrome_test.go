@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -193,13 +194,14 @@ func TestRenderToolList(t *testing.T) {
 	withColor(t, false)
 	plain := renderToolList()
 	chromeAssertPlain(t, "tool list", plain)
-	for _, spec := range tools.Specs {
+	for _, spec := range slices.Concat(tools.Specs, tools.AgentSpecs) {
 		if !strings.Contains(plain, spec.Name) {
 			t.Errorf("plain tool list lacks %s", spec.Name)
 		}
 	}
 	for _, want := range []string{"Read-only", "plan mode allows these", "File changes", "Shell", "blocked in plan mode",
-		"read_file (path)\n    Read a file from a relative path in the workspace.\n", "grep_files (path, query)", "run_bash (command)"} {
+		"read_file (path)\n    Read a file from a relative path in the workspace.\n", "grep_files (path, query)", "run_bash (command)",
+		"Subagents", "plan mode applies to every call they make", "spawn_agent (description, prompt)\n    Start a goat subagent on a task and get back its report.\n"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain tool list lacks %q:\n%s", want, plain)
 		}
@@ -213,7 +215,7 @@ func TestRenderToolList(t *testing.T) {
 	withColor(t, true)
 	colored := style.StripANSI(renderToolList())
 	flat := strings.Join(strings.Fields(colored), " ")
-	for _, spec := range tools.Specs {
+	for _, spec := range slices.Concat(tools.Specs, tools.AgentSpecs) {
 		if !strings.Contains(flat, strings.Join(strings.Fields(firstSentence(spec.Description)), " ")) {
 			t.Errorf("colored tool list lost %s's summary:\n%s", spec.Name, colored)
 		}
