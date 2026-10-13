@@ -235,6 +235,18 @@ type keyCapture struct {
 // activeKeyCapture is the capture of the turn that is running, if any.
 var activeKeyCapture *keyCapture
 
+func currentKeyCapture() *keyCapture {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	return activeKeyCapture
+}
+
+func setActiveKeyCapture(c *keyCapture) {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	activeKeyCapture = c
+}
+
 // startKeyCapture starts reading keys into the queue until stopKeyCapture. The line
 // left unsent at the previous prompt, if any, is where typing continues.
 func startKeyCapture(ctx context.Context, input *lineReader) {
@@ -244,8 +256,9 @@ func startKeyCapture(ctx context.Context, input *lineReader) {
 	turnQueue.mu.Unlock()
 	input.partial = ""
 
-	activeKeyCapture = &keyCapture{input: input, parent: ctx}
-	activeKeyCapture.run()
+	c := &keyCapture{input: input, parent: ctx}
+	setActiveKeyCapture(c)
+	c.run()
 }
 
 func (c *keyCapture) run() {
@@ -291,11 +304,13 @@ func (c *keyCapture) resume() {
 // stopKeyCapture ends the turn's capture. The line typed but not queued goes back to
 // the prompt.
 func stopKeyCapture() {
+	uiMu.Lock()
 	c := activeKeyCapture
+	activeKeyCapture = nil
+	uiMu.Unlock()
 	if c == nil {
 		return
 	}
-	activeKeyCapture = nil
 	c.pause()
 	turnQueue.mu.Lock()
 	c.input.partial = turnQueue.editorText()

@@ -108,7 +108,7 @@ func TestKeyCaptureCarriesTheUnsentLine(t *testing.T) {
 
 	startKeyCapture(context.Background(), input)
 	// The reader runs out of input after "unsent"; wait for it to stop.
-	<-activeKeyCapture.done
+	<-currentKeyCapture().done
 	stopKeyCapture()
 
 	if text := takeQueuedText(); text != "from before: queued" {

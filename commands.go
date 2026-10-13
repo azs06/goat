@@ -279,14 +279,14 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "on", "yes", "true":
-			c.approver.autoApprove = true
+			c.approver.autoApprove.Store(true)
 		case "off", "no", "false":
-			c.approver.autoApprove = false
+			c.approver.autoApprove.Store(false)
 		default:
 			return fmt.Errorf("use /approve on or /approve off")
 		}
 	}
-	if c.approver.autoApprove {
+	if c.approver.autoApprove.Load() {
 		message := "run_bash commands run without asking "
 		if style.Enabled() {
 			message = formatWarning(message)
@@ -313,7 +313,7 @@ func effortOptions(c *config) []selectOption {
 	options := make([]selectOption, 0, len(provider.EffortLevels))
 	for _, level := range provider.EffortLevels {
 		hint := effortHints[level]
-		if sent := provider.DescribeEffort(c.providers[c.model.Provider], c.model, level); sent != string(level) {
+		if sent := provider.DescribeEffort(c.cachedProvider(c.model.Provider), c.model, level); sent != string(level) {
 			hint += " · sent as " + sent
 		}
 		options = append(options, selectOption{label: string(level), hint: hint, current: level == c.reasoningEffort})
@@ -367,7 +367,7 @@ func effortStatusText(c *config) string {
 
 // effectiveEffortDescription says what the provider will actually receive.
 func effectiveEffortDescription(c *config) string {
-	return provider.DescribeEffort(c.providers[c.model.Provider], c.model, c.reasoningEffort)
+	return provider.DescribeEffort(c.cachedProvider(c.model.Provider), c.model, c.reasoningEffort)
 }
 
 func commandStatus(ctx context.Context, c *config, args []string) error {
@@ -455,7 +455,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		rows = append(rows, [2]string{"Code mode:", "on (tool calls can be batched in run_code)"})
 	}
 	if c.approver != nil {
-		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
+		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove.Load()]})
 	}
 	if command, source := verifyCommand(); command != "" {
 		rows = append(rows, [2]string{"Verify:", escapeControlChars(command) + style.Muted.Render(" ("+source+")")})
