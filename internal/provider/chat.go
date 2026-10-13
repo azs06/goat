@@ -283,7 +283,7 @@ func (p *chatProvider) Send(ctx context.Context, req Request, onText func(string
 
 	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(req.Model),
-		Messages: chatRequestMessages(req.System, expandImageRefs(messages)),
+		Messages: chatRequestMessages(req.System, expandImageRefs(messages, req.TextOnly)),
 	}
 	if len(req.Tools) > 0 {
 		params.Tools = chatTools(req.Tools)

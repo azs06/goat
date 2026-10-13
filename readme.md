@@ -419,11 +419,14 @@ vision models, and the presets' models known to read them, such as Gemini. A
 
 The clipboard is read with `osascript` on macOS, `wl-paste` or `xclip` on Linux, and
 PowerShell on Windows. With a model that reads no images, goat says so instead of
-attaching, and `view_image` tells the model it cannot see them.
+attaching, and `view_image` tells the model it cannot see them. After `/model` switches
+to such a model, the images the conversation already holds go as a short note in their
+place; switch back and they are sent again.
 
 Images larger than about 1568 pixels on the long side, or 1.15 megapixels, are scaled
 down first, as Claude requires (it costs about 1,600 tokens); PNG, JPEG, GIF and WebP
-are accepted. goat keeps a copy in its [state directory](#conversations-and-state), and
+are accepted, and an animated GIF goes as its first frame, since OpenAI takes only still
+ones. goat keeps a copy in its [state directory](#conversations-and-state), and
 the saved conversation names that copy rather than holding the image, so `session.json`
 stays small; each request reads it again. goat sends an image only from those copies,
 and only where it put one itself, so nothing a model writes can make goat send another

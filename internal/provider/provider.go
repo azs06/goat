@@ -102,6 +102,10 @@ type Request struct {
 	UserText    string
 	// UserImages go with UserText, after it, such as an image pasted at the prompt.
 	UserImages []Image
+	// TextOnly is set when the model cannot see images. The images the conversation
+	// already holds, from an earlier model, are then sent as a note in their place; the
+	// stored transcript keeps them for a model that can.
+	TextOnly bool
 }
 
 type StopReason string

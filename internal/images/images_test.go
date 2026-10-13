@@ -172,3 +172,80 @@ func TestNamesAndExtensions(t *testing.T) {
 		t.Error("formatBytes")
 	}
 }
+
+// testGIF encodes frames as a GIF of the given canvas size; each frame is a solid
+// square of its color at its bounds.
+func testGIF(t *testing.T, width, height int, frames map[image.Rectangle]color.Color, order []image.Rectangle) []byte {
+	t.Helper()
+	palette := color.Palette{color.Transparent, color.RGBA{255, 0, 0, 255}, color.RGBA{0, 0, 255, 255}}
+	anim := &gif.GIF{Config: image.Config{Width: width, Height: height, ColorModel: palette}}
+	for _, bounds := range order {
+		frame := image.NewPaletted(bounds, palette)
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				frame.Set(x, y, frames[bounds])
+			}
+		}
+		anim.Image = append(anim.Image, frame)
+		anim.Delay = append(anim.Delay, 10)
+	}
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, anim); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestAnimatedGIFGoesAsItsFirstFrame(t *testing.T) {
+	red, blue := color.RGBA{255, 0, 0, 255}, color.RGBA{0, 0, 255, 255}
+	first, second := image.Rect(10, 10, 20, 20), image.Rect(0, 0, 40, 30)
+	data := testGIF(t, 40, 30, map[image.Rectangle]color.Color{first: red, second: blue}, []image.Rectangle{first, second})
+	if !animatedGIF(data) {
+		t.Fatal("expected the GIF to count as animated")
+	}
+
+	prepared, err := Prepare(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.MediaType != "image/png" || prepared.Width != 40 || prepared.Height != 30 || prepared.Scaled() {
+		t.Fatalf("got %s %dx%d (from %dx%d)", prepared.MediaType, prepared.Width, prepared.Height, prepared.OriginalWidth, prepared.OriginalHeight)
+	}
+	still, err := png.Decode(bytes.NewReader(prepared.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first frame sits where it was drawn on the canvas; the rest is transparent,
+	// and nothing of the second frame shows.
+	if r, g, b, a := still.At(15, 15).RGBA(); r>>8 != 255 || g != 0 || b != 0 || a>>8 != 255 {
+		t.Errorf("inside the first frame: %v", still.At(15, 15))
+	}
+	if _, _, _, a := still.At(2, 2).RGBA(); a != 0 {
+		t.Errorf("outside the first frame should be transparent: %v", still.At(2, 2))
+	}
+}
+
+func TestStillGIFIsSentAsItIs(t *testing.T) {
+	only := image.Rect(0, 0, 12, 8)
+	data := testGIF(t, 12, 8, map[image.Rectangle]color.Color{only: color.RGBA{255, 0, 0, 255}}, []image.Rectangle{only})
+	if animatedGIF(data) {
+		t.Fatal("a one-frame GIF is not animated")
+	}
+	prepared, err := Prepare(data)
+	if err != nil || prepared.MediaType != "image/gif" || !bytes.Equal(prepared.Data, data) {
+		t.Fatalf("got %s (%v)", prepared.MediaType, err)
+	}
+}
+
+func TestAnimatedGIFCheckSurvivesBrokenData(t *testing.T) {
+	first, second := image.Rect(0, 0, 4, 4), image.Rect(0, 0, 4, 4)
+	data := testGIF(t, 4, 4, map[image.Rectangle]color.Color{first: color.RGBA{255, 0, 0, 255}}, []image.Rectangle{first, second})
+	for cut := 0; cut < len(data); cut++ {
+		animatedGIF(data[:cut]) // must not panic
+	}
+	for _, junk := range [][]byte{nil, []byte("GIF89a"), append([]byte("GIF89a\x04\x00\x04\x00\xff\x00\x00"), 0x2c)} {
+		if animatedGIF(junk) {
+			t.Errorf("%q counted as animated", junk)
+		}
+	}
+}

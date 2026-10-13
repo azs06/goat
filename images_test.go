@@ -428,3 +428,43 @@ func TestFailedScriptKeepsItsImages(t *testing.T) {
 		t.Errorf("the image was not filled in: %v", source)
 	}
 }
+
+func TestImagesGoAsNotesAfterSwitchingToAModelThatCannotSee(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	writeTestPNG(t, filepath.Join(workDir, "shot.png"), 8, 8)
+
+	fake := newFakeAnthropic(t,
+		newSSE("msg_1").toolUse("toolu_1", "view_image", `{"path":"shot.png"}`).stop("tool_use", ""),
+		newSSE("msg_2").text("Noise.").stop("end_turn", ""),
+		newSSE("msg_3").text("Still here.").stop("end_turn", ""),
+		newSSE("msg_4").text("Noise again.").stop("end_turn", ""),
+	)
+	p := fake.provider(true)
+	conv, err := sendPromptStream(context.Background(), p, "look", conversationState{}, turnOptions{model: "claude-opus-5-5", vision: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(conv.conversation)
+
+	// A model that cannot see gets a note where the image was; the transcript keeps it.
+	conv, err = sendPromptStream(context.Background(), p, "and now?", conv, turnOptions{model: "text-only-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	textOnly := fake.request(2).raw
+	if strings.Contains(textOnly, `"type":"image"`) || !strings.Contains(textOnly, "the current model cannot see images") {
+		t.Error("a model that cannot see was sent the image, or no note in its place")
+	}
+	if provider.CountImageRefs(conv.conversation) != 1 || !strings.Contains(string(before), "goat-image:") {
+		t.Error("the stored conversation should keep the image")
+	}
+
+	// Back on a model that sees, the image goes again.
+	if _, err := sendPromptStream(context.Background(), p, "again", conv, turnOptions{model: "claude-opus-5-5", vision: true}); err != nil {
+		t.Fatal(err)
+	}
+	if again := fake.request(3).raw; !strings.Contains(again, `"type":"image"`) || strings.Contains(again, "the current model cannot see images") {
+		t.Error("a model that sees should get the image back")
+	}
+}

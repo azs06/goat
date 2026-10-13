@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	_ "image/gif" // registers the GIF decoder
+	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"math"
@@ -135,6 +135,17 @@ func Prepare(data []byte) (Prepared, error) {
 	if config.Width <= 0 || config.Height <= 0 {
 		return Prepared{}, fmt.Errorf("the %s image has no pixels", FormatName(mediaType))
 	}
+	if mediaType == "image/gif" && animatedGIF(data) {
+		// OpenAI takes only still GIFs, so an animation goes as its first frame.
+		if int64(config.Width)*int64(config.Height) > maxDecodePixels {
+			return Prepared{}, fmt.Errorf("the image is %dx%d, too large to read", config.Width, config.Height)
+		}
+		still, err := firstFrame(data, config)
+		if err != nil {
+			return Prepared{}, err
+		}
+		return Prepare(still)
+	}
 	prepared := Prepared{Data: data, MediaType: mediaType, Width: config.Width, Height: config.Height, OriginalWidth: config.Width, OriginalHeight: config.Height}
 	width, height := fit(config.Width, config.Height)
 	if width == config.Width && height == config.Height && len(data) <= maxEncodedBytes {
@@ -177,6 +188,79 @@ func Prepare(data []byte) (Prepared, error) {
 	}
 	prepared.Data, prepared.MediaType = buf.Bytes(), "image/jpeg"
 	return prepared, nil
+}
+
+// animatedGIF reports whether a GIF holds more than one frame. It walks the file's
+// blocks without decoding any pixels, so a long animation costs nothing to check; data
+// it cannot follow counts as a still image, which the decoder then judges.
+func animatedGIF(data []byte) bool {
+	const header = 13 // signature, version and logical screen descriptor
+	if len(data) < header {
+		return false
+	}
+	i := header
+	if flags := data[10]; flags&0x80 != 0 {
+		i += 3 << (flags&0x07 + 1) // global color table
+	}
+	// skipSubBlocks moves past a run of sub-blocks, each a length byte and its data,
+	// ended by a zero length.
+	skipSubBlocks := func() bool {
+		for i < len(data) {
+			size := int(data[i])
+			i++
+			if size == 0 {
+				return true
+			}
+			i += size
+		}
+		return false
+	}
+	frames := 0
+	for i < len(data) {
+		switch data[i] {
+		case 0x21: // extension: introducer, label, sub-blocks
+			i += 2
+			if !skipSubBlocks() {
+				return false
+			}
+		case 0x2c: // image descriptor
+			frames++
+			if frames > 1 {
+				return true
+			}
+			if i+10 > len(data) {
+				return false
+			}
+			flags := data[i+9]
+			i += 10
+			if flags&0x80 != 0 {
+				i += 3 << (flags&0x07 + 1) // local color table
+			}
+			i++ // LZW minimum code size
+			if !skipSubBlocks() {
+				return false
+			}
+		default: // the trailer, or data that is not a block
+			return false
+		}
+	}
+	return false
+}
+
+// firstFrame draws an animated GIF's first frame onto a canvas of the animation's size,
+// since a frame may cover only part of it, and returns it as PNG.
+func firstFrame(data []byte, config image.Config) ([]byte, error) {
+	frame, err := gif.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("read the GIF image: %w", err)
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, config.Width, config.Height))
+	draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, canvas); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // fit returns the largest size with the image's proportions within MaxEdge and

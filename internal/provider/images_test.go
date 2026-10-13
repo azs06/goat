@@ -64,7 +64,7 @@ func TestExpandImageRefsFillsInTheData(t *testing.T) {
 	anthropicMessage, _ := newAnthropicUserMessage(userMessageContent{text: "look", userImages: []Image{img, gone}}, nil)
 	chat, _ := chatUserMessage("look", []Image{img}, nil)
 
-	out := expandImageRefs([]json.RawMessage{plain, anthropicMessage, chat})
+	out := expandImageRefs([]json.RawMessage{plain, anthropicMessage, chat}, false)
 	if string(out[0]) != string(plain) {
 		t.Errorf("a message without images changed: %s", out[0])
 	}
@@ -279,7 +279,7 @@ func TestExpandImageRefsReadsOnlyGoatsImages(t *testing.T) {
 			map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageRefPrefix + "image/png;" + img.Path}},
 		}}), imageRefPrefix},
 	} {
-		out := string(expandImageRefs([]json.RawMessage{test.message})[0])
+		out := string(expandImageRefs([]json.RawMessage{test.message}, false)[0])
 		if strings.Contains(out, hidden) || strings.Contains(out, testPNGBase64) || !strings.Contains(out, test.sent) {
 			t.Errorf("%s: sent %s", name, out)
 		}
@@ -290,13 +290,59 @@ func TestExpandImageRefsReadsOnlyGoatsImages(t *testing.T) {
 		map[string]any{"type": "tool_result", "tool_use_id": "t", "content": []any{block(img.Path, "image/png")}},
 		block(img.Path, "image/png"),
 	}})
-	if out := string(expandImageRefs([]json.RawMessage{own})[0]); strings.Count(out, testPNGBase64) != 2 {
+	if out := string(expandImageRefs([]json.RawMessage{own}, false)[0]); strings.Count(out, testPNGBase64) != 2 {
 		t.Errorf("goat's own images were not filled in: %s", out)
 	}
 
 	// Without a store nothing is read.
 	ImageStore = nil
-	if out := string(expandImageRefs([]json.RawMessage{own})[0]); strings.Contains(out, testPNGBase64) {
+	if out := string(expandImageRefs([]json.RawMessage{own}, false)[0]); strings.Contains(out, testPNGBase64) {
 		t.Errorf("an image was read with no store set: %s", out)
+	}
+}
+
+func TestExpandImageRefsSendsNotesToAModelThatCannotSee(t *testing.T) {
+	useImageStore(t)
+	img := storedTestImage(t)
+	content := userMessageContent{
+		results:    []ToolResult{{CallID: "toolu_1", Output: "Image shot.png", Images: []Image{img}}},
+		text:       "look",
+		userImages: []Image{img},
+	}
+	inResults, _ := newAnthropicUserMessage(content, nil)
+	content.toolImagesInResults = true
+	anthropicMessage, _ := newAnthropicUserMessage(content, nil)
+	chat, _ := chatUserMessage("look", []Image{img}, nil)
+
+	out := expandImageRefs([]json.RawMessage{anthropicMessage, chat, inResults}, true)
+	for i, message := range out {
+		text := string(message)
+		if strings.Contains(text, testPNGBase64) || strings.Contains(text, `"type":"image"`) || strings.Contains(text, `"type":"image_url"`) {
+			t.Errorf("message %d still holds an image: %s", i, text)
+		}
+		if !strings.Contains(text, textOnlyImageText) {
+			t.Errorf("message %d should say an image was there: %s", i, text)
+		}
+	}
+	// In Anthropic's own shape the note takes the image's place inside the tool_result.
+	var parsed struct {
+		Content []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(out[0], &parsed); err != nil || parsed.Content[0].Type != "tool_result" {
+		t.Fatalf("got %s (%v)", out[0], err)
+	}
+	if inner := parsed.Content[0].Content; len(inner) != 2 || inner[1].Type != "text" || inner[1].Text != textOnlyImageText {
+		t.Errorf("tool_result content: %+v", inner)
+	}
+	for _, i := range []int{0, 2} {
+		if strings.Count(string(out[i]), textOnlyImageText) != 2 {
+			t.Errorf("both the tool's and the prompt's image need a note: %s", out[i])
+		}
 	}
 }

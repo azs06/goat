@@ -111,14 +111,18 @@ func missingImageText(path string) string {
 	return fmt.Sprintf("[image %s is no longer available]", filepath.Base(path))
 }
 
+// textOnlyImageText stands in for an image when the model cannot see images.
+const textOnlyImageText = "[an image was here; the current model cannot see images]"
+
 // expandImageRefs puts the data of the images a stored transcript refers to into the
 // messages sent, but only where goat itself puts images: the content of a user message
 // and, in Anthropic's format, the content of a tool_result inside one. Anything else
 // that looks like an image, such as an object inside a model's tool call, is sent as
 // stored and never read. Anthropic image blocks take the base64 data; Chat Completions
-// image_url parts take a data URL. An image goat cannot send becomes a note in its
-// place. Messages without images are sent byte for byte as stored.
-func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
+// image_url parts take a data URL. An image goat cannot send, or any image when
+// textOnly is set, becomes a note in its place. Messages without images are sent byte
+// for byte as stored.
+func expandImageRefs(messages []json.RawMessage, textOnly bool) []json.RawMessage {
 	var out []json.RawMessage
 	for i, message := range messages {
 		if !bytes.Contains(message, []byte(imageRefPrefix)) {
@@ -135,11 +139,11 @@ func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
 			continue
 		}
 		for j, block := range blocks {
-			blocks[j] = expandImageBlock(block)
+			blocks[j] = expandImageBlock(block, textOnly)
 			if result, ok := blocks[j].(map[string]any); ok && result["type"] == "tool_result" {
 				if inner, ok := result["content"].([]any); ok {
 					for k := range inner {
-						inner[k] = expandImageBlock(inner[k])
+						inner[k] = expandImageBlock(inner[k], textOnly)
 					}
 				}
 			}
@@ -160,8 +164,9 @@ func expandImageRefs(messages []json.RawMessage) []json.RawMessage {
 }
 
 // expandImageBlock fills in one content block if it is an image that refers to a stored
-// file; any other block comes back as it was.
-func expandImageBlock(block any) any {
+// file, or, when textOnly is set, replaces it with a note; any other block comes back
+// as it was.
+func expandImageBlock(block any, textOnly bool) any {
 	v, ok := block.(map[string]any)
 	if !ok {
 		return block
@@ -178,6 +183,9 @@ func expandImageBlock(block any) any {
 		if !ok || !isRef {
 			return block
 		}
+		if textOnly {
+			return map[string]any{"type": "text", "text": textOnlyImageText}
+		}
 		encoded, err := img.load()
 		if err != nil {
 			return map[string]any{"type": "text", "text": missingImageText(img.Path)}
@@ -193,6 +201,9 @@ func expandImageBlock(block any) any {
 		img, isRef := parseImageRef(ref)
 		if !ok || !isRef {
 			return block
+		}
+		if textOnly {
+			return map[string]any{"type": "text", "text": textOnlyImageText}
 		}
 		url, err := img.dataURL()
 		if err != nil {

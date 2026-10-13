@@ -396,9 +396,11 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 		UserImages:   opts.images,
 	}
 	if !opts.vision {
-		// Images the conversation holds from an earlier model stay; new ones are not sent.
+		// New images are not sent, and the ones the conversation holds from an earlier
+		// model go as a note; the stored transcript keeps them.
 		req.ToolResults = withoutImages(req.ToolResults)
 		req.UserImages = nil
+		req.TextOnly = true
 	}
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
