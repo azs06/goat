@@ -26,6 +26,7 @@ Deferred enhancements to implement later:
   - Stored images (the state directory's `images/`) are never removed; prune ones no saved conversation names.
   - Live-test images on Claude (no Anthropic key was available): `view_image` sends them inside the `tool_result`; only the fake server has seen it.
   - DeepSeek's Anthropic endpoint may take images inside `tool_result` too (its docs do not say); goat puts them after the results, which works live.
+  - OpenAI's Responses API keeps earlier turns on its side (`previous_response_id`), so after an image went to a vision model, switching to one of OpenAI's text-only models (`o3-mini`, `o1-mini`, `gpt-3.5`, `gpt-4`, typed by name; none is in `/model`'s list) still hands it those images, and its requests can fail. Compacting when an OpenAI conversation with images moves to a text-only model would fix it (Codex review of PR #24).
   - Ctrl-V and dragging a file were checked only through the editor's key handling in tests, not in iTerm, Terminal.app or a Linux terminal; the macOS clipboard read (`osascript`) and PowerShell's were not run against a real clipboard.
   - Show pasted images inline in terminals that can (kitty, iTerm2), as pi does.
 
