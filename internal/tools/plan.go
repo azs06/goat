@@ -52,7 +52,7 @@ func PlanModePolicyFor(name string) PlanModePolicy {
 		return PlanModeAllowed
 	}
 	switch name {
-	case "run_bash":
+	case "run_bash", RunTUI:
 		return PlanModeBlocked
 	case RunCode:
 		return PlanModePerCall

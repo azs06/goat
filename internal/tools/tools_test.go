@@ -98,6 +98,9 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 		"run_bash":         PlanModeBlocked,
 		"run_code":         PlanModePerCall,
 	}
+	if workspace.TUIAvailable {
+		want[RunTUI] = PlanModeBlocked
+	}
 	if len(want) != len(allToolNames()) {
 		t.Fatalf("the policy table covers %d of %d tools", len(want), len(allToolNames()))
 	}
