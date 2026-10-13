@@ -77,7 +77,8 @@ func toolOutputByNumber(n int) (string, string, error) {
 }
 
 // latestToolOutputNumber is the number read_output knows the latest tool output by, or
-// false when the history cannot be read.
+// false when the history cannot be read. Another agent may append an output at any
+// time, so the number of an output just recorded comes from recordToolOutputNumbered.
 func latestToolOutputNumber() (int, bool) {
 	entries, err := loadConversationHistoryEntries()
 	if err != nil {
