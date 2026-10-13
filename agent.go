@@ -283,7 +283,7 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 		// Time spent waiting on the user (a run_bash approval) is not the tool's run time.
 		started, waitedBefore := time.Now(), inputWaitTotal
 		startSpinner("Running " + toolDisplayName(toolCall.Name))
-		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID}
+		toolOpts := tools.Options{PlanMode: opts.planMode, CodeMode: opts.codeMode, ApproveBash: opts.approveBash, CallID: toolCall.ID, Outputs: toolOutputByNumber}
 		var nested *nestedRenderer
 		if toolCall.Name == tools.RunCode {
 			nested = &nestedRenderer{}
@@ -304,7 +304,14 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 			recordHistory(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: toolOutput, ResponseID: resp.ID, Status: "ok", Provider: providerName})
 			result.Output = toolOutput
 		}
+		full := result.Output
 		result.Output = prepareToolOutputForModel(toolCall.Name, result.Output)
+		// The history keeps the whole output, so the model can read what was cut.
+		if result.Output != full && toolCall.Name != "read_output" {
+			if n, ok := latestToolOutputNumber(); ok {
+				result.Output += tools.ShortenedNote(n)
+			}
+		}
 		results = append(results, result)
 	}
 
