@@ -388,6 +388,7 @@ workspace.
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
 | `read_output` | Read a tool output that was shortened for the model, a range of lines at a time |
+| `run_tui` | Run a program in an emulated terminal, type keys into it and read the screen back as text, after you approve it; not on Windows |
 | `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
 
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
@@ -405,6 +406,38 @@ compacted; `/output N` counts back from the latest instead. The history keeps ab
 first and last 16,000 characters of each output. After changing code, the model is asked to run the
 project's build and tests, or the checks its instructions name, and to show the command
 and its result before saying the work is done.
+
+### Checking terminal programs
+
+`run_tui` lets goat see a terminal program the way you would, including goat itself.
+It starts the command in a pseudo-terminal (100x30 unless the call sets `cols` and
+`rows`), takes its steps in order, and returns the screen as text with the cursor's
+position. Each step can type `keys` (text, with special keys such as `<Enter>`,
+`<Esc>`, `<Up>`, `<C-c>` or `<M-x>`, and `<lt>` for a literal `<`), then wait until the
+screen shows `wait_for` text or for `wait_ms`, and ask for a `snapshot` of the screen
+after it:
+
+```json
+{"command": "go run .", "steps": [
+  {"wait_for": "Welcome to G.O.A.T"},
+  {"keys": "/status<Enter>", "wait_for": "Workspace:", "snapshot": true},
+  {"keys": "/exit<Enter>"}
+]}
+```
+
+Before typing, and before it reads the final screen, goat waits for the program's output
+to settle. A `wait_for` that never appears fails the call, with the screen as it was, so
+the model sees what went wrong. After the last step goat gives the program two seconds to
+exit, then closes the terminal (SIGHUP, then SIGKILL) and stops whatever it started. A call
+is stopped after 60 seconds.
+
+You approve `run_tui` like `run_bash`, and the approval shows the keys it will type, since
+typing into a shell can do as much as a command. It is refused in plan mode, the program
+gets the same environment as `run_bash` commands (without credentials), and it gets a
+scratch `XDG_STATE_HOME`, so a goat started this way keeps its history and session away
+from yours. The terminal is emulated by [vt10x](https://github.com/hinshun/vt10x), which
+counts every character as one column: lines with emoji or other wide characters can look
+one column off. `run_tui` needs Unix pseudo-terminals and is not offered on Windows.
 
 ## Verification
 
@@ -710,7 +743,9 @@ directory already has is left in `.goat/` instead, with a warning.
   undoable. If one cannot be restored, `/undo skip` gives up on it so earlier ones can
   still be undone.
 - In plan mode (`/plan`, `--plan`) nothing in the workspace changes: file tools only run
-  as previews and `run_bash` is refused.
+  as previews and `run_bash` and `run_tui` are refused.
+- `run_tui` is approved the same way as `run_bash`, with the keys it will type shown under
+  the command, and follows the same rules for the state and config directories.
 - A `run_code` script can only call goat's own tools, each with the checks above; the
   engine it runs in gives it no other access to files, the network, the environment or
   processes.
@@ -876,7 +911,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
 | `internal/terminal/` | Terminal modes (echo, cbreak) and size |
 | `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules, the handler that runs each one, and `run_code` |
-| `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash`, and mutations snapshotted for undo; keeping credentials out of tools |
+| `internal/workspace/` | The file tools: path resolution confined to the workspace, reads, `.gitignore`-aware search, previews, `run_bash` and `run_tui`, and mutations snapshotted for undo; keeping credentials out of tools |
 
 ## Development
 

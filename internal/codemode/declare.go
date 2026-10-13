@@ -91,16 +91,22 @@ func requiredNames(spec provider.ToolSpec) []string {
 }
 
 func inputType(spec provider.ToolSpec) string {
-	properties, _ := spec.Parameters["properties"].(map[string]any)
-	required := requiredNames(spec)
+	return objectType(spec.Parameters)
+}
+
+// objectType maps an object schema to a TypeScript object type, its required
+// properties first in schema order, then the rest sorted by name.
+func objectType(schema map[string]any) string {
+	properties, _ := schema["properties"].(map[string]any)
+	required := requiredNames(provider.ToolSpec{Parameters: schema})
 	var fields []string
-	for _, name := range ArgumentNames(spec) {
-		schema, _ := properties[name].(map[string]any)
+	for _, name := range ArgumentNames(provider.ToolSpec{Parameters: schema}) {
+		property, _ := properties[name].(map[string]any)
 		optional := "?"
 		if slices.Contains(required, name) {
 			optional = ""
 		}
-		fields = append(fields, name+optional+": "+typeOf(schema))
+		fields = append(fields, name+optional+": "+typeOf(property))
 	}
 	if len(fields) == 0 {
 		return "{}"
@@ -137,6 +143,17 @@ func typeOf(schema map[string]any) string {
 		return "number"
 	case "boolean":
 		return "boolean"
+	case "array":
+		items, _ := schema["items"].(map[string]any)
+		element := typeOf(items)
+		if strings.ContainsAny(element, " |") {
+			element = "(" + element + ")"
+		}
+		return element + "[]"
+	case "object":
+		if _, ok := schema["properties"].(map[string]any); ok {
+			return objectType(schema)
+		}
 	}
 	return "unknown"
 }

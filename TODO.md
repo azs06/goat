@@ -22,6 +22,11 @@ Deferred enhancements to implement later:
   - Run on Windows: the case-insensitive variable names and key commands through cmd.exe (including quoted arguments) have only been cross-built, never run. CI now runs the tests on windows-latest as a best-effort job that does not fail the run; make it pass, then make it required.
   - Considered and rejected: hiding plain `*_TOKEN` variables such as `GH_TOKEN` from run_bash. `gh` and similar tools read them, so the agent's `gh` commands would stop working.
 
+- run_tui follow-ups:
+  - Wide characters (emoji, CJK) take one column in vt10x, so a line with them can look one column off; a width-aware emulator would fix it.
+  - Windows: offer run_tui through ConPTY.
+  - Return colors or styles as well as text, for checking a theme.
+
 Notes:
 - Session compaction runs automatically, before a prompt or between tool rounds, once the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, and is also available manually via `compact`.
 - Keep preview-first workflows for mutating tools.

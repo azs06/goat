@@ -76,7 +76,7 @@ func buildSpecs() []provider.ToolSpec {
 
 // Specs are the tools offered to the model, in the order they are listed. Code mode
 // offers CodeModeSpecs instead.
-var Specs = buildSpecs()
+var Specs = append(buildSpecs(), tuiSpecs()...)
 
 // Names returns the name of every tool in Specs.
 func Names() []string {

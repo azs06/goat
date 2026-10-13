@@ -13,6 +13,7 @@ import (
 
 	"github.com/azs06/goat/internal/codemode"
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/workspace"
 )
 
 func runCodeCall(code string) provider.ToolCall {
@@ -155,6 +156,14 @@ func TestRunCodeAsksBeforeEachCommand(t *testing.T) {
 	}
 	if _, statErr := os.Stat("after.txt"); statErr == nil {
 		t.Error("the script went on after the decline")
+	}
+
+	// The stop names the tool whose approval was declined.
+	if workspace.TUIAvailable {
+		_, err = Execute(context.Background(), runCodeCall(`async () => goat.run_tui({ command: "rm -rf z" })`), Options{CodeMode: true, ApproveBash: approve})
+		if err == nil || !strings.Contains(err.Error(), "the script was stopped: goat.run_tui: the user declined") {
+			t.Fatalf("got %v", err)
+		}
 	}
 }
 

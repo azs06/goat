@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,6 +60,8 @@ func toolDisplayName(name string) string {
 		return "Output"
 	case verifyToolName:
 		return "Verify"
+	case tools.RunTUI:
+		return "Terminal"
 	default:
 		return name
 	}
@@ -139,6 +142,19 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		}
 		if timeout, _ := args["timeout"].(float64); timeout > 0 {
 			flags = append(flags, fmt.Sprintf("timeout %.0fs", timeout))
+		}
+	case tools.RunTUI:
+		summary = str("command")
+		if workdir := str("workdir"); workdir != "" && workdir != "." {
+			flags = append(flags, "in "+workdir)
+		}
+		if steps, _ := args["steps"].([]any); len(steps) > 0 {
+			flags = append(flags, plural(len(steps), "step"))
+		}
+		cols, _ := args["cols"].(float64)
+		rows, _ := args["rows"].(float64)
+		if cols > 0 || rows > 0 {
+			flags = append(flags, fmt.Sprintf("%.0fx%.0f", cmp.Or(cols, workspace.DefaultTUICols), cmp.Or(rows, workspace.DefaultTUIRows)))
 		}
 	case "find_files":
 		summary = str("path")
@@ -313,6 +329,11 @@ func summarizeToolOutput(call provider.ToolCall, output string) (string, []strin
 		// It runs through run_bash's runner; a failure is shown as an error instead.
 		if strings.HasPrefix(header, "Bash output for ") {
 			return "Passed", strings.Split(rest, "\n"), false
+		}
+	case tools.RunTUI:
+		// "Terminal screen for "<command>" in <dir> (100x30, exited with status 0):"
+		if open := strings.LastIndex(header, " ("); strings.HasPrefix(header, "Terminal screen for ") && open > 0 && strings.HasSuffix(header, "):") {
+			return "Screen " + header[open+2:len(header)-2], strings.Split(rest, "\n"), false
 		}
 	case "find_files", "grep_files":
 		if strings.HasPrefix(header, "Found ") {
