@@ -63,12 +63,14 @@ func buildSpecs() []provider.ToolSpec {
 			map[string]any{"path": stringParam, "preview": booleanParam}, "path"),
 		functionTool("undo_last_change", "Undo the most recent mutating file or directory operation using saved snapshots. Set preview=true to inspect what would be restored first.",
 			map[string]any{"preview": booleanParam}),
-		functionTool("run_bash", "Run a bash command inside the workspace and return combined stdout and stderr. The user may be asked to approve each command. Commands time out after 30 seconds; start long-running processes in the background with their output redirected to a file. Prefer concise commands because large outputs may be truncated for token safety.",
-			map[string]any{"command": stringParam, "workdir": stringParam}, "command"),
+		functionTool("run_bash", "Run a bash command inside the workspace and return combined stdout and stderr. The user may be asked to approve each command. Commands time out after 30 seconds unless timeout (seconds, up to 600) allows longer, as a build or test suite may need; start servers and other long-running processes in the background with their output redirected to a file. Prefer concise commands because large outputs may be truncated for token safety.",
+			map[string]any{"command": stringParam, "workdir": stringParam, "timeout": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBashTimeoutSeconds}}, "command"),
 		functionTool("find_files", "Recursively find files within the workspace. Pattern can be a glob like *.go or a plain substring. Files .gitignore excludes are skipped unless include_ignored=true.",
 			map[string]any{"path": stringParam, "pattern": stringParam, "limit": limitParam, "include_ignored": booleanParam}, "path"),
 		functionTool("grep_files", "Recursively search inside files in the workspace and return matching lines as path:line:text. The query is plain text, or a Go regular expression with regex=true. glob limits the files searched (e.g. *.go, or cmd/*.go). Files .gitignore excludes are skipped unless include_ignored=true.",
 			map[string]any{"path": stringParam, "query": stringParam, "regex": booleanParam, "glob": stringParam, "case_sensitive": booleanParam, "limit": limitParam, "include_ignored": booleanParam}, "path", "query"),
+		functionTool("read_output", "Read a tool output that was shortened for you, in full or a part at a time. output is the number in the note that says it was shortened; offset (first line, starting at 1) and limit (number of lines) pick a part.",
+			map[string]any{"output": limitParam, "offset": limitParam, "limit": limitParam}, "output"),
 	}
 }
 

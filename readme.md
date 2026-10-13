@@ -386,6 +386,7 @@ workspace.
 | `copy_dir`, `move_dir`, `delete_dir` | Directory operations |
 | `undo_last_change` | Undo the latest file or directory change |
 | `run_bash` | Run a shell command in the workspace, after you approve it |
+| `read_output` | Read a tool output that was shortened for the model, a range of lines at a time |
 | `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
 
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
@@ -393,6 +394,14 @@ repository git decides; elsewhere the root `.gitignore` is read); `include_ignor
 searches everything. Every tool that changes files accepts `preview=true`, which returns a
 diff without changing anything. A turn can make up to 40 rounds of tool calls; past that
 goat stops and asks you to send another message to continue.
+
+The model gets each tool result cut to about 6,000 characters and 120 lines for
+`run_bash`, and 16,000 characters and 400 lines for the others, keeping the start and the
+end. A result that was cut ends with a note giving its number, and `read_output` reads the
+rest from goat's history, the same record `/output` shows. The history keeps about the first and
+last 16,000 characters of each output. After changing code, the model is asked to run the
+project's build and tests, or the checks its instructions name, and to show the command
+and its result before saying the work is done.
 
 ## Code mode
 
@@ -664,8 +673,9 @@ directory already has is left in `.goat/` instead, with a warning.
   processes.
 - `run_bash` asks before each command. Answer `y` to run it, `n` to decline, `a` to allow
   every command for the rest of the session, or type feedback to decline with a reason the
-  model sees. Commands time out after 30 seconds, and everything a command started is
-  killed with it. Changes made through `run_bash` are not snapshotted. A command that
+  model sees. Commands time out after 30 seconds unless the call asks for longer with
+  `timeout` (in seconds, up to 10 minutes), as a build or test suite may need, and
+  everything a command started is killed with it; Ctrl-C stops a command at any time. Changes made through `run_bash` are not snapshotted. A command that
   mentions goat's state directory (or `.goat`) is always confirmed, even when commands
   otherwise run without asking.
 - What a command leaves running in the background, such as a server started with `&`

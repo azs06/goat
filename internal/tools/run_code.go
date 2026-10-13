@@ -69,6 +69,7 @@ var codeDocs = map[string]codemode.Doc{
 	"undo_last_change": {Returns: `"Undid <kind> for <paths>." or "No recorded operations available to undo."; with preview "Preview for undo_last_change on <kind> (<paths>):\n<changes>".`},
 	"run_bash":         {Returns: `"Bash output for \"<command>\" in <dir>:\n<stdout and stderr>" ("(no output)" when empty).`, Throws: "On a non-zero exit (the message is \"goat.run_bash: exit status N\" followed by the output), a timeout, or a signal. A command the user declines stops the whole script."},
 	"find_files":       {Returns: `"Found N file(s) under <path>:\n<one path per line>", then "\n(truncated after N result(s))" when limited; "No files found ..." when there are none.`},
+	"read_output":      {Returns: `"Output N, <title> (lines A-B of T):\n<lines>", then "\n(more follows; continue with offset B+1)" when there is more.`, Throws: "When no output has that number."},
 	"grep_files":       {Returns: `"Found N match(es) for \"<query>\" under <path>:\n<path>:<line>:<text> per line", then "\n(truncated after N match(es))" when limited; "No matches found ..." when there are none.`},
 }
 

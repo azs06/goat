@@ -55,6 +55,8 @@ func toolDisplayName(name string) string {
 		return "Undo"
 	case tools.RunCode:
 		return "Code"
+	case "read_output":
+		return "Output"
 	default:
 		return name
 	}
@@ -85,8 +87,12 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 
 	var summary string
 	switch name {
-	case "read_file":
+	case "read_file", "read_output":
 		summary = str("path")
+		if name == "read_output" {
+			number, _ := args["output"].(float64)
+			summary = strconv.FormatFloat(number, 'f', -1, 64)
+		}
 		offset, _ := args["offset"].(float64)
 		count, _ := args["limit"].(float64)
 		switch {
@@ -126,6 +132,9 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		summary = str("command")
 		if workdir := str("workdir"); workdir != "" && workdir != "." {
 			flags = append(flags, "in "+workdir)
+		}
+		if timeout, _ := args["timeout"].(float64); timeout > 0 {
+			flags = append(flags, fmt.Sprintf("timeout %.0fs", timeout))
 		}
 	case "find_files":
 		summary = str("path")

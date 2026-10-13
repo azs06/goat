@@ -50,6 +50,32 @@ func recentToolRuns(entries []historyEntry) []toolRun {
 	return runs
 }
 
+// conversationToolOutput is the active conversation's nth tool output, counting from 1
+// at its start, for read_output. It reads the history, the same record /output shows.
+func conversationToolOutput(n int) (string, string, error) {
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		return "", "", err
+	}
+	runs := recentToolRuns(entries)
+	if n < 1 || n > len(runs) {
+		return "", "", fmt.Errorf("there is no output %d; this conversation has %d", n, len(runs))
+	}
+	run := runs[len(runs)-n]
+	return run.title(), run.output.Content, nil
+}
+
+// latestToolOutputNumber is the number read_output knows the conversation's latest tool
+// output by, or false when the history cannot be read.
+func latestToolOutputNumber() (int, bool) {
+	entries, err := loadConversationHistoryEntries()
+	if err != nil {
+		return 0, false
+	}
+	n := len(recentToolRuns(entries))
+	return n, n > 0
+}
+
 func (r toolRun) title() string {
 	summary, _ := toolArgSummary(r.call.ToolName, r.call.Arguments)
 	return toolDisplayName(r.call.ToolName) + "(" + style.TruncateToWidth(summary, 80) + ")"
