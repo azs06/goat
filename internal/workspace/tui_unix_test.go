@@ -162,6 +162,52 @@ func TestRunTUIEndsTheJobsOfAnInteractiveShell(t *testing.T) {
 	t.Fatalf("the shell's background job %d outlived the call", pid)
 }
 
+func TestRunTUIStopsWhileTypingIntoAProgramThatStoppedReading(t *testing.T) {
+	t.Chdir(t.TempDir())
+	previous := tuiTimeout
+	tuiTimeout = 3 * time.Second
+	t.Cleanup(func() { tuiTimeout = previous })
+	// In raw mode the terminal's input buffer fills and then blocks the writer; the
+	// program never reads it.
+	marker := fmt.Sprintf("sleep %d", 4000+os.Getpid()%1000)
+	start := time.Now()
+	_, err := RunTUI(context.Background(), TUIRun{
+		Command: `stty raw -echo; echo ready; ` + marker,
+		Steps:   []TUIStep{{Keys: strings.Repeat("x", 200_000)}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out after 3s") || time.Since(start) > 10*time.Second {
+		t.Fatalf("got %v after %s", err, time.Since(start))
+	}
+	if out, _ := exec.Command("pgrep", "-f", marker).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		exec.Command("pkill", "-f", marker).Run()
+		t.Fatalf("%q outlived the call: %s", marker, out)
+	}
+}
+
+func TestRunTUIEndsTheJobsAShellLeftWhenItExited(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// A background job of an interactive shell that exits normally loses the terminal
+	// but stays in the shell's session.
+	marker := fmt.Sprintf("sleep %d", 5000+os.Getpid()%1000)
+	out, err := RunTUI(context.Background(), TUIRun{
+		Command: `HISTFILE=/dev/null bash --norc --noprofile -i`,
+		Steps: []TUIStep{
+			{Keys: marker + ` & echo job=started<Enter>`, WaitFor: "job=started", WaitMS: 5000},
+			{Keys: `exit<Enter>`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "exited with status") {
+		t.Fatalf("expected the shell to exit by itself:\n%s", out)
+	}
+	if out, _ := exec.Command("pgrep", "-f", marker).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		exec.Command("pkill", "-f", marker).Run()
+		t.Fatalf("the job %q outlived its shell: %s", marker, out)
+	}
+}
+
 // byteReader gives out one byte per Read, as a terminal may split a character's bytes.
 type byteReader struct{ data []byte }
 

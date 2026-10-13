@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -75,9 +76,9 @@ func RunTUI(ctx context.Context, run TUIRun) (string, error) {
 		"XDG_STATE_HOME="+stateDir,
 	)
 	configureProcessGroup(cmd)
-	// goat ends the whole terminal session itself once the steps stop, timed out or
-	// not (endSession); killing only the shell's group here first would leave the jobs
-	// of an interactive shell running, no longer attached to the terminal.
+	// goat ends the whole terminal session itself, through closeTerminal below;
+	// killing only the shell's group here first would leave the jobs of an interactive
+	// shell running.
 	cmd.Cancel = func() error { return nil }
 	terminal, ttyName, err := startInTerminal(cmd, run.Cols, run.Rows)
 	if err != nil {
@@ -99,11 +100,31 @@ func RunTUI(ctx context.Context, run TUIRun) (string, error) {
 		close(session.exited)
 	}()
 
-	report, stepErr := session.runSteps(runCtx, run.Steps)
+	// closeTerminal ends the session and closes the terminal, once: when the steps are
+	// done, or as soon as the call times out or is interrupted, even while a step is
+	// stuck typing into a program that stopped reading its input. still is whether the
+	// program was running until then.
+	var closeOnce sync.Once
+	var still bool
+	closeTerminal := func() {
+		closeOnce.Do(func() {
+			still = !session.hasExited()
+			endSession(cmd.Process.Pid, ttyName, session.exited)
+			terminal.Close()
+		})
+	}
+	stepsDone := make(chan struct{})
+	go func() {
+		select {
+		case <-runCtx.Done():
+			closeTerminal()
+		case <-stepsDone:
+		}
+	}()
 
-	still := !session.hasExited()
-	endSession(cmd.Process.Pid, ttyName, session.exited)
-	terminal.Close()
+	report, stepErr := session.runSteps(runCtx, run.Steps)
+	close(stepsDone)
+	closeTerminal()
 	// A process that left the group can still hold the terminal open and keep the read
 	// going; goat does not wait for it.
 	select {
@@ -215,7 +236,7 @@ func (s *tuiSession) runSteps(ctx context.Context, steps []TUIStep) (string, err
 				stepErr = fmt.Errorf("the program exited before step %d could type %q", i+1, step.Keys)
 				break
 			}
-			if err := s.typeKeys(step.Keys); err != nil {
+			if err := s.typeKeys(ctx, step.Keys); err != nil {
 				stepErr = fmt.Errorf("step %d: %w", i+1, err)
 				break
 			}
@@ -253,7 +274,11 @@ func (s *tuiSession) runSteps(ctx context.Context, steps []TUIStep) (string, err
 	return report.String(), stepErr
 }
 
-func (s *tuiSession) typeKeys(keys string) error {
+// tuiWriteChunk is how much goat types in one write, so that a call that times out
+// stops typing soon after.
+const tuiWriteChunk = 4096
+
+func (s *tuiSession) typeKeys(ctx context.Context, keys string) error {
 	parsed, err := parseTUIKeys(keys)
 	if err != nil {
 		return err
@@ -262,16 +287,40 @@ func (s *tuiSession) typeKeys(keys string) error {
 		s.screen.Lock()
 		appCursor := s.screen.Mode()&vt10x.ModeAppCursor != 0
 		s.screen.Unlock()
-		if _, err := s.input.Write([]byte(key.encode(appCursor))); err != nil {
-			return fmt.Errorf("type keys: %w", err)
+		for data := []byte(key.encode(appCursor)); len(data) > 0; {
+			chunk := data[:min(len(data), tuiWriteChunk)]
+			data = data[len(chunk):]
+			if err := s.write(ctx, chunk); err != nil {
+				return fmt.Errorf("type keys: %w", err)
+			}
+			s.lastActivity.Store(time.Now().UnixNano())
 		}
-		s.lastActivity.Store(time.Now().UnixNano())
 		if key.name != "" {
 			// A named key often changes the mode the next one is sent in.
 			time.Sleep(tuiPoll)
 		}
 	}
 	return nil
+}
+
+// write types data into the terminal, giving up when ctx ends. A program that stopped
+// reading its input blocks the write once the terminal's buffer is full; the write
+// itself ends when goat closes the terminal.
+func (s *tuiSession) write(ctx context.Context, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.input.Write(data)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // wait does a step's waiting: until its wait_for text is on the screen, or for wait_ms.
@@ -359,14 +408,19 @@ func startInTerminal(cmd *exec.Cmd, cols, rows int) (*os.File, string, error) {
 	return terminal, tty.Name(), nil
 }
 
-// endSession ends whatever still runs on the terminal, the way closing a terminal
-// window would: SIGHUP to every process group on it, then SIGKILL to the groups left
-// after a second. A job-control shell (bash -i) puts each background job in a group of
-// its own, so the group leader leads is not enough. The others are found by the
-// terminal they are attached to, before anything is signalled, since a job loses its
-// terminal once the shell leading the session exits.
+// endSession ends whatever still runs in the terminal's session, the way closing a
+// terminal window would: SIGHUP to every process group in it, then SIGKILL to the
+// groups left after a second. A job-control shell (bash -i) puts each background job in
+// a group of its own, so the group leader leads is not enough. The others are found by
+// the terminal they are attached to and by their session, which a job keeps after the
+// shell exits and it loses the terminal. All are listed before anything is signalled.
 func endSession(leader int, tty string, exited <-chan struct{}) {
 	groups := terminalGroups(leader, tty)
+	for _, pgid := range sessionGroups(leader) {
+		if !slices.Contains(groups, pgid) {
+			groups = append(groups, pgid)
+		}
+	}
 	alive := func(pgid int) bool {
 		err := syscall.Kill(-pgid, 0)
 		return err == nil || errors.Is(err, syscall.EPERM)
