@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -397,11 +398,12 @@ func renderToolList() string {
 		{"File changes", "plan mode runs these only as previews", tools.PlanModePreview},
 		{"Shell", "blocked in plan mode", tools.PlanModeBlocked},
 		{"Code mode", "runs only in code mode; plan mode checks each call it makes", tools.PlanModePerCall},
+		{"Subagents", "plan mode applies to every call they make", tools.PlanModeDelegated},
 	}
 	var lines []string
 	for _, group := range groups {
 		var rows []string
-		for _, spec := range tools.CodeModeSpecs {
+		for _, spec := range slices.Concat(tools.CodeModeSpecs, tools.AgentSpecs) {
 			if tools.PlanModePolicyFor(spec.Name) == group.policy {
 				rows = append(rows, row(spec))
 			}
