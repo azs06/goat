@@ -578,15 +578,14 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 		}
 		return Steered, nil
 	}
-	if a.held > 0 && a.state != Stopped {
-		// A new turn would replace the report main is about to take. A stopped
-		// agent's inbox is dropped and kick never starts one, so the user's message
-		// resumes it now; main keeps the stopped turn's result (LastResult).
-		return Held, nil
-	}
 	if a.state == Stopped {
 		a.ctx, a.cancel = context.WithCancelCause(m.root)
 		a.state = Idle
+	}
+	if a.held > 0 {
+		// A new turn would replace the result main is about to take; Release starts
+		// it. A stopped agent is resumed first, as kick never starts a stopped one.
+		return Held, nil
 	}
 	inbox := a.inbox
 	a.inbox = nil

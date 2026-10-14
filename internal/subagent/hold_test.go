@@ -51,7 +51,16 @@ func TestHoldKeepsTheFollowedTurnsResultUntilRelease(t *testing.T) {
 	if got := a.LastResult(); got.State != Idle || got.Err != nil {
 		t.Fatalf("a stop changed the last result: %+v", got)
 	}
+	// The user's message resumes the stopped agent once main has the result.
+	if d, err := m.Deliver(a.ID, "again", true); err != nil || d != Held {
+		t.Fatalf("deliver to a held stopped agent: %v %v", d, err)
+	}
+	if got := a.LastResult(); got.Report != "done: chat" || a.State().Busy() {
+		t.Fatalf("the message started a turn while held: %s %+v", a.State(), got)
+	}
 	m.Release(a)
+	eventually(t, "the resumed turn", func() bool { return a.State() == Idle && a.Report() == "done: again" })
+	settle(t, a)
 	if err := m.Dismiss(a.ID); err != nil {
 		t.Fatalf("dismiss once released: %v", err)
 	}
