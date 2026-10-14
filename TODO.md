@@ -34,7 +34,7 @@ Deferred enhancements to implement later:
   - Windows: offer run_tui through ConPTY.
   - Return colors or styles as well as text, for checking a theme.
 - Subagent follow-ups:
-  - Live-test with real models (only fake servers so far): whether models delegate well, write self-contained prompts, and wait for background reports instead of guessing.
+  - Live-tested on DeepSeek v4 pro and OpenAI gpt-6-luna (2026-10-14): parallel spawns, mid-turn /agents, attach, messages, /stop, /plan, approvals, wait, background notices, exit with a running agent. Not yet tried on a Claude model; long multi-agent sessions (compaction with agents running) are untried.
   - Attach while main's turn is running (a `/agents` typed mid-turn waits for the turn to end); Shift-Up/Down to cycle agents.
   - Bring agents back after a restart or `-c` (their transcripts are in history.jsonl, under a `parent_id`).
   - Compaction for long subagent conversations (one that outgrows its context fails today).
