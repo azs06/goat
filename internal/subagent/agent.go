@@ -171,7 +171,7 @@ func (a *Agent) recordResultLocked(state State) {
 	if a.kept {
 		return
 	}
-	a.last = Result{ID: a.ID, Label: a.Label, State: state, Report: a.report, Err: a.err}
+	a.last = Result{ID: a.ID, Label: a.Label, State: state, Report: a.report, Err: a.err, turn: a.turns}
 	if a.ring != nil {
 		a.last.EndSeq = a.ring.LastSeq()
 	}
@@ -209,19 +209,26 @@ func (a *Agent) TurnDone() <-chan struct{} {
 }
 
 // TakeInbox removes and returns the messages sent to the agent while its turn runs.
-// The runner calls it between tool rounds to steer the turn.
+// The runner calls it between tool rounds to steer the turn. While main follows the
+// turn (Hold) the user's messages stay: the turn's report is main's, and they go on in
+// a turn of their own once it ends.
 func (a *Agent) TakeInbox() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	texts := make([]string, 0, len(a.inbox))
+	var left []message
 	for _, msg := range a.inbox {
+		if msg.fromUser && a.held > 0 {
+			left = append(left, msg)
+			continue
+		}
 		texts = append(texts, msg.text)
 	}
 	// The model's message steers this turn, so its report is owed to the model.
 	if hasModelMessage(a.inbox) {
 		a.owed = true
 	}
-	a.inbox = nil
+	a.inbox = left
 	return texts
 }
 

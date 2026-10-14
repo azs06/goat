@@ -178,7 +178,7 @@ func (h *agentHost) startQueued(ctx context.Context, g *spawnGroup) {
 		}
 		a, err := h.start(m.req, m.label, m.settings, m.parentConv, false)
 		var limit spawnLimitError
-		if errors.As(err, &limit) && g.running() {
+		if errors.As(err, &limit) && g.holdsSlots() {
 			return
 		}
 		if err != nil {
@@ -206,6 +206,21 @@ func (h *agentHost) startQueued(ctx context.Context, g *spawnGroup) {
 func (g *spawnGroup) running() bool {
 	for _, m := range g.members {
 		if m.turnDone != nil && !m.done {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsSlots reports whether a slot the group's waiting members can have is still in
+// use by the group: a member's turn runs, or a turn the user started on a member whose
+// call already has its result.
+func (g *spawnGroup) holdsSlots() bool {
+	if g.running() {
+		return true
+	}
+	for _, m := range g.members {
+		if a := g.agent(m); a != nil && a.State().Busy() {
 			return true
 		}
 	}
@@ -253,7 +268,7 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 			if !g.running() {
 				break
 			}
-		} else if target.done || target.startErr != nil || target.turnDone == nil && !g.running() {
+		} else if target.done || target.startErr != nil || target.turnDone == nil && !g.holdsSlots() {
 			break
 		}
 
@@ -329,16 +344,15 @@ func (h *agentHost) showGroup(g *spawnGroup) {
 			continue
 		}
 		a := g.agent(m)
-		// The events are read before the turn's end is checked, so none is missed and
-		// none of a later turn is shown.
-		events := turnEvents(a, m.ring, m.cursor, m.turnDone) // ring is set with turnDone
+		// The turn's end is seen before its last events are read, so none is missed;
+		// turnEvents leaves out those of a later turn.
 		finished := false
 		select {
 		case <-m.turnDone:
 			finished = true
 		default:
 		}
-		for _, e := range events {
+		for _, e := range turnEvents(a, m.ring, m.cursor, m.turnDone) { // ring is set with turnDone
 			m.cursor = e.Seq
 			b.WriteString(renderAgentEventAs(e, a.ID))
 		}

@@ -83,6 +83,12 @@ func TestQueueRunsAgentsAndReadOnlyCommandsAtMainsPause(t *testing.T) {
 // is closed.
 func midTurnSetup(t *testing.T, scripts map[string][]string, held ...string) (*config, *agentHost, *routedAnthropic, map[string]chan struct{}) {
 	t.Helper()
+	return midTurnSetupWith(t, subagent.Config{}, scripts, held...)
+}
+
+// midTurnSetupWith is midTurnSetup with the manager's limits.
+func midTurnSetupWith(t *testing.T, limits subagent.Config, scripts map[string][]string, held ...string) (*config, *agentHost, *routedAnthropic, map[string]chan struct{}) {
+	t.Helper()
 	withToolTestColor(t, true)
 	resetTurnQueue(t)
 	fake := newRoutedAnthropic(t, scripts)
@@ -91,7 +97,7 @@ func midTurnSetup(t *testing.T, scripts map[string][]string, held ...string) (*c
 		holds[key] = make(chan struct{})
 	}
 	fake.hold = holds
-	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	cfg, h := agentTestConfig(t, fake, limits, true)
 	t.Cleanup(func() {
 		for _, hold := range holds {
 			select {

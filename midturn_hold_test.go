@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/azs06/goat/internal/style"
 	"github.com/azs06/goat/internal/subagent"
@@ -185,5 +186,68 @@ func TestMidTurnStopOfAFinishedFollowedAgentKeepsItsReport(t *testing.T) {
 	}
 	if results := spawnResult(t, fake, 1); !strings.Contains(results, "kid report") || strings.Contains(results, "stopped") {
 		t.Errorf("main should get the finished turn's report: %s", results)
+	}
+}
+
+// Turns the user starts on finished members of a group hold slots the group's waiting
+// member needs: it waits for one to free instead of failing with the limit error.
+func TestGroupMemberWaitsForSlotsTheUsersTurnsHold(t *testing.T) {
+	cfg, h, fake, holds := midTurnSetupWith(t, subagent.Config{MaxRunning: 2}, map[string][]string{
+		"[[main]]": {
+			newSSE("m1").
+				toolUse("tm1", tools.SpawnAgent, `{"description":"one","prompt":"[[c1]] look"}`).
+				toolUse("tm2", tools.SpawnAgent, `{"description":"two","prompt":"[[c2]] look"}`).
+				toolUse("tm3", tools.SpawnAgent, `{"description":"three","prompt":"[[c3]] look"}`).
+				stop("tool_use", ""),
+			newSSE("m2").text("Main done.").stop("end_turn", ""),
+		},
+		"[[c1]]": {newSSE("c1").text("report one").stop("end_turn", ""), blockStream},
+		"[[c2]]": {newSSE("c2").text("report two").stop("end_turn", ""), blockStream},
+		"[[c3]]": {newSSE("c3").text("report three").stop("end_turn", "")},
+	}, "[[c1]]", "[[c2]]")
+	if got := h.m.Config().MaxRunning; got != 2 {
+		t.Fatalf("running limit %d", got)
+	}
+
+	var err error
+	captureTerminal(t, func() {
+		input, keys := keyPipe(t)
+		cfg.input = input
+		startKeyCapture(context.Background(), input)
+		t.Cleanup(stopKeyCapture)
+		result := runPromptAsync(context.Background(), cfg, "[[main]] ask three")
+		waitFor(t, "two requests", func() bool {
+			return len(fake.requests("[[c1]]")) == 1 && len(fake.requests("[[c2]]")) == 1
+		})
+		turnQueue.mu.Lock()
+		turnQueue.items = append(turnQueue.items, "/agents a1")
+		turnQueue.mu.Unlock()
+		nudgeLineQueued()
+		waitFor(t, "the attach view", func() bool { return h.m.Attached() == "a1" })
+		a1, a2 := agentByID(t, h, "a1"), agentByID(t, h, "a2")
+		finishKid(t, a1, holds["[[c1]]"], "report one")
+		finishKid(t, a2, holds["[[c2]]"], "report two")
+		io.WriteString(keys, "hi one\r")
+		waitFor(t, "a1's chat", func() bool { return fake.started.Load() == 1 })
+		io.WriteString(keys, "/agents a2\r")
+		waitFor(t, "the switch", func() bool { return h.m.Attached() == "a2" })
+		io.WriteString(keys, "hi two\r")
+		waitFor(t, "both chats", func() bool { return fake.started.Load() == 2 })
+		io.WriteString(keys, "/back\r")
+		waitFor(t, "the attach view to close", func() bool { return h.m.Attached() == "" })
+		// Main waits for a slot; it does not end its turn with the limit error.
+		time.Sleep(300 * time.Millisecond)
+		if n := len(fake.requests("[[main]]")); n != 1 {
+			t.Errorf("main went on without the third agent: %d requests", n)
+		}
+		io.WriteString(keys, "/agents stop a1\r")
+		err = <-result
+		stopKeyCapture()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := spawnResult(t, fake, 1); !strings.Contains(results, "report three") {
+		t.Errorf("the third agent should run once a slot freed: %s", results)
 	}
 }

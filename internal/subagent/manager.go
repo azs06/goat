@@ -330,6 +330,11 @@ func (m *Manager) runTurns(a *Agent, gen uint64, ctx context.Context, cancel con
 	a.mu.Lock()
 	a.goroutines--
 	a.mu.Unlock()
+	if !released {
+		// The slot of a stopped turn frees only now: whoever waits for one, such as
+		// a spawn group's waiting member, looks again.
+		m.broadcastTurnEnd()
+	}
 	m.kickLocked()
 	m.mu.Unlock()
 }
@@ -529,6 +534,9 @@ const (
 	Steered
 	// Queued: no slot is free; the message starts a turn once one frees.
 	Queued
+	// AfterTask: the agent works on the task main is waiting on; the user's message
+	// starts a turn of its own once that ends.
+	AfterTask
 )
 
 // Send gives an agent a message. A running agent finds it in its inbox at its next
@@ -582,6 +590,9 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 			// follows (a user's turn from the attach view, or one a follow gave up
 			// on): its report is announced like a kicked turn's.
 			a.kicked = true
+		}
+		if fromUser && a.held > 0 {
+			return AfterTask, nil
 		}
 		return Steered, nil
 	}
@@ -663,9 +674,10 @@ func (m *Manager) MarkDelivered(id string) {
 		return
 	}
 	a.mu.Lock()
-	busy := a.state.Busy()
+	// A turn the user started since the turn main followed ended is not main's.
+	current := !a.state.Busy() && (!a.kept || a.last.turn == a.turns)
 	a.mu.Unlock()
-	if !busy {
+	if current {
 		m.consumeNoticesLocked([]Result{{ID: id}})
 	}
 }
@@ -917,6 +929,8 @@ type Result struct {
 	// EndSeq is the agent's last event of the turn LastResult describes; the events
 	// after it belong to later turns.
 	EndSeq uint64
+	// turn is the number of that turn (Agent.turns).
+	turn int
 }
 
 // WaitResult is what Wait found: the agents that finished, the ones still running,
