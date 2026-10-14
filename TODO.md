@@ -33,6 +33,16 @@ Deferred enhancements to implement later:
   - Wide characters (emoji, CJK) take one column in vt10x, so a line with them can look one column off; a width-aware emulator would fix it.
   - Windows: offer run_tui through ConPTY.
   - Return colors or styles as well as text, for checking a theme.
+- Subagent follow-ups:
+  - Live-test with real models (only fake servers so far): whether models delegate well, write self-contained prompts, and wait for background reports instead of guessing.
+  - Attach while main's turn is running (a `/agents` typed mid-turn waits for the turn to end); Shift-Up/Down to cycle agents.
+  - Bring agents back after a restart or `-c` (their transcripts are in history.jsonl, under a `parent_id`).
+  - Compaction for long subagent conversations (one that outgrows its context fails today).
+  - Agent definition files (Markdown with frontmatter, like Claude Code's and pi's) for built-in scout / reviewer / worker roles, and a per-agent model choice.
+  - Worktree isolation for `general` agents that edit files; today two can edit the same file, and `/undo` can revert a subagent's edit.
+  - Per-agent token and cost display.
+  - Wake the model when a background report arrives while it is idle (today the report waits for the next message).
+  - Warnings from `workspace` while agents run are held until main shows them, which also delays main's own; DeepSeek's "unlisted model" warning can still print from a subagent's goroutine.
 
 Notes:
 - Session compaction runs automatically, before a prompt or between tool rounds, once the conversation passes `GOAT_AUTO_COMPACT_TOKENS`, and is also available manually via `compact`.
