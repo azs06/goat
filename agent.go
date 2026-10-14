@@ -136,6 +136,9 @@ func (o turnOptions) stamp(entry historyEntry) historyEntry {
 	if o.parentID != "" && entry.ParentID == "" {
 		entry.ParentID = o.parentID
 	}
+	if o.subagent {
+		entry.Subagent = true
+	}
 	return entry
 }
 

@@ -543,14 +543,22 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		// /plan can run at the turn's pauses; the next tool call follows it.
 		opts.livePlanMode = cfg.agents.mainPlanMode.Load
 	}
-	// Plan mode changes nothing, so there is nothing to check.
-	if !cfg.planMode {
-		// While a general subagent still works, the check waits for a later turn.
-		opts.verify = cfg.agents.deferVerify(verifyGate(), &cfg.verifyPending)
-		// The retry after compacting below is the same turn. A check put off by an
-		// earlier turn runs when this one ends.
-		opts.verified = &verifyState{changed: cfg.verifyPending && opts.verify != nil}
+	// While a general subagent still works, the check waits for a later turn.
+	if gate := cfg.agents.deferVerify(verifyGate(), &cfg.verifyPending); gate != nil {
+		// /plan can change mode partway through the turn, so the check follows the mode
+		// when the turn ends. In plan mode nothing runs, and what changed before /plan
+		// turned it on is checked when a later turn ends outside plan mode.
+		opts.verify = func(ctx context.Context) (string, error) {
+			if cfg.planMode {
+				cfg.verifyPending = true
+				return "", nil
+			}
+			return gate(ctx)
+		}
 	}
+	// The retry after compacting below is the same turn. A check put off by an
+	// earlier turn runs when this one ends.
+	opts.verified = &verifyState{changed: cfg.verifyPending && opts.verify != nil}
 	// Messages queued while the turn works go to the model with the next tool results,
 	// and the commands of midTurnCommands run at the turn's pauses.
 	if cfg.interactive && style.Enabled() {

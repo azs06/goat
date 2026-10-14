@@ -49,6 +49,9 @@ type historyEntry struct {
 	// ParentID is the conversation that started a subagent's conversation; empty for
 	// the main conversation.
 	ParentID string `json:"parent_id,omitempty"`
+	// Subagent marks a subagent's entry even when its parent conversation has no ID,
+	// as a continued older OpenAI conversation may not.
+	Subagent bool `json:"subagent,omitempty"`
 	// Images counts the images that went with a prompt or came back from a tool.
 	Images int `json:"images,omitempty"`
 }
@@ -212,7 +215,7 @@ func latestResumableConversation() (string, string, error) {
 
 	latestResponseID, conversationID := "", ""
 	for _, entry := range entries {
-		if entry.ParentID != "" {
+		if entry.ParentID != "" || entry.Subagent {
 			// A subagent's conversation, which -c must never continue as main's.
 			continue
 		}

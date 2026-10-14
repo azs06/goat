@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -465,5 +466,57 @@ func TestMidTurnPlanAppliesToMainsNextToolCall(t *testing.T) {
 	}
 	if len(turnQueue.items) != 0 {
 		t.Fatalf("nothing should be left queued: %q", turnQueue.items)
+	}
+}
+
+// The end-of-turn verify follows plan mode as /plan leaves it partway through the turn.
+func TestMidTurnPlanOffVerifiesTheTurnsChanges(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "verified")
+	t.Setenv("GOAT_VERIFY", "touch "+filepath.ToSlash(marker))
+	cfg, _, _, _ := midTurnSetup(t, map[string][]string{
+		"[[main]]": {
+			newSSE("m1").toolUse("tm1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
+			newSSE("m2").toolUse("tm2", "write_file", `{"path":"made.txt","content":"x"}`).stop("tool_use", ""),
+			newSSE("m3").text("Main done.").stop("end_turn", ""),
+		},
+	})
+	cfg.planMode = true
+	typeQueueKeys("/plan off\r")
+	var err error
+	captureTerminal(t, func() { err = runPrompt(context.Background(), cfg, "[[main]] make a file") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat("made.txt"); statErr != nil {
+		t.Fatal("the write after /plan off should go through")
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatal("the turn's change should be verified when it ends outside plan mode")
+	}
+}
+
+func TestMidTurnPlanOnPutsOffTheVerify(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "verified")
+	t.Setenv("GOAT_VERIFY", "touch "+filepath.ToSlash(marker))
+	cfg, _, _, _ := midTurnSetup(t, map[string][]string{
+		"[[main]]": {
+			newSSE("m1").toolUse("tm1", "write_file", `{"path":"made.txt","content":"x"}`).stop("tool_use", ""),
+			newSSE("m2").text("Main done.").stop("end_turn", ""),
+		},
+	})
+	typeQueueKeys("/plan on\r")
+	var err error
+	captureTerminal(t, func() { err = runPrompt(context.Background(), cfg, "[[main]] make a file") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.planMode {
+		t.Fatal("/plan on should run at the pause")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("no verify command should run in plan mode")
+	}
+	if !cfg.verifyPending {
+		t.Fatal("the change made before /plan on should be checked by a later turn")
 	}
 }

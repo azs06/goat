@@ -249,3 +249,22 @@ func TestRunCodeCallsFollowPlanModeTurnedOnMidScript(t *testing.T) {
 		t.Fatal("the script wrote after plan mode was turned on")
 	}
 }
+
+// A subagent of a conversation with no ID, as a continued older OpenAI one may be, is
+// still told apart from main.
+func TestResumeFromHistorySkipsSubagentsOfAnUnnamedConversation(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	child := turnOptions{subagent: true}
+	for _, e := range []historyEntry{
+		{Type: "user", Content: "hi", Provider: provider.OpenAI},
+		{Type: "assistant", Content: "hello", ResponseID: "resp_main", Provider: provider.OpenAI},
+		child.stamp(historyEntry{Type: "user", Content: "task", Provider: provider.OpenAI}),
+		child.stamp(historyEntry{Type: "assistant", Content: "done", ResponseID: "resp_sub", Provider: provider.OpenAI}),
+	} {
+		recordHistory(e)
+	}
+	response, _, err := latestResumableConversation()
+	if err != nil || response != "resp_main" {
+		t.Fatalf("got %q %v, want main's response", response, err)
+	}
+}
