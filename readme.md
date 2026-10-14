@@ -498,6 +498,10 @@ own context holds only the report it gets back.
   and its report is the tool's result. A background agent runs while goat goes on; its
   report arrives with the next tool result or your next message, and the model can call
   `wait` for it. `goat -p` and plain output run every agent in the foreground.
+- **In parallel:** several `spawn_agent` calls in one response run at the same time, up
+  to the running limit (the rest start as slots free). Their work is shown together, each
+  line labeled with its agent, and each call still returns its own report, in order.
+  Ctrl-C interrupts all of them.
 - **Talking to them:** the model uses `send_message`, `agent_status`, `wait` and
   `stop_agent`. Subagents cannot start subagents of their own.
 - **Approvals:** a subagent's shell commands are asked on your screen, labeled with the

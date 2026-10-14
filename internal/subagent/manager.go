@@ -192,6 +192,14 @@ func (m *Manager) nudge() {
 	}
 }
 
+// TurnEnded is closed when any agent's turn ends or an agent is stopped. Take it again
+// after each wake, before looking at the agents, so no end is missed.
+func (m *Manager) TurnEnded() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.turnEnded
+}
+
 // broadcastTurnEnd wakes every Wait. Callers hold m.mu.
 func (m *Manager) broadcastTurnEnd() {
 	close(m.turnEnded)
@@ -282,27 +290,41 @@ func (m *Manager) startTurnLocked(a *Agent, prompt string) error {
 	return nil
 }
 
+// testHookTurnReturned, when set by a test, runs on a turn goroutine once its last turn
+// has ended, before the goroutine winds down.
+var testHookTurnReturned func()
+
 // runTurns is a turn goroutine. It keeps going while messages arrive in the inbox
 // just as a turn ends, so a send that races the end is never lost.
 func (m *Manager) runTurns(a *Agent, gen uint64, ctx context.Context, cancel context.CancelCauseFunc, prompt string) {
 	defer m.wg.Done()
+	// The turn gives its slot back when it ends (finishTurn), before it is announced, so
+	// a spawn that follows the announcement finds the slot free. A turn the agent moved
+	// on from (it was stopped) gives it back here instead, as its runner returns.
+	released := false
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				m.finishTurn(a, gen, ctx, "", fmt.Errorf("subagent panic: %v", r), false)
+				_, _, released = m.finishTurn(a, gen, ctx, "", fmt.Errorf("subagent panic: %v", r), false)
 			}
 		}()
 		for {
 			reply, err := m.run(ctx, a, prompt)
-			next, more := m.finishTurn(a, gen, ctx, reply, err, true)
+			next, more, freed := m.finishTurn(a, gen, ctx, reply, err, true)
 			if !more {
+				released = freed
 				return
 			}
 			prompt = next
 		}
 	}()
+	if testHookTurnReturned != nil {
+		testHookTurnReturned()
+	}
+	if !released {
+		<-m.sem
+	}
 	cancel(nil)
-	<-m.sem
 	m.mu.Lock()
 	a.mu.Lock()
 	a.goroutines--
@@ -313,14 +335,15 @@ func (m *Manager) runTurns(a *Agent, gen uint64, ctx context.Context, cancel con
 
 // finishTurn records the end of turn gen and returns the next prompt when the inbox
 // has messages for the same goroutine to carry on with. A turn the agent has moved on
-// from (it was stopped) is ignored.
-func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply string, err error, mayContinue bool) (string, bool) {
+// from (it was stopped) is ignored. released reports whether the turn gave its running
+// slot back: a turn that ends does, before TurnDone is closed.
+func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply string, err error, mayContinue bool) (next string, more, released bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if gen != a.gen || !a.state.Busy() {
-		return "", false
+		return "", false, false
 	}
 	a.report = CapReport(a.ID, reply, m.cfg.ReportCap)
 	a.delivered = false
@@ -340,7 +363,7 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 		a.state = Running
 		a.activity = ""
 		m.nudge()
-		return next, true
+		return next, true, false
 	}
 	switch {
 	case a.ctx.Err() != nil:
@@ -357,6 +380,10 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	}
 	a.activity = ""
 	a.turnCancel = nil
+	// The slot is free before anyone hears the turn ended. The goroutine still counts in
+	// a.goroutines until it returns, so the agent's own next turn waits for it (ErrBusy)
+	// and is kicked then.
+	<-m.sem
 	close(a.turnDone)
 	// A background turn is announced; so is a turn the model is owed that started from
 	// the inbox once a slot freed, since nobody follows it the way a foreground spawn or
@@ -368,7 +395,7 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	a.owed = hasModelMessage(a.inbox)
 	m.broadcastTurnEnd()
 	m.nudge()
-	return "", false
+	return "", false, true
 }
 
 func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {

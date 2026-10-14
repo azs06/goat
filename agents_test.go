@@ -40,6 +40,25 @@ type routedAnthropic struct {
 	seen    map[string][]recordedRequest
 	// started counts the requests that reached a blockStream.
 	started atomic.Int32
+	// barrier, when set, holds the first request of each of its keys until all of them
+	// have arrived.
+	barrier *requestBarrier
+}
+
+// requestBarrier holds requests until n have arrived, failing the test when they do not
+// within a few seconds: requests that only come one after another never all arrive.
+type requestBarrier struct {
+	keys    map[string]bool
+	arrived int
+	all     chan struct{}
+}
+
+func newRequestBarrier(keys ...string) *requestBarrier {
+	b := &requestBarrier{keys: map[string]bool{}, all: make(chan struct{})}
+	for _, k := range keys {
+		b.keys[k] = true
+	}
+	return b
 }
 
 func newRoutedAnthropic(t *testing.T, scripts map[string][]string) *routedAnthropic {
@@ -83,7 +102,25 @@ func (f *routedAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 	if stream != blockStream {
 		f.scripts[key] = f.scripts[key][1:]
 	}
+	var barrier chan struct{}
+	if b := f.barrier; b != nil && b.keys[key] && len(f.seen[key]) == 1 {
+		b.arrived++
+		if b.arrived == len(b.keys) {
+			close(b.all)
+		}
+		barrier = b.all
+	}
 	f.mu.Unlock()
+
+	if barrier != nil {
+		select {
+		case <-barrier:
+		case <-time.After(10 * time.Second):
+			f.t.Errorf("the request for %s waited for the others in vain: they did not run at the same time", key)
+		case <-r.Context().Done():
+			return
+		}
+	}
 
 	if stream == blockStream {
 		f.started.Add(1)

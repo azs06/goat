@@ -64,6 +64,9 @@ type agentHost struct {
 	// adopted holds the agents of an earlier conversation that main's current one sent
 	// a message to: their reports go to it too. Emptied with lineage.
 	adopted map[string]bool
+	// groups holds the members of spawn groups whose calls have not run yet, by call
+	// ID (PrestartSpawns).
+	groups map[string]*groupMember
 }
 
 // backgroundReportNote tells the model when a background agent's report reaches it:
@@ -296,6 +299,11 @@ func (h *agentHost) serveApprovals(ctx context.Context, cfg *config) {
 	}
 }
 
+// spawnLimitError is the spawn_agent error at the running limit; it says limitText.
+type spawnLimitError struct{ text string }
+
+func (e spawnLimitError) Error() string { return e.text }
+
 // limitText is the spawn_agent error when MaxRunning turns already run.
 func (h *agentHost) limitText() string {
 	return fmt.Sprintf("Subagent limit reached (%d running). Do not retry; do the work yourself or wait for one to finish.", h.m.Config().MaxRunning)
@@ -304,34 +312,59 @@ func (h *agentHost) limitText() string {
 // Spawn starts an agent. In the foreground it shows the agent's work and returns its
 // report; in the background it returns at once.
 func (h *agentHost) Spawn(ctx context.Context, req tools.SpawnRequest) (string, error) {
-	label := req.Description
-	if label == "" {
-		label = truncateForLog(oneLine(req.Prompt), 40)
+	var report string
+	var err error
+	if member := h.takeGroupMember(req.CallID); member != nil {
+		// PrestartSpawns started this call's agent beside the others of its response.
+		report, err = h.followMember(ctx, member)
+	} else {
+		label := spawnLabel(req)
+		background := req.Background && h.backgroundAllowed()
+		h.mu.Lock()
+		settings := h.settings
+		h.mu.Unlock()
+		var a *subagent.Agent
+		a, err = h.start(req, label, settings, activeConversationID, background)
+		if err != nil {
+			return "", err
+		}
+		if background {
+			return fmt.Sprintf("Agent %s (%s) started in the background. %s", a.ID, label, backgroundReportNote), nil
+		}
+		report, err = h.follow(ctx, a)
 	}
-	background := req.Background && h.backgroundAllowed()
+	if err == nil && req.Background {
+		report = "[background is not available here, so the agent ran in the foreground]\n" + report
+	}
+	return report, err
+}
+
+// spawnLabel is the label of the agent req starts.
+func spawnLabel(req tools.SpawnRequest) string {
+	if req.Description != "" {
+		return req.Description
+	}
+	return truncateForLog(oneLine(req.Prompt), 40)
+}
+
+// start creates an agent and starts its first turn with settings, under parentConv. At
+// the running limit it fails with limitText.
+func (h *agentHost) start(req tools.SpawnRequest, label string, settings childSettings, parentConv string, background bool) (*subagent.Agent, error) {
 	convID := fmt.Sprintf("%s-sub%d", newConversationID(), h.convSeq.Add(1))
 	h.mu.Lock()
-	h.pending[convID] = h.settings
+	h.pending[convID] = settings
 	h.mu.Unlock()
-
-	a, err := h.m.Spawn(subagent.SpawnOptions{Label: label, Mode: req.Mode, ParentConv: activeConversationID, ConvID: convID, Background: background, Prompt: req.Prompt})
+	a, err := h.m.Spawn(subagent.SpawnOptions{Label: label, Mode: req.Mode, ParentConv: parentConv, ConvID: convID, Background: background, Prompt: req.Prompt})
 	if err != nil {
 		h.mu.Lock()
 		delete(h.pending, convID)
 		h.mu.Unlock()
 		if errors.Is(err, subagent.ErrLimit) {
-			return "", errors.New(h.limitText())
+			return nil, spawnLimitError{h.limitText()}
 		}
-		return "", err
+		return nil, err
 	}
-	if background {
-		return fmt.Sprintf("Agent %s (%s) started in the background. %s", a.ID, label, backgroundReportNote), nil
-	}
-	report, err := h.follow(ctx, a)
-	if err == nil && req.Background {
-		report = "[background is not available here, so the agent ran in the foreground]\n" + report
-	}
-	return report, err
+	return a, nil
 }
 
 // follow shows a foreground agent's turn as it runs, answering approvals meanwhile,
@@ -412,24 +445,34 @@ func showAgentActivity(text string) {
 // renderAgentEvent draws one event of a subagent's turn, indented under the tool call
 // that runs it. Event text is already free of control characters.
 func renderAgentEvent(e subagent.Event) string {
-	width := toolRenderWidth() - len(nestedIndent)
+	return renderAgentEventAs(e, "")
+}
+
+// renderAgentEventAs is renderAgentEvent with every line labeled with id, for agents
+// that run side by side under one response's tool calls; "" labels nothing.
+func renderAgentEventAs(e subagent.Event, id string) string {
+	indent := nestedIndent
+	if id != "" {
+		indent += id + " "
+	}
+	width := toolRenderWidth() - len(indent)
 	call := provider.ToolCall{Name: e.Tool, Arguments: e.Args}
 	switch e.Kind {
 	case subagent.EventText:
-		return indentBlock(strings.TrimRight(e.Text, "\n"), nestedIndent) + "\n"
+		return indentBlock(strings.TrimRight(e.Text, "\n"), indent) + "\n"
 	case subagent.EventToolStart:
-		return indentBlock(renderToolHeader(call, width), nestedIndent) + "\n"
+		return indentBlock(renderToolHeader(call, width), indent) + "\n"
 	case subagent.EventToolResult:
 		var err error
 		if e.Err != "" {
 			err = errors.New(e.Err)
 		}
 		first, _, _ := strings.Cut(renderToolResult(call, e.Output, err, e.Elapsed, width), "\n")
-		return nestedIndent + first + "\n"
+		return indent + first + "\n"
 	case subagent.EventUser:
-		return indentBlock(style.Glyphs().Prompt+" "+e.Text, nestedIndent) + "\n"
+		return indentBlock(style.Glyphs().Prompt+" "+e.Text, indent) + "\n"
 	case subagent.EventNotice:
-		return indentBlock(formatNotice(e.Text), nestedIndent) + "\n"
+		return indentBlock(formatNotice(e.Text), indent) + "\n"
 	}
 	return ""
 }

@@ -353,6 +353,9 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 	if opts.sink == nil {
 		opts.sink = &terminalSink{}
 	}
+	// Foreground spawn_agent calls of one response run side by side: their agents all
+	// start now, and each call below follows its own and returns its report in order.
+	defer tools.PrestartAgents(ctx, resp.ToolCalls, tools.Options{Agents: opts.agents})()
 
 	for _, toolCall := range resp.ToolCalls {
 		if ctx.Err() != nil {

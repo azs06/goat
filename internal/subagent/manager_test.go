@@ -662,3 +662,40 @@ func TestNoticesAreKeptForEveryRunningAgent(t *testing.T) {
 		t.Fatalf("got %d notices, want %d", len(notices), n)
 	}
 }
+
+// TestSlotIsFreeOnceTurnDoneCloses: a turn gives its running slot back before it is
+// announced, so a spawn right after TurnDone never hits the limit, even while the
+// finished turn's goroutine has not wound down yet (the hook holds it there).
+func TestSlotIsFreeOnceTurnDoneCloses(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	hold := make(chan chan struct{}, 1)
+	testHookTurnReturned = func() {
+		select {
+		case release := <-hold:
+			<-release
+		default:
+		}
+	}
+	defer func() { testHookTurnReturned = nil }()
+	m := NewManager(Config{MaxRunning: 1}, instantRunner)
+	defer m.StopAll(time.Second)
+	for i := range 20 {
+		release := make(chan struct{})
+		hold <- release
+		a, err := m.Spawn(SpawnOptions{Label: "quick", Prompt: fmt.Sprint(i)})
+		if err != nil {
+			t.Fatalf("spawn %d: %v", i, err)
+		}
+		<-a.TurnDone()
+		// a's goroutine is held in the hook, or about to be: the slot is free anyway.
+		b, err := m.Spawn(SpawnOptions{Label: "next", Prompt: fmt.Sprint(i)})
+		close(release)
+		if err != nil {
+			t.Fatalf("spawn right after TurnDone %d: %v", i, err)
+		}
+		<-b.TurnDone()
+	}
+	if stragglers := m.StopAll(time.Second); len(stragglers) > 0 {
+		t.Fatalf("still running: %v", stragglers)
+	}
+}
