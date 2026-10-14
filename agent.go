@@ -353,16 +353,27 @@ func runToolCalls(ctx context.Context, providerName string, opts turnOptions, re
 	if opts.sink == nil {
 		opts.sink = &terminalSink{}
 	}
-	// Foreground spawn_agent calls of one response run side by side: their agents all
-	// start now, and each call below follows its own and returns its report in order.
-	defer tools.PrestartAgents(ctx, resp.ToolCalls, tools.Options{Agents: opts.agents})()
+	// Foreground spawn_agent calls next to each other in one response run side by side:
+	// when the loop reaches the first of them their agents all start, and each call
+	// follows its own and returns its report in order. They start no sooner, so the calls
+	// before them have run and the agents see what those did.
+	var groupsDone []func()
+	defer func() {
+		for _, done := range groupsDone {
+			done()
+		}
+	}()
 
-	for _, toolCall := range resp.ToolCalls {
+	for i, toolCall := range resp.ToolCalls {
 		if ctx.Err() != nil {
 			skipped := fmt.Sprintf("Tool %s was not run because the user interrupted the turn.", toolCall.Name)
 			opts.record(historyEntry{Type: "tool_output", ToolName: toolCall.Name, Content: skipped, ResponseID: resp.ID, Status: "skipped", Provider: providerName})
 			results = append(results, provider.ToolResult{CallID: toolCall.ID, Name: toolCall.Name, Output: skipped, IsError: true})
 			continue
+		}
+
+		if toolCall.Name == tools.SpawnAgent {
+			groupsDone = append(groupsDone, tools.PrestartAgents(ctx, resp.ToolCalls[i:], tools.Options{Agents: opts.agents}))
 		}
 
 		opts.sink.ToolStart(toolCall)

@@ -16,7 +16,10 @@ import (
 
 // This file runs the foreground spawn_agent calls of one response side by side. The
 // turn loop runs tool calls one after another, and a foreground spawn waits for its
-// agent, so before the calls run PrestartSpawns starts every agent of the group. Each
+// agent, so when the loop reaches the first of several spawn calls in a row,
+// PrestartSpawns starts every agent of the group. Calls before the group have run by
+// then, and a call after it runs once the group's calls have, so the order of calls
+// still holds for everything outside the group. Each
 // call then follows its own agent while main shows what all of them do, answers their
 // approvals and starts the ones the running limit held back as slots free. Only main
 // writes to the terminal and asks the user; the agents' turns run on their own
@@ -77,18 +80,28 @@ func (g *spawnGroup) interrupt() {
 	}
 }
 
-// PrestartSpawns starts the agents of a response's spawn_agent calls that run in the
-// foreground, when there are at least two, as many as the running limit allows; the
-// rest start as group members finish. The returned func ends the group once the calls
-// have run: a member whose call never ran, because the parent was interrupted, has its
-// turn interrupted too.
+// PrestartSpawns starts the agents of the spawn_agent calls in a row that run in the
+// foreground, from the call about to run up to the first background one, when there
+// are at least two, as many as the running limit allows; the rest start as group
+// members finish. A background call ends the group, so it still starts after the calls
+// before it and before those after it. When the first call already belongs to a group,
+// started by an earlier call, nothing starts. The returned func ends the group once the
+// calls have run: a member whose call never ran, because the parent was interrupted,
+// has its turn interrupted too.
 func (h *agentHost) PrestartSpawns(ctx context.Context, reqs []tools.SpawnRequest) func() {
 	g := &spawnGroup{}
 	h.mu.Lock()
 	settings := h.settings
+	_, grouped := h.groups[reqs[0].CallID]
 	h.mu.Unlock()
+	if grouped {
+		return func() {}
+	}
 	for _, req := range reqs {
-		if req.CallID == "" || req.Background && h.backgroundAllowed() {
+		if req.Background && h.backgroundAllowed() {
+			break
+		}
+		if req.CallID == "" {
 			continue
 		}
 		g.members = append(g.members, &groupMember{group: g, req: req, label: spawnLabel(req), settings: settings, parentConv: activeConversationID})

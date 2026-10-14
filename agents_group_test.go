@@ -376,3 +376,156 @@ func TestGroupSpinnerLabel(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// spawnsAfter is a main response with one call of another tool, then foreground
+// spawn_agent calls for the children [[c1]] and [[c2]].
+func spawnsAfter(first *sse) string {
+	for i := 1; i <= 2; i++ {
+		first = first.toolUse(fmt.Sprintf("tm%d", i), tools.SpawnAgent, fmt.Sprintf(`{"description":"look %d","prompt":"[[c%d]] read f%d.txt"}`, i, i, i))
+	}
+	return first.stop("tool_use", "")
+}
+
+// TestWaitBeforeASpawnGroupDoesNotTakeItsReports: a wait placed before a group's spawns
+// in the same response runs before the group's agents exist, so it cannot pick up their
+// reports, and each report reaches the model once, from its own call.
+func TestWaitBeforeASpawnGroupDoesNotTakeItsReports(t *testing.T) {
+	withToolTestColor(t, false)
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[main]]": {spawnsAfter(newSSE("m1").toolUse("tw0", tools.WaitAgents, `{}`)), newSSE("m2").text("Done.").stop("end_turn", "")},
+		"[[c1]]":   readingChild(1),
+		"[[c2]]":   readingChild(2),
+	})
+	cfg, _ := agentTestConfig(t, fake, subagent.Config{MaxRunning: 4}, false)
+	writeTestFile(t, "f1.txt", "1")
+	writeTestFile(t, "f2.txt", "2")
+	captureTerminal(t, func() {
+		if err := runPrompt(context.Background(), cfg, "[[main]] look"); err != nil {
+			t.Error(err)
+		}
+	})
+	results := toolResultsOf(t, fake.requests("[[main]]")[1])
+	if len(results) != 3 {
+		t.Fatalf("expected three tool results, got %v", results)
+	}
+	if content := fmt.Sprint(results[0]["content"]); strings.Contains(content, "agent-report") {
+		t.Errorf("the wait before the group got a report: %s", content)
+	}
+	for n := 1; n <= 2; n++ {
+		report := fmt.Sprintf("report %d:", n)
+		var seen int
+		for _, result := range results {
+			seen += strings.Count(fmt.Sprint(result["content"]), report)
+		}
+		if seen != 1 || !strings.Contains(fmt.Sprint(results[n]["content"]), report) {
+			t.Errorf("expected report %d once, from tm%d; seen %d times in %v", n, n, seen, results)
+		}
+	}
+}
+
+// TestSpawnGroupStartsAfterTheCallsBeforeIt: the agents of a group start when the loop
+// reaches the group's first call, so a call before it in the response runs first and
+// sees none of them.
+func TestSpawnGroupStartsAfterTheCallsBeforeIt(t *testing.T) {
+	withToolTestColor(t, false)
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[main]]": {spawnsAfter(newSSE("m1").toolUse("ts0", tools.AgentStatus, `{}`)), newSSE("m2").text("Done.").stop("end_turn", "")},
+		"[[c1]]":   readingChild(1),
+		"[[c2]]":   readingChild(2),
+	})
+	cfg, _ := agentTestConfig(t, fake, subagent.Config{}, false)
+	writeTestFile(t, "f1.txt", "1")
+	writeTestFile(t, "f2.txt", "2")
+	captureTerminal(t, func() {
+		if err := runPrompt(context.Background(), cfg, "[[main]] look"); err != nil {
+			t.Error(err)
+		}
+	})
+	results := toolResultsOf(t, fake.requests("[[main]]")[1])
+	if len(results) != 3 {
+		t.Fatalf("expected three tool results, got %v", results)
+	}
+	if content := fmt.Sprint(results[0]["content"]); strings.Contains(content, "a1") || strings.Contains(content, "look 1") {
+		t.Errorf("agent_status before the group saw its agents: %s", content)
+	}
+	for n := 1; n <= 2; n++ {
+		if content := fmt.Sprint(results[n]["content"]); results[n]["is_error"] == true || !strings.Contains(content, fmt.Sprintf("report %d:", n)) {
+			t.Errorf("tm%d: %s", n, content)
+		}
+	}
+}
+
+// TestBackgroundSpawnBeforeAGroupGetsItsSlot: a background spawn before a group's
+// spawns in the same response starts first, so the group cannot take its slot.
+func TestBackgroundSpawnBeforeAGroupGetsItsSlot(t *testing.T) {
+	withToolTestColor(t, true) // background agents need the interactive terminal
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[main]]": {spawnsAfter(newSSE("m1").toolUse("tb0", tools.SpawnAgent, `{"description":"behind","prompt":"[[bg]] wait","background":true}`)), newSSE("m2").text("Done.").stop("end_turn", "")},
+		"[[bg]]":   {blockStream},
+		"[[c1]]":   readingChild(1),
+		"[[c2]]":   readingChild(2),
+	})
+	cfg, h := agentTestConfig(t, fake, subagent.Config{MaxRunning: 2}, true)
+	writeTestFile(t, "f1.txt", "1")
+	writeTestFile(t, "f2.txt", "2")
+	captureTerminal(t, func() {
+		if err := runPrompt(context.Background(), cfg, "[[main]] look"); err != nil {
+			t.Error(err)
+		}
+	})
+	results := toolResultsOf(t, fake.requests("[[main]]")[1])
+	if len(results) != 3 {
+		t.Fatalf("expected three tool results, got %v", results)
+	}
+	if content := fmt.Sprint(results[0]["content"]); results[0]["is_error"] == true || !strings.Contains(content, "started in the background") {
+		t.Errorf("the background spawn did not start: %s", content)
+	}
+	for n := 1; n <= 2; n++ {
+		if content := fmt.Sprint(results[n]["content"]); results[n]["is_error"] == true || !strings.Contains(content, fmt.Sprintf("report %d:", n)) {
+			t.Errorf("tm%d: %s", n, content)
+		}
+	}
+	h.m.StopAll(3 * time.Second)
+}
+
+// TestPrestartSpawnsGroupsOnlyTheForegroundCallsInARow: a call that already belongs to a
+// group starts nothing again, and a background call ends the group, so it starts in its
+// own turn.
+func TestPrestartSpawnsGroupsOnlyTheForegroundCallsInARow(t *testing.T) {
+	withToolTestColor(t, true) // background agents need the interactive terminal
+	fake := newRoutedAnthropic(t, map[string][]string{"[[x]]": {blockStream}})
+	_, h := agentTestConfig(t, fake, subagent.Config{MaxRunning: 8}, true)
+	ctx := context.Background()
+	req := func(id string, background bool) tools.SpawnRequest {
+		return tools.SpawnRequest{Description: id, Prompt: "[[x]] " + id, Mode: tools.AgentModeExplore, Background: background, CallID: id}
+	}
+	grouped := func() []string {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		var ids []string
+		for _, id := range []string{"x1", "x2", "x3", "y", "x4", "x5"} {
+			if h.groups[id] != nil {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	// [x1, x2, x3] reached at x1: one group of three.
+	done1 := h.PrestartSpawns(ctx, []tools.SpawnRequest{req("x1", false), req("x2", false), req("x3", false)})
+	defer done1()
+	// Reached again at x2, the group is not started twice.
+	done2 := h.PrestartSpawns(ctx, []tools.SpawnRequest{req("x2", false), req("x3", false)})
+	defer done2()
+	if got := fmt.Sprint(grouped()); got != "[x1 x2 x3]" || len(h.m.List()) != 3 {
+		t.Fatalf("expected x1-x3 grouped and three agents, got %s and %v", got, h.m.List())
+	}
+	// [y (background), x4, x5]: y ends the group before it starts, so nothing starts.
+	done3 := h.PrestartSpawns(ctx, []tools.SpawnRequest{req("y", true), req("x4", false), req("x5", false)})
+	defer done3()
+	// [x4, y (background), x5]: x4 alone is no group.
+	done4 := h.PrestartSpawns(ctx, []tools.SpawnRequest{req("x4", false), req("y", true), req("x5", false)})
+	defer done4()
+	if got := fmt.Sprint(grouped()); got != "[x1 x2 x3]" || len(h.m.List()) != 3 {
+		t.Errorf("a background call did not end the group: %s grouped, agents %v", got, h.m.List())
+	}
+}
