@@ -93,11 +93,13 @@ type Agent struct {
 	err        error
 	ring       *EventRing
 	conv       any
-	// last is how the latest turn ended, kept as it was when TurnDone closed: a stop or
-	// a turn started afterwards does not change it.
+	// last is how the latest turn ended, kept as it was when TurnDone closed: a stop
+	// does not change it. While the agent is held it is the turn main follows, kept
+	// (kept) until Release, so a turn the user starts meanwhile does not replace it.
 	last Result
+	kept bool
 	// held counts the follows of main that have yet to take the agent's result (Hold).
-	// A held agent is never evicted and starts no new turn, so the result stays there.
+	// A held agent is never evicted.
 	held int
 }
 
@@ -160,7 +162,20 @@ func (a *Agent) LastResult() Result {
 // recordTurnEndLocked keeps how the turn ending now ended, for LastResult. Callers
 // hold a.mu.
 func (a *Agent) recordTurnEndLocked() {
-	a.last = Result{ID: a.ID, Label: a.Label, State: a.state, Report: a.report, Err: a.err}
+	a.recordResultLocked(a.state)
+}
+
+// recordResultLocked keeps a turn that ended in state for LastResult, unless the
+// result of the turn main follows is kept already. Callers hold a.mu.
+func (a *Agent) recordResultLocked(state State) {
+	if a.kept {
+		return
+	}
+	a.last = Result{ID: a.ID, Label: a.Label, State: state, Report: a.report, Err: a.err}
+	if a.ring != nil {
+		a.last.EndSeq = a.ring.LastSeq()
+	}
+	a.kept = a.held > 0
 }
 
 // Conv is the conversation package main stored with SetConv, or nil.

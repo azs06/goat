@@ -329,14 +329,16 @@ func (h *agentHost) showGroup(g *spawnGroup) {
 			continue
 		}
 		a := g.agent(m)
-		// The turn's end is seen before its last events are read, so none is missed.
+		// The events are read before the turn's end is checked, so none is missed and
+		// none of a later turn is shown.
+		events := turnEvents(a, m.ring, m.cursor, m.turnDone) // ring is set with turnDone
 		finished := false
 		select {
 		case <-m.turnDone:
 			finished = true
 		default:
 		}
-		for _, e := range m.ring.Since(m.cursor) { // ring is set with turnDone
+		for _, e := range events {
 			m.cursor = e.Seq
 			b.WriteString(renderAgentEventAs(e, a.ID))
 		}

@@ -122,7 +122,9 @@ func TestMidTurnDismissFinishedKeepsAGroupMembersReport(t *testing.T) {
 	}
 }
 
-func TestMidTurnMessageToAFinishedFollowedAgentWaitsForMain(t *testing.T) {
+// A message to a followed agent whose turn has ended starts the user's turn at once;
+// main still gets the report of the turn it followed.
+func TestMidTurnMessageToAFinishedFollowedAgentKeepsMainsReport(t *testing.T) {
 	cfg, h, fake, holds := midTurnSetup(t, kidScripts(
 		newSSE("k1").text("kid report").stop("end_turn", ""),
 		newSSE("k2").text("chit chat answer").stop("end_turn", ""),
@@ -136,28 +138,27 @@ func TestMidTurnMessageToAFinishedFollowedAgentWaitsForMain(t *testing.T) {
 		result, keys, a = attachMidTurn(t, context.Background(), cfg, h, fake)
 		finishKid(t, a, holds["[[kid]]"], "kid report")
 		io.WriteString(keys, "what did you mean?\r")
-		waitFor(t, "the message held in the inbox", func() bool { return a.Info().Inbox == 1 })
-		if n := len(fake.requests("[[kid]]")); n != 1 || a.State() != subagent.Idle {
-			t.Errorf("the message should wait for main to take the report: %d kid requests, %s", n, a.State())
+		waitFor(t, "the user's turn", func() bool { return a.State() == subagent.Idle && a.Report() == "chit chat answer" })
+		if n := len(fake.requests("[[main]]")); n != 1 {
+			t.Errorf("main's turn should wait while the user is attached: %d requests", n)
 		}
 		io.WriteString(keys, "/back\r")
 		err = <-result
 		stopKeyCapture()
-		// Main has the report; the held message starts the user's turn.
-		waitFor(t, "the user's turn", func() bool { return a.State() == subagent.Idle && a.Report() == "chit chat answer" })
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(style.StripANSI(out), "a1's report is on its way to main; the message starts a turn once main has it.") {
-		t.Errorf("the attach view should say the message waits:\n%s", style.StripANSI(out))
+	plain := style.StripANSI(out)
+	if strings.Count(plain, "chit chat answer") != 1 {
+		t.Errorf("the reply shows once, in the attach view, not in main's follow:\n%s", plain)
 	}
 	results := spawnResult(t, fake, 1)
 	if !strings.Contains(results, "kid report") || strings.Contains(results, "chit chat answer") {
 		t.Errorf("main should get the spawn's report, not the user's chat: %s", results)
 	}
 	if kid := fake.requests("[[kid]]"); len(kid) != 2 || !strings.Contains(kid[1].raw, "what did you mean?") {
-		t.Errorf("the held message should reach the kid after main took the report")
+		t.Errorf("the message should reach the kid")
 	}
 	if n := h.m.NoticeCount(); n != 0 {
 		t.Errorf("the user's turn is not reported to the model: %d notices", n)
