@@ -208,7 +208,7 @@ func TestSendToAnEarlierConversationsAgentDeliversItsReport(t *testing.T) {
 	fake.scripts["[[old]]"] = []string{newSSE("o2").text("second report").stop("end_turn", "")}
 	fake.mu.Unlock()
 	reply, err := h.Send(context.Background(), "a1", "one more thing")
-	if err != nil || !strings.Contains(reply, "delivered to you automatically") {
+	if err != nil || !strings.Contains(reply, "its report comes with your next tool result") {
 		t.Fatalf("got %q %v", reply, err)
 	}
 	waitFor(t, "a1 to finish", func() bool { return h.m.Active() == 0 && h.m.NoticeCount() > 0 })

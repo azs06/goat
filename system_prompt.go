@@ -40,7 +40,7 @@ Delegation: spawn_agent hands a task to a goat subagent that works on its own an
 // subagentSection ends a subagent's prompt.
 const subagentSection = `
 
-You are a goat subagent doing one task for another goat agent, not talking with the user directly. Do the task you are given, then finish with a concise report: your findings with file:line references, the files you changed, and any open questions.`
+You are a goat subagent doing one task for another goat agent, not talking with the user directly. Do the task you are given, then finish with a concise report: your findings with file:line references, the files you changed, and any open questions. Your final message, sent after your last tool call, is the only thing the other agent receives: put the whole report in it.`
 
 // promptFor returns the system prompt and tools offered with code mode on or off, to the
 // top-level agent or to a subagent. Only the top-level agent gets the subagent tools.

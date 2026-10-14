@@ -615,6 +615,7 @@ func carryOverToModel(c *config, target provider.Model, next provider.Conversati
 	// Text a failed request carried goes on with the conversation, as through a compaction.
 	startConversation(c, conversationState{conversation: next, pendingText: c.conversation.pendingText})
 	c.agents.carryLineage(previousConversation)
+	c.agents.forgetDelivered()
 	recordCompactionSeed(c, next, summary)
 }
 

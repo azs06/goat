@@ -379,7 +379,7 @@ func (m *Manager) addNoticeLocked(a *Agent, forModel bool) {
 	m.notices = append(m.notices, Notice{
 		AgentID:    a.ID,
 		ParentConv: a.ParentConv,
-		Text:       WrapReport(a.ID, a.Label, text, 0),
+		Text:       WrapReport(a.ID, a.Label, text, 0, true),
 		ForModel:   forModel,
 		turn:       a.turns,
 	})
@@ -582,6 +582,18 @@ func (m *Manager) MarkDelivered(id string) {
 	a.mu.Unlock()
 	if !busy {
 		m.consumeNoticesLocked([]Result{{ID: id}})
+	}
+}
+
+// ForgetDelivered clears every agent's delivered mark, for a conversation compacted
+// into a summary that may no longer hold the reports: a wait gives them again.
+func (m *Manager) ForgetDelivered() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.agents {
+		a.mu.Lock()
+		a.delivered = false
+		a.mu.Unlock()
 	}
 }
 

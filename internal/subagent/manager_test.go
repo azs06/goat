@@ -623,7 +623,7 @@ func TestReportIsCapped(t *testing.T) {
 	})
 	a, _ := m.Spawn(SpawnOptions{Prompt: "x"})
 	waitDone(t, a)
-	if got := a.Report(); got != strings.Repeat("é", 5)+"\n[report truncated at 0 KB; the full transcript is in /agents a1]" {
+	if got := a.Report(); got != strings.Repeat("é", 5)+"\n[report truncated at 0 KB; the user can view the full transcript with /agents log a1]" {
 		t.Fatalf("report %q", got)
 	}
 	shutdown(t, m)

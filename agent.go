@@ -509,7 +509,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 	carried := conv.pendingText
 	req.UserText = modelNote(opts.model, providerName) + opts.contextNote + req.UserText
 	if opts.planMode {
-		req.UserText = planModeNote + req.UserText
+		req.UserText = readOnlyNote(opts) + req.UserText
 	}
 	if conv.conversation.IsEmpty() && len(conv.pendingToolResults) == 0 && projectInstructions != nil {
 		if instructions := projectInstructions(); instructions != "" {
@@ -627,7 +627,7 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 				// The summary's conversation has not been told the model yet.
 				req.UserText = modelNote(opts.model, providerName) + req.UserText
 				if opts.planMode {
-					req.UserText = planModeNote + req.UserText
+					req.UserText = readOnlyNote(opts) + req.UserText
 				}
 			}
 		}

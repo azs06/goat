@@ -216,7 +216,7 @@ func TestACutReportIsMarkedInItsNotice(t *testing.T) {
 	if len(notices) != 1 {
 		t.Fatalf("notices %+v", notices)
 	}
-	if n := strings.Count(notices[0].Text, "[report truncated at 1 KB; the full transcript is in /agents a1]"); n != 1 {
+	if n := strings.Count(notices[0].Text, "[report truncated at 1 KB; the user can view the full transcript with /agents log a1]"); n != 1 {
 		t.Fatalf("truncation marker %d times in %q", n, notices[0].Text[len(notices[0].Text)-300:])
 	}
 	shutdown(t, m)

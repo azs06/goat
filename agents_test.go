@@ -204,9 +204,10 @@ func TestSubagentsRunBesideTheMainTurn(t *testing.T) {
 		if len(reqs) != 2 || !strings.Contains(fmt.Sprint(toolResultsOf(t, reqs[1])), want) {
 			t.Errorf("%s: expected its read_file result in its second request", key)
 		}
-		// Explore agents are told they are in plan mode, and get no subagent tools.
-		if !strings.Contains(reqs[0].raw, "Plan mode is on") {
-			t.Errorf("%s: expected the plan mode note", key)
+		// Explore agents are told they are read-only, without main's plan mode note
+		// about the user and a plan, and get no subagent tools.
+		if !strings.Contains(reqs[0].raw, "[Read-only: you can read, search and preview changes") || strings.Contains(reqs[0].raw, "Plan mode is on") || strings.Contains(reqs[0].raw, "the user turns plan mode off") {
+			t.Errorf("%s: expected the subagent's read-only note", key)
 		}
 		if names := toolNames(t, reqs[0]); slices.Contains(names, tools.SpawnAgent) || len(names) != len(tools.Specs) {
 			t.Errorf("%s: expected the subagent tool list, got %v", key, names)

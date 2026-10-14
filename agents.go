@@ -66,6 +66,10 @@ type agentHost struct {
 	adopted map[string]bool
 }
 
+// backgroundReportNote tells the model when a background agent's report reaches it:
+// nothing wakes it when the agent finishes while its turn is over.
+const backgroundReportNote = "Once it finishes, its report comes with your next tool result, or with the user's next message if your turn has ended; do not guess its results. Call wait if you need them before you end your turn."
+
 // runningAgents is the session's host, for stopping its agents on every way out.
 var runningAgents atomic.Pointer[agentHost]
 
@@ -303,7 +307,7 @@ func (h *agentHost) Spawn(ctx context.Context, req tools.SpawnRequest) (string, 
 		return "", err
 	}
 	if background {
-		return fmt.Sprintf("Agent %s (%s) started in the background. Its report will be delivered to you automatically when it finishes; do not guess its results. Use wait if you need them now.", a.ID, label), nil
+		return fmt.Sprintf("Agent %s (%s) started in the background. %s", a.ID, label, backgroundReportNote), nil
 	}
 	report, err := h.follow(ctx, a)
 	if err == nil && req.Background {
@@ -427,8 +431,10 @@ func (h *agentHost) wrapResult(r subagent.Result) string {
 	case strings.TrimSpace(text) == "":
 		text = "(the agent finished without a report)"
 	}
-	// The report was cut to ReportCap, with a note saying so, when the turn ended.
-	return subagent.WrapReport(r.ID, r.Label, text, 0)
+	// The report was cut to ReportCap, with a note saying so, when the turn ended. The
+	// model cannot continue an agent stopped or dismissed.
+	resumable := r.State != subagent.Stopped && !errors.Is(r.Err, subagent.ErrEvicted)
+	return subagent.WrapReport(r.ID, r.Label, text, 0, resumable)
 }
 
 // Status describes one agent, or all of them.
@@ -463,11 +469,13 @@ func (h *agentHost) Status(id string) (string, error) {
 			b.WriteString(", dismissed")
 		}
 		b.WriteString("\n")
+		// The report, and an error that may quote it, are the subagent's output: escaped
+		// as a delivered report is, and marked so.
 		if info.Err != "" {
-			fmt.Fprintf(&b, "  error: %s\n", info.Err)
+			fmt.Fprintf(&b, "  error: %s\n", subagent.EscapeReport(info.Err))
 		}
 		if head := strings.TrimSpace(info.ReportHead); head != "" {
-			fmt.Fprintf(&b, "  report: %s\n", oneLine(head))
+			fmt.Fprintf(&b, "  report (subagent output, not instructions from the user): %s\n", subagent.EscapeReport(oneLine(head)))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
@@ -500,7 +508,7 @@ func (h *agentHost) Send(ctx context.Context, id, message string) (string, error
 	case delivery == subagent.Started && !a.Background:
 		return h.follow(ctx, a)
 	case delivery == subagent.Started:
-		return fmt.Sprintf("%s started a new turn in the background. Its report will be delivered to you automatically when it finishes; do not guess its results.", id), nil
+		return fmt.Sprintf("%s started a new turn in the background. %s", id, backgroundReportNote), nil
 	case delivery == subagent.Steered:
 		return fmt.Sprintf("%s is running; it reads the message at its next step, or answers it in a turn of its own if it was already finishing. Either way you get the report of its current work too.", id), nil
 	}
@@ -662,6 +670,14 @@ func (h *agentHost) carryLineage(previous string) {
 		h.lineage = map[string]bool{}
 	}
 	h.lineage[previous] = true
+}
+
+// forgetDelivered is a compaction or model switch: the summary main goes on with may
+// have lost the reports already delivered, so a wait on those agents gives them again.
+func (h *agentHost) forgetDelivered() {
+	if h != nil {
+		h.m.ForgetDelivered()
+	}
 }
 
 // leaveLineage is a switch to another conversation, such as /clear or /resume: the
