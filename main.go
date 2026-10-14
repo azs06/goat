@@ -938,6 +938,7 @@ func main() {
 		cfg.oneShot = true
 		code := runOneShot(cfg, opts)
 		stopBackgroundOnExit(os.Stderr)
+		showHeldWarnings()
 		os.Exit(code)
 	}
 	if opts.prompt != "" {
