@@ -278,6 +278,7 @@ func (a *Agent) infoLocked() Info {
 		ReportHead: head(a.report, 200),
 		Turns:      a.turns,
 		Inbox:      len(a.inbox),
+		Active:     a.goroutines > 0 || a.state.Busy() || len(a.inbox) > 0,
 		Started:    a.started,
 		Updated:    a.updated,
 	}
@@ -298,6 +299,7 @@ type Info struct {
 	Err                string
 	Turns              int
 	Inbox              int
+	Active             bool // a turn runs, a stopped one is still winding down, or messages wait to start one
 	Started, Updated   time.Time
 	Evicted            bool // only this summary is left; the transcript is in history
 }

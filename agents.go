@@ -108,7 +108,10 @@ func showHeldWarnings() {
 // defaults.
 func newAgentHost(cfg *config, limits subagent.Config, interactive bool) *agentHost {
 	h := &agentHost{cfg: cfg, interactive: interactive, pending: map[string]childSettings{}, lineage: map[string]bool{}}
-	h.m = subagent.NewManager(limits, h.runChild)
+	h.m = subagent.NewManager(limits, func(ctx context.Context, a *subagent.Agent, prompt string) (string, error) {
+		report, err := h.runChild(ctx, a, prompt)
+		return report, hideEndpointPathsInError(err)
+	})
 	h.sync(cfg)
 	return h
 }
@@ -136,6 +139,21 @@ func (h *agentHost) sync(cfg *config) {
 // commands between turns. Elsewhere, such as under -p, nothing may be left behind.
 func (h *agentHost) backgroundAllowed() bool {
 	return h.interactive && !h.cfg.oneShot && h.cfg.interactive && style.Enabled()
+}
+
+// endpointHiddenError is an error whose text has the user's base URLs shortened, the
+// way goat shows every error. A subagent's error reaches the parent model (in its
+// report, its notice and agent_status), and a base URL can carry a credential.
+type endpointHiddenError struct{ err error }
+
+func (e endpointHiddenError) Error() string { return provider.HideEndpointPaths(e.err.Error()) }
+func (e endpointHiddenError) Unwrap() error { return e.err }
+
+func hideEndpointPathsInError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return endpointHiddenError{err}
 }
 
 // runChild is the subagent.Runner: one turn of a's conversation.
@@ -693,15 +711,15 @@ func (h *agentHost) leaveLineage() {
 	clear(h.adopted)
 }
 
-// busyWriters are the general agents still running, which may still change the
-// workspace.
+// busyWriters are the general agents that may still change the workspace: running,
+// winding down after a stop, or holding messages that start a turn once a slot frees.
 func (h *agentHost) busyWriters() []string {
 	if h == nil {
 		return nil
 	}
 	var ids []string
 	for _, info := range h.m.List() {
-		if !info.Evicted && info.State.Busy() && info.Mode == tools.AgentModeGeneral {
+		if !info.Evicted && info.Active && info.Mode == tools.AgentModeGeneral {
 			ids = append(ids, info.ID)
 		}
 	}

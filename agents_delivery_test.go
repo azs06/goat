@@ -154,6 +154,7 @@ func TestVerifyWaitsForGeneralAgents(t *testing.T) {
 	// Once it is done, verify runs and nothing is pending.
 	h.m.Stop(general.ID)
 	h.m.Stop(explore.ID)
+	waitFor(t, "the stopped agents' goroutines to exit", func() bool { return h.m.Active() == 0 })
 	if _, err := gate(context.Background()); err != nil || ran != 2 || pending {
 		t.Fatalf("ran %d pending %v %v", ran, pending, err)
 	}
@@ -220,5 +221,112 @@ func TestClearedReportIsGivenByWait(t *testing.T) {
 	}
 	if !strings.Contains(got, "idle report") || strings.Contains(got, "delivered above") {
 		t.Fatalf("wait should give the report no model saw: %q", got)
+	}
+}
+
+// A general agent whose message waits for a free slot will still change the workspace,
+// and so will one stopped but still winding down: verify waits for both.
+func TestVerifyWaitsForAQueuedGeneralAgent(t *testing.T) {
+	withColor(t, false)
+	release := make(chan struct{})
+	cfg := &config{approver: &bashApprover{}}
+	h := &agentHost{cfg: cfg, pending: map[string]childSettings{}, lineage: map[string]bool{}}
+	h.m = subagent.NewManager(subagent.Config{MaxRunning: 1}, func(ctx context.Context, a *subagent.Agent, prompt string) (string, error) {
+		switch prompt {
+		case "quick":
+			return "done", nil
+		case "deaf":
+			<-release // ignores the cancel for a while, like a slow provider
+			return "", context.Cause(ctx)
+		}
+		<-ctx.Done()
+		return "", context.Cause(ctx)
+	})
+	t.Cleanup(func() { h.m.StopAll(3 * time.Second) })
+	ran := 0
+	pending := false
+	gate := h.deferVerify(func(context.Context) (string, error) { ran++; return "", nil }, &pending)
+
+	general, err := h.m.Spawn(subagent.SpawnOptions{Label: "edit", Mode: tools.AgentModeGeneral, Background: true, Prompt: "quick"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the general agent's first turn to end", func() bool { return h.m.Active() == 0 })
+	explore, err := h.m.Spawn(subagent.SpawnOptions{Label: "look", Mode: tools.AgentModeExplore, Background: true, Prompt: "hold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err := h.m.Deliver(general.ID, "deaf", false); err != nil || d != subagent.Queued {
+		t.Fatalf("the message should wait for the slot: %v %v", d, err)
+	}
+	out := captureTerminal(t, func() {
+		if failure, err := gate(context.Background()); err != nil || failure != "" {
+			t.Errorf("got %q %v", failure, err)
+		}
+	})
+	if ran != 0 || !pending || !strings.Contains(out, general.ID) {
+		t.Fatalf("verify ran while a queued general agent was still to edit: ran %d pending %v %q", ran, pending, out)
+	}
+
+	// The slot frees, the general agent starts and is stopped, but its turn has not
+	// returned yet.
+	h.m.Stop(explore.ID)
+	waitFor(t, "the general agent to start", func() bool { return general.State() == subagent.Running })
+	h.m.Stop(general.ID)
+	pending = false
+	if _, err := gate(context.Background()); err != nil || ran != 0 || !pending {
+		t.Fatalf("verify ran while a stopped general agent was winding down: ran %d pending %v %v", ran, pending, err)
+	}
+	close(release)
+	waitFor(t, "every goroutine to exit", func() bool { return h.m.Active() == 0 })
+	if _, err := gate(context.Background()); err != nil || ran != 1 || pending {
+		t.Fatalf("ran %d pending %v %v", ran, pending, err)
+	}
+}
+
+// A subagent's error reaches the parent model, so a credential in a base URL must not
+// come with it: not in the report, the background notice, or agent_status.
+func TestSubagentErrorsHideEndpointPaths(t *testing.T) {
+	withColor(t, true) // background agents need an interactive color terminal
+	fake := &fakeProvider{name: provider.Anthropic, sendErrs: []error{
+		errors.New(`Post "https://proxy.example/t/SECRET-TOKEN/v1/messages": 502 Bad Gateway`),
+		errors.New(`Post "https://proxy.example/t/SECRET-TOKEN/v1/messages": 502 Bad Gateway`),
+	}}
+	cfg := seamConfig(t, fake)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.example/t/SECRET-TOKEN")
+	sessionSaver = func(string, savedSession) error { return nil }
+	t.Cleanup(func() { sessionSaver = writeSessionFile })
+	previous := activeConversationID
+	activeConversationID = "c-main-test"
+	t.Cleanup(func() { activeConversationID = previous })
+	cfg.interactive = true
+	h := newAgentHost(cfg, subagent.Config{}, true)
+	cfg.agents = h
+	t.Cleanup(func() { h.m.StopAll(3 * time.Second) })
+
+	// a1 runs in the background, so its error comes as a notice; a2 in the foreground.
+	if out, err := h.Spawn(context.Background(), tools.SpawnRequest{Description: "fails behind", Prompt: "go", Mode: tools.AgentModeExplore, Background: true}); err != nil || !strings.Contains(out, "in the background") {
+		t.Fatalf("got %q %v", out, err)
+	}
+	waitFor(t, "a1 to fail", func() bool { return h.m.Active() == 0 })
+	notices := strings.Join(h.takeNotices(func(string) {}), "\n")
+	status, err := h.Status("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report string
+	captureTerminal(t, func() {
+		report, err = h.Spawn(context.Background(), tools.SpawnRequest{Description: "fails", Prompt: "go", Mode: tools.AgentModeExplore})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"report": report, "agent_status": status, "notice": notices} {
+		if strings.Contains(text, "SECRET-TOKEN") {
+			t.Errorf("the %s carries the base URL's path: %s", name, text)
+		}
+		if !strings.Contains(text, "502 Bad Gateway") {
+			t.Errorf("the %s lost the error: %s", name, text)
+		}
 	}
 }
