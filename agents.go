@@ -651,7 +651,7 @@ func (h *agentHost) takeNotices(show func(string)) []string {
 		show(h.noticeLine(n))
 		if n.ForModel && (h.inMainLineage(n.ParentConv) || h.isAdopted(n.AgentID)) {
 			texts = append(texts, noticeHeader(n.AgentID)+"\n"+n.Text)
-			h.m.MarkDelivered(n.AgentID)
+			h.m.MarkNoticeDelivered(n)
 		}
 	}
 	return texts

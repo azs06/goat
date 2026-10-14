@@ -221,3 +221,38 @@ func TestACutReportIsMarkedInItsNotice(t *testing.T) {
 	}
 	shutdown(t, m)
 }
+
+// Acknowledging a notice counts only for the report it carried: a newer turn that ends
+// between taking the notice and acknowledging it keeps its own notice and stays owed.
+func TestAcknowledgingAnOlderNoticeKeepsTheNewerReport(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	calls := make(chan call, 4)
+	m := NewManager(Config{}, fakeRunner(calls, true))
+	a, _ := m.Spawn(SpawnOptions{Label: "kid", ParentConv: "c", Background: true, Prompt: "task"})
+	next(t, calls).reply <- reply{text: "R1"}
+	settle(t, a)
+	taken := m.TakeNotices("")
+	if len(taken) != 1 || !strings.Contains(taken[0].Text, "R1") {
+		t.Fatalf("got %+v", taken)
+	}
+
+	if d, err := m.Deliver(a.ID, "more", false); err != nil || d != Started {
+		t.Fatalf("got %v %v", d, err)
+	}
+	next(t, calls).reply <- reply{text: "R2"}
+	settle(t, a)
+	m.MarkNoticeDelivered(taken[0])
+
+	if delivered(a) {
+		t.Fatal("R2 counts as delivered though only R1 reached the model")
+	}
+	rest := m.TakeNotices("")
+	if len(rest) != 1 || !strings.Contains(rest[0].Text, "R2") {
+		t.Fatalf("R2's notice was dropped: %+v", rest)
+	}
+	m.MarkNoticeDelivered(rest[0])
+	if !delivered(a) {
+		t.Fatal("R2's own notice should mark it delivered")
+	}
+	shutdown(t, m)
+}

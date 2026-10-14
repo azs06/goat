@@ -309,6 +309,21 @@ func runUndoLastChange(_ context.Context, raw string, _ Options) (string, error)
 // maxBashTimeoutSeconds is the longest timeout a run_bash call may ask for.
 const maxBashTimeoutSeconds = 600
 
+// approveCommand asks opts.ApproveBash about a command, then checks plan mode again:
+// a subagent's approval waits until main can ask it, and the user may turn plan mode
+// on meanwhile, after Execute's check passed.
+func approveCommand(ctx context.Context, opts Options, command, workdir string) error {
+	if opts.ApproveBash != nil {
+		if err := opts.ApproveBash(ctx, command, workdir); err != nil {
+			return err
+		}
+	}
+	if opts.LivePlanMode != nil && opts.LivePlanMode() {
+		return ErrPlanMode
+	}
+	return nil
+}
+
 func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Command string `json:"command"`
@@ -321,10 +336,8 @@ func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	if strings.TrimSpace(args.Command) == "" {
 		return "", fmt.Errorf("missing command")
 	}
-	if opts.ApproveBash != nil {
-		if err := opts.ApproveBash(ctx, args.Command, args.Workdir); err != nil {
-			return "", err
-		}
+	if err := approveCommand(ctx, opts, args.Command, args.Workdir); err != nil {
+		return "", err
 	}
 	if args.Timeout <= 0 {
 		return workspace.RunBash(ctx, args.Command, args.Workdir)

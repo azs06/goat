@@ -591,6 +591,23 @@ func (m *Manager) MarkDelivered(id string) {
 	}
 }
 
+// MarkNoticeDelivered records that n reached the model. Only the report n carries
+// counts: when the agent has finished a newer turn since n was taken, that report and
+// its notice are still owed.
+func (m *Manager) MarkNoticeDelivered(n Notice) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.agents[n.AgentID]
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.turns == n.turn {
+		a.delivered = true
+	}
+}
+
 // ForgetDelivered clears every agent's delivered mark, for a conversation compacted
 // into a summary that may no longer hold the reports: a wait gives them again.
 func (m *Manager) ForgetDelivered() {
