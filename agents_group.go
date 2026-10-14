@@ -215,6 +215,14 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 	interrupted := false
 	var giveUp <-chan time.Time
 	for {
+		// A pause for the commands typed meanwhile, unless the group is winding down.
+		if !interrupted && h.serveMidTurn(ctx) {
+			for _, m := range g.members {
+				if m.ring != nil && !m.done {
+					h.catchUp(g.agent(m).ID, m.ring, &m.cursor, true)
+				}
+			}
+		}
 		// Taken before looking at the agents, so a turn that ends meanwhile wakes the
 		// select below.
 		ended := h.m.TurnEnded()
@@ -236,7 +244,11 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(h.m.Broker.Pending())},
 		}
 		const endedCase, approvalCase = 0, 1
-		parentCase, giveUpCase := -1, -1
+		parentCase, giveUpCase, typedCase := -1, -1, -1
+		if !interrupted {
+			typedCase = len(cases)
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(lineQueued)})
+		}
 		if parentDone != nil && !interrupted {
 			parentCase = len(cases)
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(parentDone)})
@@ -251,7 +263,7 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 			}
 		}
 		switch chosen, _, _ := reflect.Select(cases); chosen {
-		case endedCase:
+		case endedCase, typedCase:
 		case approvalCase:
 			h.serveApprovals(ctx, h.cfg)
 		case parentCase:

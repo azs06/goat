@@ -41,6 +41,10 @@ type TUIStep struct {
 	WaitMS int `json:"wait_ms,omitempty"`
 	// Snapshot records the screen after this step.
 	Snapshot bool `json:"snapshot,omitempty"`
+	// Then, when set, runs once the step is done, before the next one: for Go callers
+	// such as tests, which act outside the program at a point the screen shows. The
+	// run_tui tool never sets it.
+	Then func() `json:"-"`
 }
 
 // TUIRun describes one run_tui call.

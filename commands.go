@@ -37,7 +37,7 @@ var (
 
 func init() {
 	list := []*cliCommand{
-		{name: "agents", usage: "/agents [id|log id|stop id|dismiss id]", description: "List the subagents; attach to one to watch it and send it messages (ctrl-g)", aliases: []string{"tasks"}, callback: commandAgents},
+		{name: "agents", usage: "/agents [id|log id|stop id|dismiss id]", description: "List the subagents; attach to one to watch it and send it messages (ctrl-g); works while goat is busy", aliases: []string{"tasks"}, callback: commandAgents},
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
 		{name: "ps", usage: "/ps [stop n|all]", description: "List the commands goat left running in the background, such as a dev server, and stop them", aliases: []string{"jobs"}, callback: commandProcesses},
@@ -129,7 +129,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		}
 		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
-	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn."))
+	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn. While a turn runs you can keep typing: text steers it, /agents, ctrl-g, /help, /ps, /tools, /output, /status, /history, /diff and /plan run at its next pause, and other commands wait for it to end."))
 	fmt.Println()
 	fmt.Println(renderHelpTable(commands))
 	if style.Enabled() {

@@ -254,6 +254,9 @@ func (s *tuiSession) runSteps(ctx context.Context, steps []TUIStep) (string, err
 			s.settle(ctx)
 			fmt.Fprintf(&report, "After step %d:\n%s\n\n", i+1, s.text())
 		}
+		if step.Then != nil {
+			step.Then()
+		}
 	}
 	if stepErr == nil && len(steps) > 0 && steps[len(steps)-1].Keys != "" {
 		select {

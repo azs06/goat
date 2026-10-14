@@ -699,3 +699,37 @@ func TestSlotIsFreeOnceTurnDoneCloses(t *testing.T) {
 		t.Fatalf("still running: %v", stragglers)
 	}
 }
+
+func TestWaitOrWakeReturnsWhenWokenAndKeepsReports(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	release := make(chan struct{})
+	m := NewManager(Config{}, func(ctx context.Context, a *Agent, prompt string) (string, error) {
+		if prompt == "slow" {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		return "done " + prompt, nil
+	})
+	fast, _ := m.Spawn(SpawnOptions{Label: "fast", ParentConv: "c1", Background: true, Prompt: "quick"})
+	<-fast.TurnDone()
+	slow, _ := m.Spawn(SpawnOptions{Label: "slow", ParentConv: "c1", Background: true, Prompt: "slow"})
+	wake := make(chan struct{}, 1)
+	wake <- struct{}{}
+	res, err := m.WaitOrWake(context.Background(), nil, true, 5*time.Second, wake)
+	if !errors.Is(err, ErrWoken) || len(res.Done) != 1 || res.Done[0].ID != fast.ID {
+		t.Fatalf("got %+v %v", res, err)
+	}
+	if m.NoticeCount() != 1 {
+		t.Fatalf("a woken wait must leave the report pending: %d notices", m.NoticeCount())
+	}
+	close(release)
+	res, err = m.WaitOrWake(context.Background(), nil, true, 5*time.Second, wake)
+	if err != nil || len(res.Done) != 2 || len(res.Running) != 0 {
+		t.Fatalf("got %+v %v", res, err)
+	}
+	<-slow.TurnDone()
+	shutdown(t, m)
+}

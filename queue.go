@@ -12,10 +12,11 @@ import (
 // While a turn runs on an interactive color terminal, keys go to a line under the
 // spinner instead of being thrown away. Enter queues the line: plain text is sent to the
 // model with the next tool results, so it can steer a turn that is still working, and
-// whatever is left when the turn ends is sent as the next prompt. Slash commands and !
-// shell commands always wait for the turn to end. Up on an empty line takes the last queued message back to
-// edit it. After Ctrl-C or a failed turn nothing is sent; the queue goes back into the
-// prompt instead.
+// whatever is left when the turn ends is sent as the next prompt. During main's turn,
+// /agents, Ctrl-G and the read-only commands of midTurnCommands run at the turn's next
+// pause (midturn.go); other slash commands and ! shell commands wait for the turn to
+// end. Up on an empty line takes the last queued message back to edit it. After Ctrl-C
+// or a failed turn nothing is sent; the queue goes back into the prompt instead.
 
 type queueState struct {
 	mu     sync.Mutex
@@ -29,16 +30,24 @@ type queueState struct {
 	footer []string
 	// emptyHint replaces the hint on the empty input line, such as in the attach view.
 	emptyHint string
-	// openAgents is set by Ctrl-G during a turn: /agents runs once the turn is over,
-	// before anything else queued.
+	// openAgents is set by Ctrl-G during a turn: /agents runs at main's next pause, or
+	// once the turn is over, before anything else queued.
 	openAgents bool
+	// midTurn is set while main's own turn runs and takes the commands of
+	// midTurnCommands at its pauses (takeMidTurnCommand); it is off in the attach view.
+	midTurn bool
+	// status, when set, goes first in the footer, such as in the attach view opened
+	// during main's turn.
+	status string
 }
 
 var turnQueue queueState
 
-// lineQueued receives a value when a line is queued, or the line being typed is
-// emptied, for the attach view, which handles each line as it comes and asks about
-// approvals only while nothing is typed. It holds at most one.
+// lineQueued receives a value when a line is queued, the line being typed is emptied,
+// or Ctrl-G is pressed: for the attach view, which handles each line as it comes and
+// asks about approvals only while nothing is typed, and for main's pauses during its
+// turn, which run the commands typed for them. It holds at most one. Only the key
+// capture sends on it; what it wakes runs on main.
 var lineQueued = make(chan struct{}, 1)
 
 func nudgeLineQueued() {
@@ -78,7 +87,7 @@ func queueKey(key string) {
 	defer func() { editor.menuClosed = true }()
 
 	switch {
-	case !editor.pasting && key == "\x07": // Ctrl-G: the agents picker, once the turn is over
+	case !editor.pasting && key == "\x07": // Ctrl-G: the agents picker, at main's next pause or once the turn is over
 		turnQueue.openAgents = true
 		nudgeLineQueued()
 	case !editor.pasting && (key == "\x10" || key == "\x1b[A" || key == "\x1bOA") && len(editor.buf) == 0: // Ctrl-P, Up
@@ -146,6 +155,89 @@ func nextQueuedInput() (string, bool) {
 
 // agentsCommandLine is what Ctrl-G runs.
 const agentsCommandLine = "/agents"
+
+// beginMidTurn marks main's turn as running, so the commands of midTurnCommands typed
+// meanwhile run at its pauses; the returned func ends that.
+func beginMidTurn() func() {
+	previous := setMidTurn(true)
+	return func() { setMidTurn(previous) }
+}
+
+// setMidTurn sets turnQueue.midTurn and returns what it was.
+func setMidTurn(on bool) bool {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	previous := turnQueue.midTurn
+	turnQueue.midTurn = on
+	return previous
+}
+
+// takeMidTurnCommand removes and returns the first command queued to run at main's
+// next pause: the /agents of a Ctrl-G, or else the first queued line that is a command
+// of midTurnCommands. Everything else stays queued in order. It returns false outside
+// main's turn.
+func takeMidTurnCommand() (string, bool) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	if !turnQueue.midTurn {
+		return "", false
+	}
+	if turnQueue.openAgents {
+		turnQueue.openAgents = false
+		return agentsCommandLine, true
+	}
+	for i, item := range turnQueue.items {
+		if isMidTurnCommand(item) {
+			turnQueue.items = append(turnQueue.items[:i:i], turnQueue.items[i+1:]...)
+			return item, true
+		}
+	}
+	return "", false
+}
+
+// midTurnWaiting is the commands waiting for main's next pause, for the footer; the
+// caller holds mu.
+func (q *queueState) midTurnWaiting() []string {
+	if !q.midTurn {
+		return nil
+	}
+	var waiting []string
+	if q.openAgents {
+		waiting = append(waiting, agentsCommandLine)
+	}
+	for _, item := range q.items {
+		if isMidTurnCommand(item) {
+			waiting = append(waiting, item)
+		}
+	}
+	return waiting
+}
+
+// turnStatusPart is what goes first in the footer during a turn: the status set for
+// the attach view, or the commands waiting for main's next pause, or "".
+func turnStatusPart() string {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	if turnQueue.status != "" {
+		return turnQueue.status
+	}
+	waiting := turnQueue.midTurnWaiting()
+	if len(waiting) == 0 {
+		return ""
+	}
+	text := strings.Fields(flattenBreaks(waiting[0]))[0]
+	if len(waiting) > 1 {
+		text += fmt.Sprintf(" +%d", len(waiting)-1)
+	}
+	return text + " waiting for a pause"
+}
+
+// setTurnStatus sets the part shown first in the footer during a turn; "" clears it.
+func setTurnStatus(status string) {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	turnQueue.status = status
+}
 
 // takeQueuedLine removes and returns the first queued line, whatever it is, or the
 // /agents of a Ctrl-G. The attach view handles lines one at a time.
@@ -252,13 +344,26 @@ func queuedInputLines(width int) (lines []string, cursor int) {
 		return nil, 0
 	}
 	available := max(width-1, 10)
-	items := turnQueue.items
-	if turnQueue.openAgents {
-		items = append([]string{agentsCommandLine}, items...)
+	midTurn := turnQueue.midTurn
+	var items []string
+	if turnQueue.openAgents && !midTurn {
+		items = append(items, agentsCommandLine)
+	}
+	for _, item := range turnQueue.items {
+		// During main's turn the commands for its next pause show in the footer.
+		if !midTurn || !isMidTurnCommand(item) {
+			items = append(items, item)
+		}
 	}
 	for _, item := range items {
 		label := "  queued  "
-		lines = append(lines, style.Subtle.Render(label)+style.Muted.Render(style.TruncateToWidth(flattenBreaks(item), available-len(label))))
+		note := ""
+		if midTurn && isQueuedCommand(item) {
+			// Said once, where the command waits: it does not run at a pause.
+			note = " " + style.Glyphs().Dot + " runs after the turn"
+		}
+		text := style.TruncateToWidth(flattenBreaks(item), max(available-len(label)-style.VisibleWidth(note), 1))
+		lines = append(lines, style.Subtle.Render(label)+style.Muted.Render(text)+style.Subtle.Render(note))
 	}
 
 	prefix := promptPrefix()
@@ -310,6 +415,9 @@ func turnFrameLines(width, maxRows int) (lines []string, cursorRow, cursor int) 
 	turnQueue.mu.Unlock()
 	if footer != nil {
 		footer = withAgentsPart(footer, agentsFooterPart())
+		if status := turnStatusPart(); status != "" {
+			footer = append([]string{status}, footer...)
+		}
 	}
 	frame := 3
 	if footer == nil || maxRows < 1+frame+1 {

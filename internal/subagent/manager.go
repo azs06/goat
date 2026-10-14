@@ -37,6 +37,7 @@ var (
 	ErrStopped           = errors.New("agent stopped")
 	ErrBusy              = errors.New("the agent is running")
 	ErrApprovalPending   = errors.New("a subagent is waiting for approval")
+	ErrWoken             = errors.New("the wait was woken")
 	ErrShutdown          = errors.New("goat is exiting")
 	ErrEvicted           = errors.New("agent dismissed")
 	ErrParentInterrupted = errors.New("the parent agent was interrupted")
@@ -592,6 +593,13 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 	}
 }
 
+// Attached is the agent SetAttached last recorded, "" for none.
+func (m *Manager) Attached() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.attached
+}
+
 // SetAttached records the agent the user is looking at in the attach view, "" for
 // none. A turn of that agent the user started is not announced when it ends: the user
 // saw it end.
@@ -878,6 +886,14 @@ type WaitResult struct {
 // may never pass those on, so they stay pending until the caller hands them to the
 // model and calls MarkDelivered.
 func (m *Manager) Wait(ctx context.Context, ids []string, all bool, timeout time.Duration) (WaitResult, error) {
+	return m.WaitOrWake(ctx, ids, all, timeout, nil)
+}
+
+// WaitOrWake is Wait that also returns, with ErrWoken, when wake receives a value,
+// such as for the caller to run something on its own goroutine. Like
+// ErrApprovalPending, ErrWoken leaves the reports found so far pending; the caller
+// calls it again with the time left.
+func (m *Manager) WaitOrWake(ctx context.Context, ids []string, all bool, timeout time.Duration, wake <-chan struct{}) (WaitResult, error) {
 	m.mu.Lock()
 	targets, err := m.waitTargetsLocked(ids)
 	m.mu.Unlock()
@@ -902,6 +918,8 @@ func (m *Manager) Wait(ctx context.Context, ids []string, all bool, timeout time
 		select {
 		case <-ended:
 		case <-m.Broker.Pending():
+		case <-wake:
+			return m.partial(targets, false), ErrWoken
 		case <-ctx.Done():
 			return m.partial(targets, false), context.Cause(ctx)
 		case <-timer.C:

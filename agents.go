@@ -67,6 +67,9 @@ type agentHost struct {
 	// groups holds the members of spawn groups whose calls have not run yet, by call
 	// ID (PrestartSpawns).
 	groups map[string]*groupMember
+	// shownAway holds, by agent, the last event the attach view showed during the
+	// latest of main's pauses (serveMidTurn), for main's follow to go on after it.
+	shownAway map[string]uint64
 }
 
 // backgroundReportNote tells the model when a background agent's report reaches it:
@@ -384,6 +387,10 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 	// ignores the cancellation must not hold main.
 	var giveUp <-chan time.Time
 	for finished := false; !finished; {
+		// A pause for the commands typed meanwhile, unless the turn is winding down.
+		if giveUp == nil && h.serveMidTurn(ctx) {
+			h.catchUp(a.ID, ring, &cursor, false)
+		}
 		h.showEvents(a, ring, &cursor)
 		select {
 		case <-done:
@@ -391,6 +398,7 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 		case <-notify:
 		case <-h.m.Broker.Pending():
 			h.serveApprovals(ctx, h.cfg)
+		case <-lineQueued:
 		case <-parentDone:
 			// The turn was interrupted; it ends soon.
 			parentDone = nil
@@ -582,8 +590,16 @@ func (h *agentHost) Wait(ctx context.Context, ids []string, all bool, timeout ti
 	deadline := time.Now().Add(timeout)
 	var done []subagent.Result
 	for {
-		res, err := h.m.Wait(ctx, ids, all, time.Until(deadline))
+		// A pause for the commands typed meanwhile.
+		h.serveMidTurn(ctx)
+		res, err := h.m.WaitOrWake(ctx, ids, all, time.Until(deadline), lineQueued)
 		done = mergeResults(done, res.Done)
+		if errors.Is(err, subagent.ErrWoken) {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			continue
+		}
 		if errors.Is(err, subagent.ErrApprovalPending) {
 			h.serveApprovals(ctx, h.cfg)
 			if ctx.Err() != nil {

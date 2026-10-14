@@ -534,8 +534,14 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	}
 	if cfg.agents != nil {
 		opts.agents = cfg.agents
-		opts.serveAgents = func(ctx context.Context) { cfg.agents.serveApprovals(ctx, cfg) }
+		opts.serveAgents = func(ctx context.Context) {
+			cfg.agents.serveApprovals(ctx, cfg)
+			// A pause for the commands typed meanwhile, before the queued text steers.
+			cfg.agents.serveMidTurn(ctx)
+		}
 		opts.takeNotices = cfg.agents.turnNotices
+		// /plan can run at the turn's pauses; the next tool call follows it.
+		opts.livePlanMode = cfg.agents.mainPlanMode.Load
 	}
 	// Plan mode changes nothing, so there is nothing to check.
 	if !cfg.planMode {
@@ -545,9 +551,13 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		// earlier turn runs when this one ends.
 		opts.verified = &verifyState{changed: cfg.verifyPending && opts.verify != nil}
 	}
-	// Messages queued while the turn works go to the model with the next tool results.
+	// Messages queued while the turn works go to the model with the next tool results,
+	// and the commands of midTurnCommands run at the turn's pauses.
 	if cfg.interactive && style.Enabled() {
 		opts.takeSteering = takeQueuedText
+		if cfg.agents != nil {
+			defer beginMidTurn()()
+		}
 	}
 
 	sent := cfg.conversation.conversation
@@ -609,7 +619,7 @@ func conversationMoved(before, after provider.Conversation) bool {
 
 // handleInput runs one command or prompt. Ctrl-C cancels it instead of killing the goat.
 func handleInput(cfg *config, text string) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := notifyInterrupt(context.Background())
 	defer stop()
 
 	shellCommand, afterShell, isShell := shellEscapeText(cfg, text)

@@ -139,3 +139,83 @@ func TestSubagentApprovalInTheTerminal(t *testing.T) {
 		t.Fatalf("expected the approved command's output in a1's second request, got %d requests", len(asker))
 	}
 }
+
+// TestMidTurnAttachInTheTerminal: while main's turn follows a running foreground agent,
+// Ctrl-G opens the picker at once, the user attaches to the agent, types a message it
+// answers, and /back returns to main's turn, which then finishes with the agent's
+// report.
+func TestMidTurnAttachInTheTerminal(t *testing.T) {
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[main]]": {
+			newSSE("m1").toolUse("tm1", tools.SpawnAgent, `{"description":"kid helper","prompt":"[[kid]] look around"}`).stop("tool_use", ""),
+			newSSE("m2").text("Main done.").stop("end_turn", ""),
+		},
+		"[[kid]]": {
+			newSSE("k1").toolUse("tk1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
+			newSSE("k2").text("kid got your message").stop("end_turn", ""),
+		},
+	})
+	// The kid's first request waits until the user's message is in its inbox; the
+	// request after its tool call carries it.
+	release := make(chan struct{})
+	fake.hold = map[string]chan struct{}{"[[kid]]": release}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	config := filepath.Join(workDir, "config")
+	command := "GOAT_TEST_MAIN=1 ANTHROPIC_API_KEY=test ANTHROPIC_BASE_URL=" + shellQuote(fake.server.URL) + " XDG_CONFIG_HOME=" + shellQuote(config) + " " + shellQuote(os.Args[0]) + " -test.run='^TestMainProcess$'"
+	out, err := workspace.RunTUI(context.Background(), workspace.TUIRun{
+		Command: command,
+		Cols:    100,
+		Rows:    40,
+		Steps: []workspace.TUIStep{
+			{WaitFor: "Welcome to G.O.A.T"},
+			// 2: main follows the kid, which waits on its first request.
+			{Keys: "[[main]] ask the kid<Enter>", WaitFor: "1 agent running (/agents)"},
+			// 3: Ctrl-G opens the picker while main's turn runs.
+			{Keys: "<C-g>", WaitFor: "a1  kid helper", Snapshot: true},
+			// 4: attach to the kid; main's turn is paused.
+			{Keys: "<Down><Enter>", WaitFor: "type a message for a1", Snapshot: true},
+			// 5: the message waits in the kid's inbox; then its request goes on.
+			{Keys: "hello kid<Enter>", WaitFor: "a1 reads it at its next step", Then: func() { close(release) }},
+			{WaitFor: "kid got your message", Snapshot: true},
+			// 7: back to main's turn, which finishes with the kid's report.
+			{Keys: "/back<Enter>", WaitFor: "Main done.", Snapshot: true},
+			{Keys: "/exit<Enter>", WaitFor: "Goodbye"},
+		},
+	})
+	t.Logf("run_tui output:\n%s", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"exited with status 0",
+		"After step 3:", "Subagents", "a1  kid helper",
+		"After step 4:", "── a1 · kid helper · explore ── main's turn paused", "attached to a1 · main's turn paused",
+		"After step 7:", "Back on main.", "Main done.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q on the screen", want)
+		}
+	}
+	kid := fake.requests("[[kid]]")
+	if len(kid) != 2 || !strings.Contains(kid[1].raw, "hello kid") {
+		t.Fatalf("expected the kid's second request to carry the message, got %d requests", len(kid))
+	}
+	main := fake.requests("[[main]]")
+	if len(main) != 2 {
+		t.Fatalf("main made %d requests, want 2", len(main))
+	}
+	if !strings.Contains(main[1].raw, "kid got your message") || strings.Contains(main[1].raw, "hello kid") {
+		t.Fatal("main should get the kid's report and none of what was typed for the kid")
+	}
+	if strings.Contains(out, "kid helper finished") {
+		t.Error("a followed agent's turn is not announced")
+	}
+}

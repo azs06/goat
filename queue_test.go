@@ -20,6 +20,8 @@ func resetTurnQueue(t *testing.T) {
 		turnQueue.footer = nil
 		turnQueue.openAgents = false
 		turnQueue.emptyHint = ""
+		turnQueue.midTurn = false
+		turnQueue.status = ""
 		turnQueue.mu.Unlock()
 		for len(lineQueued) > 0 {
 			<-lineQueued

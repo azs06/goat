@@ -456,7 +456,21 @@ var attachReadOnly = map[string]bool{"agents": true, "help": true, "ps": true, "
 // /back or Ctrl-C, which leave the agent running (in plain mode Ctrl-C interrupts the
 // turn it shows). /agents <id> switches agents. A turn
 // the user starts here is not announced when it ends while the user still looks on.
+//
+// Opened during main's turn (runsMidTurn), it is one of main's pauses: main's turn
+// waits until the view closes, and Ctrl-C only closes the view, leaving the turn
+// running.
 func (h *agentHost) attach(ctx context.Context, cfg *config, a *subagent.Agent) error {
+	midTurn := runsMidTurn(ctx)
+	if midTurn {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		defer redirectInterrupt(cancel)()
+		// What is typed here is for the agent, not commands for main's pause.
+		defer setMidTurn(setMidTurn(false))
+		defer setTurnStatus("")
+	}
 	defer h.m.SetAttached("")
 	// Lines queued, and the line typed, before the view opened were meant for main:
 	// they wait, and go to main as they would have once the view closes. Ctrl-C sends
@@ -485,9 +499,19 @@ func (h *agentHost) attachOnce(ctx context.Context, cfg *config, a *subagent.Age
 		return h.attachPlain(ctx, cfg, a)
 	}
 	stopSpinner()
-	replay, cursor := replayAgent(a, "type to message "+style.Glyphs().Dot+" /stop interrupts "+style.Glyphs().Dot+" /back or Ctrl-C returns")
+	dot := " " + style.Glyphs().Dot + " "
+	what := "type to message" + dot + "/stop interrupts" + dot + "/back or Ctrl-C returns"
+	hint := "type a message for " + a.ID + dot + "/back returns"
+	if runsMidTurn(ctx) {
+		// Main's turn waits on this view, on main's goroutine; the agents do not.
+		what = "main's turn paused" + dot + what
+		hint = "type a message for " + a.ID + dot + "/back returns to main's turn"
+		setTurnStatus("attached to " + a.ID + dot + "main's turn paused")
+	}
+	replay, cursor := replayAgent(a, what)
+	h.noteShown(a.ID, cursor)
 	fmt.Print("\n" + replay)
-	setQueueHint("type a message for " + a.ID + " " + style.Glyphs().Dot + " /back returns")
+	setQueueHint(hint)
 	defer setQueueHint("")
 	startSpinnerHint(attachLabel(a), "ctrl-c returns to main")
 	// Lines not handled yet go back to the input, so nothing typed here reaches main.
@@ -555,6 +579,7 @@ func (h *agentHost) showAttached(a *subagent.Agent, ring *subagent.EventRing, cu
 				b.WriteString(renderAgentEvent(e))
 			}
 			showAgentActivity(b.String())
+			h.noteShown(a.ID, *cursor)
 		}
 	}
 	relabelSpinner(attachLabel(a))
