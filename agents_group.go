@@ -55,6 +55,17 @@ type groupMember struct {
 	done     bool
 	result   subagent.Result
 	startErr error
+	// held is set while the manager holds the agent for main (Hold), from its start
+	// until its call has taken the result, or the group ends.
+	held bool
+}
+
+// release ends the member's hold, if it has one.
+func (h *agentHost) release(m *groupMember) {
+	if m.held {
+		m.held = false
+		h.m.Release(m.group.agent(m))
+	}
 }
 
 func (g *spawnGroup) agent(m *groupMember) *subagent.Agent {
@@ -121,6 +132,9 @@ func (h *agentHost) PrestartSpawns(ctx context.Context, reqs []tools.SpawnReques
 	h.startQueued(ctx, g)
 	return func() {
 		stop()
+		for _, m := range g.members {
+			h.release(m)
+		}
 		h.mu.Lock()
 		var left []*groupMember
 		for _, m := range g.members {
@@ -171,6 +185,10 @@ func (h *agentHost) startQueued(ctx context.Context, g *spawnGroup) {
 			m.startErr = err
 			continue
 		}
+		// Held until showGroup keeps the result: a mid-turn pause may otherwise dismiss
+		// the agent or start a turn of the user's that replaces it.
+		h.m.Hold(a)
+		m.held = true
 		m.turnDone, m.ring = a.TurnDone(), a.Ring()
 		g.mu.Lock()
 		m.a = a
@@ -296,6 +314,7 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 		return "", errors.New("the agent could not be followed")
 	}
 	h.m.MarkDelivered(target.result.ID)
+	h.release(target)
 	return h.wrapResult(target.result), nil
 }
 
@@ -322,10 +341,11 @@ func (h *agentHost) showGroup(g *spawnGroup) {
 			b.WriteString(renderAgentEventAs(e, a.ID))
 		}
 		if finished {
-			// Kept now: a finished agent nobody is owed a notice for may be dismissed
-			// to make room for the next spawn.
+			// Kept as the turn ended. The agent stays held until its call takes the
+			// result, so it is not dismissed meanwhile, by the user at a pause or to
+			// make room for the next spawn.
 			m.done = true
-			m.result = subagent.Result{ID: a.ID, Label: a.Label, State: a.State(), Report: a.Report(), Err: a.Err()}
+			m.result = a.LastResult()
 			continue
 		}
 		activity := a.Info().Activity

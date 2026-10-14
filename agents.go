@@ -374,6 +374,10 @@ func (h *agentHost) start(req tools.SpawnRequest, label string, settings childSe
 // and returns its wrapped report. The parent's Ctrl-C interrupts the turn, which leaves
 // the agent idle with its conversation.
 func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, error) {
+	// Held until main has the result: a mid-turn pause may otherwise dismiss the agent
+	// or start a turn of the user's that replaces it.
+	h.m.Hold(a)
+	defer h.m.Release(a)
 	stop := context.AfterFunc(ctx, func() { a.InterruptTurn(subagent.ErrParentInterrupted) })
 	defer stop()
 	done, ring := a.TurnDone(), a.Ring()
@@ -415,8 +419,11 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	// The turn ended (giving up comes only after the parent's interrupt). Its result
+	// is taken as recorded then: a stop since does not change it.
+	result := a.LastResult()
 	h.m.MarkDelivered(a.ID)
-	return h.wrapResult(subagent.Result{ID: a.ID, Label: a.Label, State: a.State(), Report: a.Report(), Err: a.Err()}), nil
+	return h.wrapResult(result), nil
 }
 
 // showEvents prints the agent's events after cursor, indented, and names its activity

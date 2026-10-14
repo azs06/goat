@@ -385,6 +385,7 @@ func (m *Manager) finishTurn(a *Agent, gen uint64, ctx context.Context, reply st
 	// a.goroutines until it returns, so the agent's own next turn waits for it (ErrBusy)
 	// and is kicked then.
 	<-m.sem
+	a.recordTurnEndLocked()
 	close(a.turnDone)
 	// A background turn is announced; so is a turn the model is owed that started from
 	// the inbox once a slot freed, since nobody follows it the way a foreground spawn or
@@ -423,7 +424,7 @@ func (m *Manager) kickLocked() {
 		a := m.agents[id]
 		a.mu.Lock()
 		var err error
-		if !a.state.Busy() && a.state != Stopped && len(a.inbox) > 0 {
+		if !a.state.Busy() && a.state != Stopped && a.held == 0 && len(a.inbox) > 0 {
 			inbox := a.inbox
 			a.inbox = nil
 			if err = m.startTurnLocked(a, joinMessages(inbox)); err != nil {
@@ -518,6 +519,9 @@ const (
 	Steered
 	// Queued: no slot is free; the message starts a turn once one frees.
 	Queued
+	// Held: main has yet to take the result of the agent's turn it follows; the
+	// message starts a turn once it has (Release).
+	Held
 )
 
 // Send gives an agent a message. A running agent finds it in its inbox at its next
@@ -574,6 +578,12 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 		}
 		return Steered, nil
 	}
+	if a.held > 0 && a.state != Stopped {
+		// A new turn would replace the report main is about to take. A stopped
+		// agent's inbox is dropped and kick never starts one, so the user's message
+		// resumes it now; main keeps the stopped turn's result (LastResult).
+		return Held, nil
+	}
 	if a.state == Stopped {
 		a.ctx, a.cancel = context.WithCancelCause(m.root)
 		a.state = Idle
@@ -607,6 +617,33 @@ func (m *Manager) SetAttached(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.attached = id
+}
+
+// Hold marks a as followed by main until Release: it is not evicted, and a message
+// the user sends it between its turn's end and Release waits in the inbox (Held), so
+// the result of the turn main follows stays there for main to take.
+func (m *Manager) Hold(a *Agent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a.mu.Lock()
+	a.held++
+	a.mu.Unlock()
+}
+
+// Release ends a Hold, starting a turn with the messages held meanwhile once no
+// follow holds the agent and a slot is free.
+func (m *Manager) Release(a *Agent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a.mu.Lock()
+	if a.held > 0 {
+		a.held--
+	}
+	free := a.held == 0
+	a.mu.Unlock()
+	if free {
+		m.kickLocked()
+	}
 }
 
 // MarkDelivered records that the agent's latest report reached the model, so a wait
@@ -686,6 +723,8 @@ func (m *Manager) stopLocked(a *Agent, cause error) {
 		a.gen++
 		a.turnCancel = nil
 		a.err = cause
+		a.state = Stopped
+		a.recordTurnEndLocked()
 		close(a.turnDone)
 	}
 	a.state = Stopped
@@ -795,9 +834,10 @@ func (m *Manager) evictLocked(keep int) {
 }
 
 // evictableLocked reports whether a has finished and holds nothing the parent has yet
-// to see. Callers hold m.mu and a.mu.
+// to see: no messages, no notice, and no result a follow of main has yet to take
+// (Hold). Callers hold m.mu and a.mu.
 func (m *Manager) evictableLocked(a *Agent) bool {
-	if a.state.Busy() || a.goroutines > 0 || len(a.inbox) > 0 {
+	if a.state.Busy() || a.goroutines > 0 || len(a.inbox) > 0 || a.held > 0 {
 		return false
 	}
 	for _, n := range m.notices {
@@ -817,6 +857,7 @@ func (m *Manager) evictAgentLocked(a *Agent) {
 	a.conv = nil
 	a.ring = nil
 	a.report = ""
+	a.last.Report = ""
 	a.inbox = nil
 	a.turnCancel = nil
 	a.mu.Unlock()
