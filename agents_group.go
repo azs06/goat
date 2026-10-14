@@ -205,10 +205,11 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 		// Taken before looking at the agents, so a turn that ends meanwhile wakes the
 		// select below.
 		ended := h.m.TurnEnded()
+		// Shown first, so startQueued knows which members have ended.
+		h.showGroup(g)
 		if !interrupted {
 			h.startQueued(ctx, g)
 		}
-		h.showGroup(g)
 		if interrupted {
 			if !g.running() {
 				break
@@ -266,6 +267,9 @@ func (h *agentHost) followMember(ctx context.Context, target *groupMember) (stri
 	if target.startErr != nil {
 		return "", target.startErr
 	}
+	if !target.done {
+		return "", errors.New("the agent could not be followed")
+	}
 	h.m.MarkDelivered(target.result.ID)
 	return h.wrapResult(target.result), nil
 }
@@ -308,13 +312,19 @@ func (h *agentHost) showGroup(g *spawnGroup) {
 	if b.Len() > 0 {
 		showAgentActivity(b.String())
 	}
+	relabelSpinner(groupSpinnerLabel(len(g.members), activities, g.queued()))
+}
+
+// groupSpinnerLabel is what the spinner says while a group runs: how many agents, what
+// each running one does, and how many wait for a slot.
+func groupSpinnerLabel(members int, activities []string, queued int) string {
 	dot := " " + style.Glyphs().Dot + " "
-	label := plural(len(g.members), "agent")
+	label := plural(members, "agent")
 	if len(activities) > 0 {
 		label += dot + strings.Join(activities, dot)
 	}
-	if n := g.queued(); n > 0 {
-		label += dot + fmt.Sprintf("%d waiting", n)
+	if queued > 0 {
+		label += dot + fmt.Sprintf("%d waiting", queued)
 	}
-	relabelSpinner(label)
+	return label
 }

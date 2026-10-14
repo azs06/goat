@@ -43,6 +43,9 @@ type routedAnthropic struct {
 	// barrier, when set, holds the first request of each of its keys until all of them
 	// have arrived.
 	barrier *requestBarrier
+	// hold, when set, holds the first request of each of its keys until its channel is
+	// closed.
+	hold map[string]chan struct{}
 }
 
 // requestBarrier holds requests until n have arrived, failing the test when they do not
@@ -109,6 +112,9 @@ func (f *routedAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 			close(b.all)
 		}
 		barrier = b.all
+	}
+	if hold := f.hold[key]; hold != nil && len(f.seen[key]) == 1 {
+		barrier = hold
 	}
 	f.mu.Unlock()
 

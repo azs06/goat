@@ -309,3 +309,70 @@ func writeTestFile(t *testing.T, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// TestQueuedGroupMemberNeverGetsAnEmptyReport: when a group member ends, the slot it
+// frees may go to another agent's waiting message instead of the next member. That
+// member then either runs or gets the limit error, never an empty report.
+func TestQueuedGroupMemberNeverGetsAnEmptyReport(t *testing.T) {
+	withToolTestColor(t, false)
+	fake := newRoutedAnthropic(t, map[string][]string{
+		"[[a0]]": {newSSE("o1").text("a0 first").stop("end_turn", ""), newSSE("o2").text("a0 second").stop("end_turn", "")},
+		"[[x1]]": {newSSE("x1").text("x1 report").stop("end_turn", "")},
+		"[[x2]]": {newSSE("x2").text("x2 report").stop("end_turn", "")},
+	})
+	release := make(chan struct{})
+	fake.hold = map[string]chan struct{}{"[[x1]]": release}
+	_, h := agentTestConfig(t, fake, subagent.Config{MaxRunning: 1}, false)
+	ctx := context.Background()
+	captureTerminal(t, func() {
+		if _, err := h.Spawn(ctx, tools.SpawnRequest{Description: "earlier", Prompt: "[[a0]] go", Mode: tools.AgentModeExplore}); err != nil {
+			t.Fatal(err)
+		}
+		done := h.PrestartSpawns(ctx, []tools.SpawnRequest{
+			{Description: "x1", Prompt: "[[x1]] go", Mode: tools.AgentModeExplore, CallID: "x1"},
+			{Description: "x2", Prompt: "[[x2]] go", Mode: tools.AgentModeExplore, CallID: "x2"},
+		})
+		defer done()
+		waitFor(t, "x1's request", func() bool { return len(fake.requests("[[x1]]")) == 1 })
+		// a1 waits for the slot x1 holds, beside x2.
+		if d, err := h.m.Deliver("a1", "[[a0]] again", false); err != nil || d != subagent.Queued {
+			t.Fatalf("expected the message queued, got %v %v", d, err)
+		}
+		// x2 is followed while x1 runs (the host is called directly, out of the calls'
+		// order), so its follow sees x1 end and the slot go to a1 or to x2.
+		go func() {
+			defer close(release)
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+				h.mu.Lock()
+				following := h.groups["x2"] == nil
+				h.mu.Unlock()
+				if following {
+					return
+				}
+			}
+			t.Error("x2 was never followed")
+		}()
+		report, err := h.Spawn(ctx, tools.SpawnRequest{CallID: "x2"})
+		if x1, err := h.Spawn(ctx, tools.SpawnRequest{CallID: "x1"}); err != nil || !strings.Contains(x1, "x1 report") {
+			t.Fatalf("x1: %q %v", x1, err)
+		}
+		switch {
+		case err == nil && strings.Contains(report, `<agent-report id="a3" label="x2">`) && strings.Contains(report, "x2 report"):
+		case err != nil && strings.Contains(err.Error(), "Subagent limit reached"):
+		default:
+			t.Fatalf("x2: expected its report or the limit error, got %q %v", report, err)
+		}
+	})
+	// a1's second turn runs from its message in either case.
+	waitFor(t, "every turn to end", func() bool { return h.m.Active() == 0 })
+}
+
+func TestGroupSpinnerLabel(t *testing.T) {
+	withToolTestColor(t, false)
+	if got, want := groupSpinnerLabel(3, []string{"a1 Reading", "a2 working"}, 1), "3 agents - a1 Reading - a2 working - 1 waiting"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := groupSpinnerLabel(2, nil, 0), "2 agents"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
