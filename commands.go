@@ -148,6 +148,9 @@ func commandClear(ctx context.Context, c *config, args []string) error {
 	replaceConversation(c, conversationState{})
 	c.pendingShell, c.agentNotices = nil, nil
 	c.agents.leaveLineage()
+	// The reports marked delivered went to the conversation left behind, or were held
+	// in agentNotices just dropped: a wait from here gives them again.
+	c.agents.forgetDelivered()
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	// A new conversation starts under a fresh banner with the current model and effort.
@@ -201,6 +204,9 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 	adoptSavedConversation(c, previous)
 	c.pendingShell, c.agentNotices = nil, nil
 	c.agents.leaveLineage()
+	// The reports marked delivered went to the conversation left behind, or were held
+	// in agentNotices just dropped: a wait from here gives them again.
+	c.agents.forgetDelivered()
 	saveSession(c)
 
 	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))

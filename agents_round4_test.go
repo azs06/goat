@@ -162,6 +162,38 @@ func TestAttachSetsAsideTheDraftForMain(t *testing.T) {
 	}
 }
 
+// An approval waits while the user is typing a message in the attach view: the rest of
+// the line would become its answer. Once the line is emptied it is asked.
+func TestAttachApprovalWaitsWhileTextIsTyped(t *testing.T) {
+	_, cfg, h, a := attachTestSetup(t)
+	lines := &scriptedLines{t: t, lines: []string{"y\n"}}
+	cfg.input = newLineReader(lines)
+	// Asking resumes the capture, which then reads the script's end.
+	setActiveKeyCapture(&keyCapture{input: cfg.input, parent: context.Background()})
+	answered := make(chan error, 1)
+	attachForTest(t, context.Background(), h, cfg, a, func() {
+		typeQueueKeys("now al")
+		go func() {
+			answered <- h.m.Broker.Request(context.Background(), &subagent.ApprovalRequest{AgentID: a.ID, Label: a.Label, Command: "make test"})
+		}()
+		time.Sleep(300 * time.Millisecond)
+		if lines.reads.Load() != 0 || h.m.Broker.Len() != 1 {
+			t.Errorf("the approval was asked while text was typed")
+		}
+		typeQueueKeys(strings.Repeat("\x7f", len("now al")))
+		select {
+		case err := <-answered:
+			if err != nil {
+				t.Errorf("the approval should be answered once the line is empty: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the approval was not asked once the line was emptied")
+		}
+		enqueue("/back")
+		nudgeLineQueued()
+	})
+}
+
 // Ctrl-C out of the attach view sends nothing: lines queued for main wait in the
 // prompt, as after any other Ctrl-C.
 func TestCtrlCOutOfAttachKeepsMainsLinesInThePrompt(t *testing.T) {

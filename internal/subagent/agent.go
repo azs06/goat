@@ -83,8 +83,9 @@ type Agent struct {
 	// delivered is set once the latest report reached the model, as a notice or from
 	// wait, so it is never given twice.
 	delivered bool
-	// kicked is set for a turn that started from the inbox once a slot freed: nobody
-	// follows it, so its end is announced like a background agent's.
+	// kicked is set for a turn that started from the inbox once a slot freed, or that
+	// the model steered: nobody follows it, so its end is announced like a background
+	// agent's.
 	kicked     bool
 	turnCancel context.CancelCauseFunc
 	turnDone   chan struct{}

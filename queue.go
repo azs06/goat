@@ -36,8 +36,9 @@ type queueState struct {
 
 var turnQueue queueState
 
-// lineQueued receives a value when a line is queued, for the attach view, which
-// handles each line as it comes. It holds at most one.
+// lineQueued receives a value when a line is queued, or the line being typed is
+// emptied, for the attach view, which handles each line as it comes and asks about
+// approvals only while nothing is typed. It holds at most one.
 var lineQueued = make(chan struct{}, 1)
 
 func nudgeLineQueued() {
@@ -50,6 +51,13 @@ func nudgeLineQueued() {
 // editorText is the line being typed; the caller holds mu.
 func (q *queueState) editorText() string {
 	return string(q.editor.buf)
+}
+
+// queueEditorEmpty reports whether no line is being typed under the spinner.
+func queueEditorEmpty() bool {
+	turnQueue.mu.Lock()
+	defer turnQueue.mu.Unlock()
+	return len(turnQueue.editor.buf) == 0
 }
 
 // enqueue adds text to the end of the queue, to run as if the user had typed it
@@ -83,12 +91,15 @@ func queueKey(key string) {
 	case key == "?": // the shortcuts panel belongs to the prompt; here it is just text
 		editor.insert(key)
 	default:
+		typed := len(editor.buf) > 0
 		if done, _ := editor.handleKey(key); done {
 			if text := strings.TrimSpace(string(editor.buf)); text != "" {
 				turnQueue.items = append(turnQueue.items, text)
-				nudgeLineQueued()
 			}
 			editor.setText("")
+		}
+		if typed && len(editor.buf) == 0 {
+			nudgeLineQueued()
 		}
 	}
 }

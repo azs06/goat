@@ -66,6 +66,43 @@ func TestOnlyTheModelsWorkIsReportedToTheModel(t *testing.T) {
 	shutdown(t, m)
 }
 
+// A foreground agent's turn the user started from the attach view is followed by
+// nobody once the user goes back to main, so a message the model steers it with gets
+// its report as a notice, whether the turn takes the message or leaves it for the next.
+func TestModelSteeringAForegroundUserTurnIsReported(t *testing.T) {
+	for _, takes := range []bool{true, false} {
+		calls := make(chan call, 8)
+		m := NewManager(Config{}, fakeRunner(calls, true))
+		a, _ := m.Spawn(SpawnOptions{Label: "kid", ParentConv: "c1", Prompt: "task"})
+		next(t, calls).reply <- reply{text: "task done"}
+		waitDone(t, a)
+		eventually(t, "the goroutine to exit", func() bool { return goroutines(a) == 0 })
+		m.MarkDelivered(a.ID) // follow gave the spawn's report
+		if d, err := m.Deliver(a.ID, "user question", true); err != nil || d != Started {
+			t.Fatalf("got %v %v", d, err)
+		}
+		user := next(t, calls)
+		if d, err := m.Deliver(a.ID, "from the model", false); err != nil || d != Steered {
+			t.Fatalf("got %v %v", d, err)
+		}
+		if takes {
+			if got := user.a.TakeInbox(); len(got) != 1 {
+				t.Fatalf("inbox %q", got)
+			}
+			user.reply <- reply{text: "steered answer"}
+		} else {
+			user.reply <- reply{text: "user answer"}
+			next(t, calls).reply <- reply{text: "steered answer"}
+		}
+		eventually(t, "idle", func() bool { return a.State() == Idle && goroutines(a) == 0 })
+		n := m.TakeNotices("")
+		if len(n) != 1 || !n[0].ForModel {
+			t.Fatalf("takes=%v: the model's steer must be reported to it: %+v", takes, n)
+		}
+		shutdown(t, m)
+	}
+}
+
 func TestUserMessagesShowOnceWhenATurnTakesThem(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	var m *Manager

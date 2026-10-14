@@ -197,3 +197,28 @@ func TestForegroundFollowGivesUpOnATurnThatIgnoresTheInterrupt(t *testing.T) {
 		t.Fatalf("got %v %q", err, out)
 	}
 }
+
+// A report collected between turns but dropped by /clear never reached a model, so a
+// later wait gives it instead of saying it was delivered above.
+func TestClearedReportIsGivenByWait(t *testing.T) {
+	withToolTestColor(t, true)
+	fake := newRoutedAnthropic(t, map[string][]string{})
+	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	spawnFinished(t, fake, h, "idle", "idle report")
+	captureTerminal(t, func() { collectAgentNotices(cfg) })
+	if len(cfg.agentNotices) != 1 {
+		t.Fatalf("the report should be held for the next prompt: %q", cfg.agentNotices)
+	}
+	captureTerminal(t, func() {
+		if err := commandClear(context.Background(), cfg, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	got, err := h.Wait(context.Background(), []string{"a1"}, false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "idle report") || strings.Contains(got, "delivered above") {
+		t.Fatalf("wait should give the report no model saw: %q", got)
+	}
+}

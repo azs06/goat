@@ -672,8 +672,9 @@ func (h *agentHost) carryLineage(previous string) {
 	h.lineage[previous] = true
 }
 
-// forgetDelivered is a compaction or model switch: the summary main goes on with may
-// have lost the reports already delivered, so a wait on those agents gives them again.
+// forgetDelivered is a compaction, model switch, /clear or /resume: the conversation
+// main goes on with may not hold the reports already delivered, so a wait on those
+// agents gives them again.
 func (h *agentHost) forgetDelivered() {
 	if h != nil {
 		h.m.ForgetDelivered()

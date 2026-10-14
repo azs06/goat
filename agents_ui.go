@@ -453,7 +453,8 @@ const (
 var attachReadOnly = map[string]bool{"agents": true, "help": true, "ps": true, "tools": true, "output": true}
 
 // attach shows an agent's work as it happens and sends it what the user types, until
-// /back or Ctrl-C, which leave the agent running. /agents <id> switches agents. A turn
+// /back or Ctrl-C, which leave the agent running (in plain mode Ctrl-C interrupts the
+// turn it shows). /agents <id> switches agents. A turn
 // the user starts here is not announced when it ends while the user still looks on.
 func (h *agentHost) attach(ctx context.Context, cfg *config, a *subagent.Agent) error {
 	defer h.m.SetAttached("")
@@ -505,7 +506,9 @@ func (h *agentHost) attachOnce(ctx context.Context, cfg *config, a *subagent.Age
 			fmt.Fprintln(activityOut, formatNotice("Back on main; "+a.ID+" keeps going (/agents "+a.ID+" returns)."))
 			return "", nil
 		}
-		if h.m.Broker.Len() > 0 {
+		// As at the idle prompt, an approval waits while the user has text typed: the
+		// rest of the line would become its answer. Emptying the line wakes this loop.
+		if h.m.Broker.Len() > 0 && queueEditorEmpty() {
 			h.serveApprovals(ctx, cfg)
 			continue
 		}
@@ -671,7 +674,9 @@ func (h *agentHost) attachPlain(ctx context.Context, cfg *config, a *subagent.Ag
 	return "", nil
 }
 
-// followPlain shows the agent's events until its turn ends, answering approvals.
+// followPlain shows the agent's events until its turn ends, answering approvals. Where
+// nothing may run in the background, Ctrl-C interrupts the turn as it does a followed
+// spawn's: the plain prompt main goes back to would not serve its approvals.
 func (h *agentHost) followPlain(ctx context.Context, cfg *config, a *subagent.Agent, ring *subagent.EventRing, cursor *uint64) {
 	var notify <-chan struct{}
 	if ring != nil {
@@ -679,7 +684,20 @@ func (h *agentHost) followPlain(ctx context.Context, cfg *config, a *subagent.Ag
 	}
 	for {
 		h.showAttached(a, ring, cursor)
-		if !a.State().Busy() || ctx.Err() != nil {
+		if !a.State().Busy() {
+			return
+		}
+		if ctx.Err() != nil {
+			if !h.backgroundAllowed() {
+				// As follow does, give the turn StopTimeout to end before the prompt.
+				a.InterruptTurn(subagent.ErrUserInterrupt)
+				timer := time.NewTimer(h.m.Config().StopTimeout)
+				defer timer.Stop()
+				select {
+				case <-a.TurnDone():
+				case <-timer.C:
+				}
+			}
 			return
 		}
 		select {

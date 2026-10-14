@@ -538,6 +538,12 @@ func (m *Manager) Deliver(id, text string, fromUser bool) (Delivery, error) {
 	a.updated = time.Now()
 	defer m.nudge()
 	if a.state.Busy() {
+		if !fromUser {
+			// Main is single-threaded, so a turn the model steers is one nothing
+			// follows (a user's turn from the attach view, or one a follow gave up
+			// on): its report is announced like a kicked turn's.
+			a.kicked = true
+		}
 		return Steered, nil
 	}
 	if a.state == Stopped {

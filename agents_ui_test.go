@@ -402,6 +402,39 @@ func TestPlainAttachAsksForMessagesAndShowsTheReply(t *testing.T) {
 	}
 }
 
+// In plain mode nothing may run in the background, so Ctrl-C in the attach view
+// interrupts the turn the user started there.
+func TestPlainAttachCtrlCInterruptsTheTurn(t *testing.T) {
+	withColor(t, false)
+	runner := &echoRunner{block: make(chan struct{})}
+	cfg, h := uiTestHost(t, runner.run)
+	a := spawnTest(t, h, "helper", "first")
+	waitFor(t, "a1 idle", func() bool { return a.State() == subagent.Idle })
+	cfg.input = newLineReader(strings.NewReader("slow go\n"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	captureTerminal(t, func() {
+		go func() { done <- commandAgents(ctx, cfg, []string{"a1"}) }()
+		waitFor(t, "the user's turn", func() bool { return len(runner.seen()) == 2 && a.State().Busy() })
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the attach view did not return on Ctrl-C")
+		}
+	})
+	if a.State().Busy() {
+		t.Fatal("the attach view should return once the interrupted turn ended")
+	}
+	runner.mu.Lock()
+	causes := append([]error(nil), runner.causes...)
+	runner.mu.Unlock()
+	if len(causes) != 1 || !errors.Is(causes[0], subagent.ErrUserInterrupt) {
+		t.Fatalf("the turn should end on the user's interrupt: %v", causes)
+	}
+}
+
 func TestReplayShowsTheLatestEventsUnderACount(t *testing.T) {
 	withColor(t, false)
 	_, h := uiTestHost(t, (&echoRunner{}).run)
