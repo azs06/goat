@@ -38,7 +38,7 @@ type savedSession struct {
 // promptFingerprint identifies the system prompt and tools offered with code mode on
 // or off.
 func promptFingerprint(codeMode bool) string {
-	system, specs := promptFor(codeMode)
+	system, specs := promptFor(codeMode, true)
 	encoded, _ := json.Marshal(specs)
 	sum := sha256.Sum256(append([]byte(system+"\x00"), encoded...))
 	return hex.EncodeToString(sum[:])

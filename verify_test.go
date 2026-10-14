@@ -153,9 +153,8 @@ func verifyConfigTest(t *testing.T) (configDir, workDir string) {
 	configDir = configTest(t)
 	t.Setenv("GOAT_VERIFY", "")
 	t.Setenv("GOAT_VERIFY_TIMEOUT", "")
-	saved := verifyCommands
-	verifyCommands = map[string]string{}
-	t.Cleanup(func() { verifyCommands = saved })
+	saved := setVerifyCommands(map[string]string{})
+	t.Cleanup(func() { setVerifyCommands(saved) })
 	workDir = t.TempDir()
 	chdirForTest(t, workDir)
 	return configDir, workDir
@@ -180,8 +179,8 @@ func TestVerifyCommandComesFromConfigJSONByWorkspace(t *testing.T) {
 	if command != "go vet ./... && go test ./..." || !strings.Contains(source, "config.json") {
 		t.Fatalf("got %q from %q", command, source)
 	}
-	if verifyCommands[filepath.Join(home, "elsewhere")] != "npm test" {
-		t.Errorf("expected ~ to stand for the home directory: %v", verifyCommands)
+	if commands := snapshotVerifyCommands(); commands[filepath.Join(home, "elsewhere")] != "npm test" {
+		t.Errorf("expected ~ to stand for the home directory: %v", commands)
 	}
 	if verifyTimeout() != 90*time.Second {
 		t.Errorf("got timeout %s", verifyTimeout())
@@ -285,7 +284,7 @@ func TestVerifyCommandSetsShowsAndRemoves(t *testing.T) {
 
 func TestVerifyRunsTheRealCommandAfterAChange(t *testing.T) {
 	_, workDir := verifyConfigTest(t)
-	verifyCommands[workDir] = `grep -q fixed out.txt`
+	setVerifyCommands(map[string]string{workDir: `grep -q fixed out.txt`})
 	sessionSaver = func(string, savedSession) error { return nil }
 	t.Cleanup(func() { sessionSaver = writeSessionFile })
 	fake := &fakeProvider{name: provider.Anthropic, responses: []*provider.Response{

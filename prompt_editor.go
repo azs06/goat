@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -441,6 +442,8 @@ func (e *promptEditor) handleKey(key string) (done bool, err error) {
 		e.deleteRange(e.pos, e.lineEnd())
 	case "\x17", "\x1b\x7f": // Ctrl-W, Alt-Backspace: delete the word before the cursor
 		e.deleteRange(e.wordStart(), e.pos)
+	case "\x07": // Ctrl-G: the agents picker; the text typed so far waits for the prompt
+		return true, errOpenAgents
 	case "\x16", "\x1bv": // Ctrl-V, Alt-V: attach the clipboard's image
 		if e.images != nil {
 			if label, err := e.images.pasteClipboard(); err != nil {
@@ -559,11 +562,57 @@ func (e *promptEditor) clear() string {
 	return fmt.Sprintf("\x1b[%dA\r\x1b[J", e.cursorRow+1)
 }
 
+var (
+	// errUIEvent ends editPrompt so main can deal with something that came up while the
+	// prompt waited, such as a subagent asking to run a command or finishing. The text
+	// typed so far is kept in input.partial for the prompt that follows.
+	errUIEvent = errors.New("the prompt gave way to a subagent event")
+	// errOpenAgents is Ctrl-G at the prompt: open the agents picker.
+	errOpenAgents = errors.New("open the agents picker")
+)
+
+// promptEvents lets what happens elsewhere reach the idle prompt.
+type promptEvents struct {
+	// changed and pending receive a value when something may have changed. They hold at
+	// most one value and can be stale, so they only make the prompt look again.
+	changed, pending <-chan struct{}
+	// interrupt reports whether the prompt should give way now; empty is whether
+	// nothing is typed.
+	interrupt func(empty bool) bool
+	// footer draws the footer again, for counts that changed.
+	footer func() string
+}
+
+// errPromptYield is the cause to cancel the prompt's context with when it should give
+// way for something other than the user, keeping what was typed for the next prompt.
+var errPromptYield = errors.New("the prompt gave way")
+
+// keepsTypedText reports whether the prompt ended by err keeps what was typed for the
+// next prompt: it gave way (errUIEvent, errOpenAgents), or its context was ended with
+// errPromptYield. Any other end of the context is the user's Ctrl-C, which clears the
+// line whatever cause signal.NotifyContext gives it.
+func keepsTypedText(ctx context.Context, err error) bool {
+	switch {
+	case errors.Is(err, errUIEvent), errors.Is(err, errOpenAgents):
+		return true
+	case ctx.Err() != nil:
+		return errors.Is(context.Cause(ctx), errPromptYield)
+	}
+	return false
+}
+
+// enterCbreak puts the terminal in cbreak mode; a variable so tests can edit without
+// a terminal.
+var enterCbreak = terminal.EnterCbreak
+
 // editPrompt draws the prompt frame and edits one line in cbreak mode. ok is false when
 // the terminal cannot be put in cbreak mode, and nothing has been drawn. On return the
-// frame has been cleared.
-func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int, attacher imageAttacher) (text string, ok bool, err error) {
-	restore, err := terminal.EnterCbreak()
+// frame has been cleared. When the prompt gives way (errUIEvent, errOpenAgents) or ctx
+// ends with errPromptYield, what was typed is kept in input.partial for the next
+// prompt; Ctrl-C, or any other end of ctx, clears the line, as it always did. events
+// may be nil.
+func editPrompt(ctx context.Context, input *lineReader, history []string, footer string, width int, attacher imageAttacher, events *promptEvents) (text string, ok bool, err error) {
+	restore, err := enterCbreak()
 	if err != nil {
 		return "", false, nil
 	}
@@ -574,20 +623,57 @@ func editPrompt(ctx context.Context, input *lineReader, history []string, footer
 	editor.setText(input.partial)
 	input.partial = ""
 
+	var changed, pending <-chan struct{}
+	interrupt := func() bool { return false }
+	if events != nil {
+		changed, pending = events.changed, events.pending
+		if events.interrupt != nil {
+			interrupt = func() bool { return events.interrupt(len(editor.buf) == 0) }
+		}
+		if events.footer != nil {
+			footer = events.footer()
+		}
+	}
+	if interrupt() {
+		input.partial = string(editor.buf)
+		return "", true, errUIEvent
+	}
+
 	fmt.Print(bracketedPasteOn + renderRule(width-1) + "\n" + editor.render(footer, width))
 	defer fmt.Print(bracketedPasteOff)
 	for {
-		key, err := input.readKey(ctx)
-		if err == nil {
+		key, woke, err := input.readKeyOr(ctx, changed, pending)
+		switch {
+		case err != nil:
+		case woke && !editor.pasting && interrupt():
+			// Never in the middle of a paste: the rest of it would arrive as keys
+			// typed into the next prompt, and its first newline would send the line.
+			err = errUIEvent
+		case woke:
+			if events.footer != nil {
+				footer = events.footer()
+			}
+			fmt.Print(editor.render(footer, width))
+			continue
+		default:
 			var done bool
 			done, err = editor.handleKey(key)
-			if !done {
+			if !done && editor.pasting {
+				fmt.Print(editor.render(footer, width))
+				continue
+			}
+			if !done && interrupt() {
+				err = errUIEvent
+			} else if !done {
 				fmt.Print(editor.render(footer, width))
 				continue
 			}
 		}
 		fmt.Print(editor.clear())
 		if err != nil {
+			if keepsTypedText(ctx, err) {
+				input.partial = string(editor.buf)
+			}
 			return "", true, err
 		}
 		return string(editor.buf), true, nil

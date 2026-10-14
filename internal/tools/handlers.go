@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,9 @@ import (
 type Options struct {
 	// PlanMode refuses tools that change anything; read-only tools and previews run.
 	PlanMode bool
+	// LivePlanMode, when set, is asked on every call whether plan mode is on, in place
+	// of PlanMode, so a run_code script's later calls follow a change made while it runs.
+	LivePlanMode func() bool
 	// CodeMode lets run_code run. Without it run_code is refused with ErrCodeModeOff.
 	CodeMode bool
 	// ApproveBash, when set, is asked before every run_bash command; a non-nil error
@@ -31,13 +35,18 @@ type Options struct {
 	AttachImage func(provider.Image)
 	// Outputs, when set, lets read_output find earlier tool outputs.
 	Outputs OutputSource
+	// Agents runs the subagent tools. It is nil in subagents and run_code scripts, where
+	// those tools fail with ErrNoAgents.
+	Agents AgentHost
+	// Subagent is set for calls a subagent makes; undo_last_change is refused for them.
+	Subagent bool
 }
 
 // toolHandler runs one tool with its raw JSON arguments, already validated against the
 // tool's schema.
 type toolHandler func(ctx context.Context, rawArgs string, opts Options) (string, error)
 
-// toolHandlers maps each tool in Specs to the code that runs it.
+// toolHandlers maps each tool in CodeModeSpecs and AgentSpecs to the code that runs it.
 var toolHandlers = map[string]toolHandler{
 	"read_dir":         runReadDir,
 	"tree_dir":         runTreeDir,
@@ -57,11 +66,19 @@ var toolHandlers = map[string]toolHandler{
 	"grep_files":       runGrepFiles,
 	ViewImage:          runViewImage,
 	"read_output":      runReadOutput,
+	SpawnAgent:         runSpawnAgent,
+	AgentStatus:        runAgentStatus,
+	SendMessage:        runSendMessage,
+	WaitAgents:         runWaitAgents,
+	StopAgent:          runStopAgent,
 }
 
+// errSubagentUndo is the error for undo_last_change called by a subagent.
+var errSubagentUndo = errors.New("undo_last_change is not available to subagents; undo is workspace-wide")
+
 // Execute validates and runs one tool call. In plan mode only the read-only tools and
-// previews run, run_bash commands go through opts.ApproveBash first, and run_code only
-// runs in code mode.
+// previews run, run_bash commands go through opts.ApproveBash first, run_code only
+// runs in code mode, and subagents cannot undo.
 func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (string, error) {
 	spec, ok := findSpec(toolCall.Name)
 	handler := toolHandlers[toolCall.Name]
@@ -74,7 +91,14 @@ func Execute(ctx context.Context, toolCall provider.ToolCall, opts Options) (str
 	if toolCall.Name == RunCode && !opts.CodeMode {
 		return "", ErrCodeModeOff
 	}
-	if opts.PlanMode && !allowedInPlanMode(toolCall) {
+	if toolCall.Name == "undo_last_change" && opts.Subagent {
+		return "", errSubagentUndo
+	}
+	planMode := opts.PlanMode
+	if opts.LivePlanMode != nil {
+		planMode = opts.LivePlanMode()
+	}
+	if planMode && !allowedInPlanMode(toolCall) {
 		return "", ErrPlanMode
 	}
 	return handler(ctx, toolCall.Arguments, opts)
@@ -285,6 +309,21 @@ func runUndoLastChange(_ context.Context, raw string, _ Options) (string, error)
 // maxBashTimeoutSeconds is the longest timeout a run_bash call may ask for.
 const maxBashTimeoutSeconds = 600
 
+// approveCommand asks opts.ApproveBash about a command, then checks plan mode again:
+// a subagent's approval waits until main can ask it, and the user may turn plan mode
+// on meanwhile, after Execute's check passed.
+func approveCommand(ctx context.Context, opts Options, command, workdir string) error {
+	if opts.ApproveBash != nil {
+		if err := opts.ApproveBash(ctx, command, workdir); err != nil {
+			return err
+		}
+	}
+	if opts.LivePlanMode != nil && opts.LivePlanMode() {
+		return ErrPlanMode
+	}
+	return nil
+}
+
 func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	args, err := decodeArgs[struct {
 		Command string `json:"command"`
@@ -297,10 +336,8 @@ func runBash(ctx context.Context, raw string, opts Options) (string, error) {
 	if strings.TrimSpace(args.Command) == "" {
 		return "", fmt.Errorf("missing command")
 	}
-	if opts.ApproveBash != nil {
-		if err := opts.ApproveBash(ctx, args.Command, args.Workdir); err != nil {
-			return "", err
-		}
+	if err := approveCommand(ctx, opts, args.Command, args.Workdir); err != nil {
+		return "", err
 	}
 	if args.Timeout <= 0 {
 		return workspace.RunBash(ctx, args.Command, args.Workdir)

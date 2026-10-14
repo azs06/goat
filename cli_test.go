@@ -119,8 +119,8 @@ func TestBashApproverAnswers(t *testing.T) {
 	if !errors.Is(err, errBashCommandDeclined) || !strings.Contains(err.Error(), "please use make instead") {
 		t.Fatalf("expected feedback to decline with the message, got %v", err)
 	}
-	if err := approver.approve(context.Background(), "ls", "."); err != nil || !approver.autoApprove {
-		t.Fatalf("expected always to approve and stick, got %v (auto=%v)", err, approver.autoApprove)
+	if err := approver.approve(context.Background(), "ls", "."); err != nil || !approver.autoApprove.Load() {
+		t.Fatalf("expected always to approve and stick, got %v (auto=%v)", err, approver.autoApprove.Load())
 	}
 	if err := approver.approve(context.Background(), "ls", "."); err != nil {
 		t.Fatalf("expected auto approval without reading input, got %v", err)

@@ -18,7 +18,14 @@ func resetTurnQueue(t *testing.T) {
 		turnQueue.editor = promptEditor{}
 		turnQueue.capturing = false
 		turnQueue.footer = nil
+		turnQueue.openAgents = false
+		turnQueue.emptyHint = ""
+		turnQueue.midTurn = false
+		turnQueue.status = ""
 		turnQueue.mu.Unlock()
+		for len(lineQueued) > 0 {
+			<-lineQueued
+		}
 	}
 	reset()
 	t.Cleanup(reset)
@@ -108,7 +115,7 @@ func TestKeyCaptureCarriesTheUnsentLine(t *testing.T) {
 
 	startKeyCapture(context.Background(), input)
 	// The reader runs out of input after "unsent"; wait for it to stop.
-	<-activeKeyCapture.done
+	<-currentKeyCapture().done
 	stopKeyCapture()
 
 	if text := takeQueuedText(); text != "from before: queued" {

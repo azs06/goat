@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -40,7 +42,39 @@ const maxVerifyRuns = 3
 const defaultVerifyTimeout = 5 * time.Minute
 
 // verifyCommands are config.json's verify commands by workspace, with ~ expanded.
-var verifyCommands = map[string]string{}
+// verifyCommandsMu guards it, since turns running beside the main one read it.
+var (
+	verifyCommandsMu sync.RWMutex
+	verifyCommands   = map[string]string{}
+)
+
+// setVerifyCommands replaces the verify commands and returns the ones it replaced.
+func setVerifyCommands(commands map[string]string) map[string]string {
+	verifyCommandsMu.Lock()
+	defer verifyCommandsMu.Unlock()
+	previous := verifyCommands
+	verifyCommands = commands
+	return previous
+}
+
+// snapshotVerifyCommands is a copy of the verify commands.
+func snapshotVerifyCommands() map[string]string {
+	verifyCommandsMu.RLock()
+	defer verifyCommandsMu.RUnlock()
+	return maps.Clone(verifyCommands)
+}
+
+// lookupVerifyCommand is the verify command for the workspace at dir, if any.
+func lookupVerifyCommand(dir string) (string, bool) {
+	verifyCommandsMu.RLock()
+	defer verifyCommandsMu.RUnlock()
+	for path, command := range verifyCommands {
+		if sameDirectory(path, dir) {
+			return command, true
+		}
+	}
+	return "", false
+}
 
 // verifyFailedNote starts the message the model gets when the verify command fails.
 const verifyFailedNote = "[goat ran the user's verify command after your changes, and it failed. Fix what it reports, then finish your turn; goat runs it again when you stop. If the failure has nothing to do with your changes, or you cannot fix it, say so and stop without changing anything.]"
@@ -118,10 +152,8 @@ func verifyCommand() (command, source string) {
 	if err != nil {
 		return "", ""
 	}
-	for path, command := range verifyCommands {
-		if sameDirectory(path, wd) {
-			return command, displayPath(configPath())
-		}
+	if command, ok := lookupVerifyCommand(wd); ok {
+		return command, displayPath(configPath())
 	}
 	return "", ""
 }
@@ -138,6 +170,33 @@ func verifyTimeout() time.Duration {
 // but a read-only tool or a preview. run_bash and run_code always count: they take no
 // preview, so a "preview" argument given to them is ignored and the command still runs.
 func changesWorkspace(call provider.ToolCall) bool {
+	return changesWorkspaceWith(call, nil)
+}
+
+// changesWorkspaceWith is changesWorkspace for a turn whose subagents' modes modeOf
+// knows. Only a general subagent can change anything: spawning one counts, and so does
+// a message to one, which starts or steers its work. Without modeOf a message counts
+// for nothing, since there is no agent to send it to.
+func changesWorkspaceWith(call provider.ToolCall, modeOf func(id string) (string, bool)) bool {
+	switch call.Name {
+	case tools.SpawnAgent:
+		var args struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.Unmarshal([]byte(call.Arguments), &args)
+		return strings.EqualFold(strings.TrimSpace(args.Mode), tools.AgentModeGeneral)
+	case tools.SendMessage:
+		var args struct {
+			Agent string `json:"agent"`
+		}
+		if json.Unmarshal([]byte(call.Arguments), &args) != nil || modeOf == nil {
+			return false
+		}
+		mode, ok := modeOf(strings.TrimSpace(args.Agent))
+		return ok && mode == tools.AgentModeGeneral
+	case tools.StopAgent, tools.AgentStatus, tools.WaitAgents:
+		return false
+	}
 	switch tools.PlanModePolicyFor(call.Name) {
 	case tools.PlanModeAllowed:
 		return false
@@ -162,11 +221,11 @@ func runVerify(ctx context.Context, command string) (output string, passed bool,
 	logToolCallStart(call)
 	recordHistory(historyEntry{Type: "tool_call", ToolName: verifyToolName, Arguments: call.Arguments})
 
-	started, waitedBefore := time.Now(), inputWaitTotal
+	started, waitedBefore := time.Now(), time.Duration(inputWaitTotal.Load())
 	startSpinner("Verifying")
 	output, runErr := workspace.RunBashFor(ctx, command, ".", verifyTimeout())
 	stopSpinner()
-	logToolCallResult(call, output, runErr, time.Since(started)-(inputWaitTotal-waitedBefore))
+	logToolCallResult(call, output, runErr, time.Since(started)-(time.Duration(inputWaitTotal.Load())-waitedBefore))
 	if runErr != nil {
 		recordHistory(historyEntry{Type: "tool_output", ToolName: verifyToolName, Content: runErr.Error(), Status: "error"})
 		if ctx.Err() != nil {
@@ -204,7 +263,7 @@ func commandVerify(ctx context.Context, c *config, args []string) error {
 			return nil
 		}
 		fmt.Println("Verify command: " + escapeControlChars(command) + style.Muted.Render(" ("+source+")"))
-		fmt.Println(style.Muted.Render(fmt.Sprintf("goat runs it when a turn that changed something ends, for up to %s, and sends a failure back to the model (at most %d runs a turn). /verify run runs it now; /verify off removes it.", verifyTimeout(), maxVerifyRuns)))
+		fmt.Println(style.Muted.Render(fmt.Sprintf("goat runs it when a turn that changed something ends, for up to %s, and sends a failure back to the model (at most %d runs a turn). While a general subagent is still running it waits, and runs when the next turn ends. /verify run runs it now; /verify off removes it.", verifyTimeout(), maxVerifyRuns)))
 		return nil
 	}
 
@@ -246,6 +305,7 @@ func saveVerifyCommand(command string) error {
 	if err != nil {
 		return err
 	}
+	verifyCommandsMu.Lock()
 	removed := false
 	for path := range verifyCommands {
 		if sameDirectory(path, wd) {
@@ -253,12 +313,13 @@ func saveVerifyCommand(command string) error {
 			removed = true
 		}
 	}
+	if command != "" {
+		verifyCommands[filepath.Clean(wd)] = command
+	}
+	verifyCommandsMu.Unlock()
 	if command == "" && !removed {
 		fmt.Println("This workspace has no verify command in " + displayPath(configPath()) + ".")
 		return nil
-	}
-	if command != "" {
-		verifyCommands[filepath.Clean(wd)] = command
 	}
 
 	message := "Removed this workspace's verify command."
@@ -285,7 +346,7 @@ func saveVerifyCommand(command string) error {
 func writeVerifyCommands() error {
 	home, _ := os.UserHomeDir()
 	saved := map[string]string{}
-	for path, command := range verifyCommands {
+	for path, command := range snapshotVerifyCommands() {
 		if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok && home != "" {
 			path = "~/" + filepath.ToSlash(rest)
 		}

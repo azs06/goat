@@ -15,6 +15,7 @@ import (
 
 	"github.com/azs06/goat/internal/style"
 	"github.com/azs06/goat/internal/terminal"
+	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -61,7 +62,17 @@ func recentToolRuns(entries []historyEntry) []toolRun {
 // Numbering the whole history, not the conversation, keeps a number valid after the
 // conversation is compacted: the note that gives it can be carried into the new one.
 func toolOutputByNumber(n int) (string, string, error) {
-	entries, err := loadConversationHistoryEntries()
+	return toolOutputsWarning(warnf)(n)
+}
+
+// toolOutputsWarning is toolOutputByNumber reporting problems reading the history to
+// warn, for a turn's read_output.
+func toolOutputsWarning(warn warnFunc) tools.OutputSource {
+	return func(n int) (string, string, error) { return toolOutputNumbered(n, warn) }
+}
+
+func toolOutputNumbered(n int, warn warnFunc) (string, string, error) {
+	entries, err := loadHistoryEntries(warn)
 	if err != nil {
 		return "", "", err
 	}
@@ -77,9 +88,15 @@ func toolOutputByNumber(n int) (string, string, error) {
 }
 
 // latestToolOutputNumber is the number read_output knows the latest tool output by, or
-// false when the history cannot be read.
+// false when the history cannot be read. Another agent may append an output at any
+// time, so the number of an output just recorded comes from recordToolOutputNumbered.
 func latestToolOutputNumber() (int, bool) {
-	entries, err := loadConversationHistoryEntries()
+	return latestToolOutputNumberWarn(warnf)
+}
+
+// latestToolOutputNumberWarn is latestToolOutputNumber reporting problems to warn.
+func latestToolOutputNumberWarn(warn warnFunc) (int, bool) {
+	entries, err := loadHistoryEntries(warn)
 	if err != nil {
 		return 0, false
 	}

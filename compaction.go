@@ -130,10 +130,16 @@ func buildCompactionSource(entries []historyEntry) string {
 // refused by the API, and either would push out the conversation session.prev.json holds.
 func applyCompactedConversation(cfg *config, next provider.Conversation, summary, mode string) {
 	recordCompactionSummary(cfg, summary, mode)
+	// The conversation goes on under a new id; its agents still report to it.
+	defer cfg.agents.carryLineage(activeConversationID)
+	cfg.agents.forgetDelivered()
+	// Steered messages and agents' reports a failed request carried still owe the model;
+	// the reports are already marked delivered, so they would not come again.
+	carried := conversationState{conversation: next, pendingText: cfg.conversation.pendingText}
 	if mode == "manual" {
-		replaceConversation(cfg, conversationState{conversation: next})
+		replaceConversation(cfg, carried)
 	} else {
-		startConversation(cfg, conversationState{conversation: next})
+		startConversation(cfg, carried)
 	}
 	recordCompactionSeed(cfg, next, summary)
 }

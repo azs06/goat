@@ -46,6 +46,12 @@ type historyEntry struct {
 	// ConversationID ties the entry to one conversation, so a conversation brought back
 	// with /resume finds its own history again. Empty for older entries.
 	ConversationID string `json:"conversation_id,omitempty"`
+	// ParentID is the conversation that started a subagent's conversation; empty for
+	// the main conversation.
+	ParentID string `json:"parent_id,omitempty"`
+	// Subagent marks a subagent's entry even when its parent conversation has no ID,
+	// as a continued older OpenAI conversation may not.
+	Subagent bool `json:"subagent,omitempty"`
 	// Images counts the images that went with a prompt or came back from a tool.
 	Images int `json:"images,omitempty"`
 }
@@ -87,10 +93,21 @@ var historyCache struct {
 	entries []historyEntry
 }
 
+// warnFunc reports a problem that does not fail the operation. Main warns on the
+// terminal with warnf; a subagent's turn passes one that keeps the warning in its
+// events (turnOptions.warnf), since only main may write to the terminal.
+type warnFunc func(format string, args ...any)
+
 // loadConversationHistoryEntries skips lines it cannot decode, such as a line cut short
 // by a crash, so one bad line does not make the whole history unreadable. The returned
-// slice must not be modified.
+// slice must not be modified. It warns on the terminal, so only main calls it; turns
+// call loadHistoryEntries with their own warning.
 func loadConversationHistoryEntries() ([]historyEntry, error) {
+	return loadHistoryEntries(warnf)
+}
+
+// loadHistoryEntries is loadConversationHistoryEntries reporting skipped lines to warn.
+func loadHistoryEntries(warn warnFunc) ([]historyEntry, error) {
 	resolvedPath, _, err := workspace.ResolveStatePath(conversationHistoryPath())
 	if err != nil {
 		return nil, err
@@ -148,7 +165,7 @@ func loadConversationHistoryEntries() ([]historyEntry, error) {
 		}
 	}
 	if skipped > 0 {
-		warnf("skipped %d unreadable line(s) in %s", skipped, displayPath(resolvedPath))
+		warn("skipped %d unreadable line(s) in %s", skipped, displayPath(resolvedPath))
 	}
 
 	return historyCache.entries[:len(historyCache.entries):len(historyCache.entries)], nil
@@ -198,6 +215,10 @@ func latestResumableConversation() (string, string, error) {
 
 	latestResponseID, conversationID := "", ""
 	for _, entry := range entries {
+		if entry.ParentID != "" || entry.Subagent {
+			// A subagent's conversation, which -c must never continue as main's.
+			continue
+		}
 		switch entry.Type {
 		case "reset":
 			latestResponseID, conversationID = "", ""
@@ -213,14 +234,42 @@ func latestResumableConversation() (string, string, error) {
 	return latestResponseID, conversationID, nil
 }
 
+// historyAppendMu serializes appends to the history log. Subagents append from their
+// own goroutines, and a long entry is not written in one atomic write.
+var historyAppendMu sync.Mutex
+
+// recordHistory appends entry, warning on the terminal when it cannot; only main calls
+// it. A turn records through turnOptions.record, which warns its own way.
 func recordHistory(entry historyEntry) {
+	recordHistoryWarn(entry, warnf)
+}
+
+// recordHistoryWarn appends entry, reporting a failure to warn.
+func recordHistoryWarn(entry historyEntry, warn warnFunc) {
+	historyAppendMu.Lock()
+	defer historyAppendMu.Unlock()
+	recordHistoryLocked(entry, warn)
+}
+
+// recordToolOutputNumbered records a tool output and returns the number read_output
+// knows it by, or false when the history cannot be read. No other entry is appended
+// in between, so the number is this output's. Problems are reported to warn.
+func recordToolOutputNumbered(entry historyEntry, warn warnFunc) (n int, ok bool) {
+	historyAppendMu.Lock()
+	defer historyAppendMu.Unlock()
+	recordHistoryLocked(entry, warn)
+	return latestToolOutputNumberWarn(warn)
+}
+
+// recordHistoryLocked appends entry; the caller holds historyAppendMu.
+func recordHistoryLocked(entry historyEntry, warn warnFunc) {
 	if entry.ConversationID == "" {
 		entry.ConversationID = activeConversationID
 	}
 	entry.Content = truncateToolOutputCharsForModel(provider.HideEndpointPaths(entry.Content), maxHistoryFieldChars)
 	entry.Arguments = truncateToolOutputCharsForModel(entry.Arguments, maxHistoryFieldChars)
 	if err := historyEntryAppender(entry); err != nil {
-		warnf("failed to save history: %v", err)
+		warn("failed to save history: %v", err)
 	}
 }
 

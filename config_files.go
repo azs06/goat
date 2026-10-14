@@ -151,7 +151,7 @@ func applyConfig(data []byte, source string) ([]provider.Entry, error) {
 			if err != nil {
 				return nil, err
 			}
-			verifyCommands = parsed
+			setVerifyCommands(parsed)
 		case "providers":
 			parsed, err := provider.ParseEntries(field.Value)
 			if err != nil {

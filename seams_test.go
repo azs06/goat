@@ -81,7 +81,7 @@ func TestSimpleCommands(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if cfg.approver.autoApprove {
+	if cfg.approver.autoApprove.Load() {
 		t.Error("expected /approve off to turn auto-approve off")
 	}
 	if err := commandApprove(context.Background(), cfg, []string{"maybe"}); err == nil {
@@ -91,7 +91,7 @@ func TestSimpleCommands(t *testing.T) {
 
 func TestFooterParts(t *testing.T) {
 	cfg := seamConfig(t, nil)
-	cfg.approver.autoApprove = true
+	cfg.approver.autoApprove.Store(true)
 	parts := strings.Join(footerParts(cfg), " | ")
 	if !strings.HasPrefix(parts, "anthropic:claude-opus-5-5 | effort medium") || !strings.Contains(parts, "auto-approve on") || !strings.HasSuffix(parts, "? for shortcuts") {
 		t.Fatalf("footer %q", parts)

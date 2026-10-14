@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/azs06/goat/internal/style"
@@ -86,6 +87,34 @@ func (r *lineReader) readKey(ctx context.Context) (string, error) {
 	}
 }
 
+// readKeyOr is readKey that also returns, with woke set, when a or b receives a
+// value. A key read meanwhile stays in flight for the next read. Nil channels never
+// wake it.
+func (r *lineReader) readKeyOr(ctx context.Context, a, b <-chan struct{}) (key string, woke bool, err error) {
+	if a == nil && b == nil {
+		key, err = r.readKey(ctx)
+		return key, false, err
+	}
+	if !r.inFlight {
+		r.inFlight = true
+		go func() {
+			key, err := readKeyFrom(r.reader)
+			r.results <- keyResult{key: key, err: err}
+		}()
+	}
+	select {
+	case result := <-r.results:
+		r.inFlight = false
+		return result.key, false, result.err
+	case <-a:
+		return "", true, nil
+	case <-b:
+		return "", true, nil
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
+}
+
 // readKeyFrom reads one rune, or one escape sequence when an ESC arrives with more
 // bytes right behind it. A lone ESC (the Escape key) has nothing buffered after it.
 func readKeyFrom(br *bufio.Reader) (string, error) {
@@ -132,13 +161,20 @@ var errBashCommandDeclined = errors.New("the user declined to run this command")
 type bashApprover struct {
 	input       *lineReader
 	interactive bool
-	autoApprove bool
+	// autoApprove is atomic because turns running beside the main one read it.
+	autoApprove atomic.Bool
+	// sessionAutoApprove is the auto-approval the user asked for in so many words: --yes,
+	// GOAT_AUTO_APPROVE_BASH or /approve on|off, never an "always" answered to one of
+	// main's commands. Subagents follow it, read live.
+	sessionAutoApprove atomic.Bool
+	// label, when set, names who asks, such as a subagent, above the question.
+	label string
 }
 
 func (a *bashApprover) approve(ctx context.Context, command, workdir string) error {
 	touchesState := mentionsStateDir(command, workdir)
 	touchesKeys := mentionsConfigDir(command, workdir)
-	if a.autoApprove && !touchesState && !touchesKeys {
+	if a.autoApprove.Load() && !touchesState && !touchesKeys {
 		return nil
 	}
 	if !a.interactive {
@@ -163,6 +199,9 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	if touchesKeys {
 		fmt.Println("\n" + formatWarning("This command mentions goat's config directory, where "+displayPath(globalEnvPath())+" may hold your API keys."))
 	}
+	if a.label != "" {
+		fmt.Print("\n" + a.label)
+	}
 	if style.Enabled() {
 		fmt.Print(renderApprovalCard(command, workdir, terminalWidth()))
 	} else {
@@ -185,7 +224,7 @@ func (a *bashApprover) approve(ctx context.Context, command, workdir string) err
 	case "y", "yes":
 		return nil
 	case "a", "always":
-		a.autoApprove = true
+		a.autoApprove.Store(true)
 		return nil
 	case "", "n", "no":
 		return errBashCommandDeclined

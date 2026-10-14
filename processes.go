@@ -133,6 +133,8 @@ func backgroundFooterPart() string {
 // says what it is stopping first, since that can take a few seconds. Left behind, a dev
 // server would keep its port with nothing listing it.
 func stopBackgroundOnExit(out io.Writer) {
+	// Subagents first: their commands may still start background processes.
+	stopAgentsOnExit(out)
 	groups := workspace.BackgroundGroups()
 	if len(groups) > 0 {
 		labels := make([]string, len(groups))

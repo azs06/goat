@@ -9,7 +9,8 @@ import (
 )
 
 func TestStateDirCommandsAlwaysAsk(t *testing.T) {
-	approver := &bashApprover{autoApprove: true}
+	approver := &bashApprover{}
+	approver.autoApprove.Store(true)
 	if err := approver.approve(context.Background(), "ls", "."); err != nil {
 		t.Fatalf("expected an ordinary command to run, got %v", err)
 	}
@@ -24,7 +25,8 @@ func TestConfigDirCommandsAlwaysAsk(t *testing.T) {
 		cfg = `C:\srv\cfg`
 	}
 	t.Setenv("XDG_CONFIG_HOME", cfg)
-	approver := &bashApprover{autoApprove: true}
+	approver := &bashApprover{}
+	approver.autoApprove.Store(true)
 	for _, command := range []string{
 		"cat ~/.config/goat/.env",
 		"cat $HOME/.config/goat/.env",
@@ -47,7 +49,8 @@ func TestConfigDirCommandsAlwaysAskFromNearby(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	approver := &bashApprover{autoApprove: true}
+	approver := &bashApprover{}
+	approver.autoApprove.Store(true)
 	for _, run := range []struct{ command, workdir string }{
 		{"cat .env", filepath.Join(home, ".config", "goat")},
 		{"cat goat/.env", filepath.Join(home, ".config")},

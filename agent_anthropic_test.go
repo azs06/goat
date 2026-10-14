@@ -269,8 +269,8 @@ func TestAnthropicToolRoundTripKeepsHistoryAppendOnly(t *testing.T) {
 		t.Errorf("expected fallbacks:default with its beta header, got %v / %q", first.body["fallbacks"], first.header.Get("anthropic-beta"))
 	}
 	sent := first.body["tools"].([]any)
-	if len(sent) != len(tools.Specs) {
-		t.Fatalf("expected %d tools, got %d", len(tools.Specs), len(sent))
+	if len(sent) != len(tools.Specs)+len(tools.AgentSpecs) {
+		t.Fatalf("expected %d tools, got %d", len(tools.Specs)+len(tools.AgentSpecs), len(sent))
 	}
 	if _, eager := sent[0].(map[string]any)["eager_input_streaming"]; eager {
 		t.Error("expected eager input streaming to stay off")

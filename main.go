@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
@@ -37,8 +39,10 @@ type config struct {
 	// promptFingerprint is the fingerprint the conversation was built with.
 	promptFingerprint string
 
-	// providers holds the API clients, created on first use.
-	providers map[string]provider.Provider
+	// providers holds the API clients, created on first use. providersMu guards it,
+	// since turns running beside the main one look clients up too.
+	providersMu sync.Mutex
+	providers   map[string]provider.Provider
 
 	input       *lineReader
 	interactive bool
@@ -81,11 +85,21 @@ type config struct {
 	promptImages []promptImage
 	imageCount   int
 	lastImages   []provider.Image
+	// agents runs the session's subagents; nil until main starts it.
+	agents *agentHost
+	// agentNotices are the reports of background subagents that finished between
+	// turns, ready for the model; they go with the next message.
+	agentNotices []string
+	// verifyPending is set when a turn's verify was put off because a general subagent
+	// was still changing the workspace; the next turn runs it.
+	verifyPending bool
 }
 
 // provider returns the client for a provider, creating it the first time. Providers
 // without credentials are refused.
 func (c *config) provider(name string) (provider.Provider, error) {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
 	if p, ok := c.providers[name]; ok {
 		return p, nil
 	}
@@ -113,6 +127,25 @@ func (c *config) provider(name string) (provider.Provider, error) {
 	}
 	c.providers[name] = p
 	return p, nil
+}
+
+// cachedProvider is the client already made for a provider, or nil.
+func (c *config) cachedProvider(name string) provider.Provider {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
+	return c.providers[name]
+}
+
+// forgetProviders drops the cached clients drop reports true for, so they are made
+// again on next use.
+func (c *config) forgetProviders(drop func(name string) bool) {
+	c.providersMu.Lock()
+	defer c.providersMu.Unlock()
+	for name := range c.providers {
+		if drop(name) {
+			delete(c.providers, name)
+		}
+	}
 }
 
 func (c *config) currentProvider() (provider.Provider, error) {
@@ -331,17 +364,33 @@ func envFlag(name string) bool {
 	return err == nil && enabled
 }
 
+// uiMu guards activeInputGuard and activeKeyCapture, which goroutines other than
+// main may look at.
+var uiMu sync.Mutex
+
 // activeInputGuard is the guard of the command or turn currently running, if any.
 var activeInputGuard *terminal.InputGuard
+
+func currentInputGuard() *terminal.InputGuard {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	return activeInputGuard
+}
+
+func setActiveInputGuard(guard *terminal.InputGuard) {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	activeInputGuard = guard
+}
 
 func runWithInputGuard(cbreak bool, work func() error) error {
 	guard, err := terminal.BeginInputGuard(cbreak)
 	if err != nil {
 		return err
 	}
-	activeInputGuard = guard
+	setActiveInputGuard(guard)
 	defer func() {
-		activeInputGuard = nil
+		setActiveInputGuard(nil)
 		if closeErr := guard.Close(); closeErr != nil {
 			warnf("failed to restore terminal input state: %v", closeErr)
 		}
@@ -354,15 +403,15 @@ func runWithInputGuard(cbreak bool, work func() error) error {
 // the middle of a turn, and returns the function that turns it off again.
 func suspendInputGuard() func() {
 	resumeSpinner := pauseSpinner()
-	capture := activeKeyCapture
+	capture := currentKeyCapture()
 	capture.pause()
 	suspended := time.Now()
-	guard := activeInputGuard
+	guard := currentInputGuard()
 	if err := guard.Suspend(); err != nil {
 		warnf("failed to restore terminal echo: %v", err)
 	}
 	return func() {
-		inputWaitTotal += time.Since(suspended)
+		inputWaitTotal.Add(int64(time.Since(suspended)))
 		if err := guard.Resume(); err != nil {
 			warnf("failed to disable terminal echo: %v", err)
 		}
@@ -372,8 +421,9 @@ func suspendInputGuard() func() {
 }
 
 // inputWaitTotal is the total time spent waiting on the user's answers mid-turn, so
-// a tool's elapsed time can leave out how long its approval took.
-var inputWaitTotal time.Duration
+// a tool's elapsed time can leave out how long its approval took. It counts
+// nanoseconds.
+var inputWaitTotal atomic.Int64
 
 // ask shows a question and reads one line of answer while a command runs.
 func (c *config) ask(ctx context.Context, question string) (string, error) {
@@ -399,6 +449,10 @@ func runPrompt(ctx context.Context, cfg *config, prompt string) error {
 
 // runPromptWithImages runs one turn for prompt with the images attached to it.
 func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userImages []provider.Image) error {
+	cfg.agents.sync(cfg)
+	// Commands subagents asked to run since the last turn are asked about first.
+	cfg.agents.serveApprovals(ctx, cfg)
+	collectAgentNotices(cfg)
 
 	p, err := cfg.currentProvider()
 	if err != nil {
@@ -431,13 +485,13 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 		codeMode:    cfg.codeMode,
 		vision:      provider.AcceptsImages(cfg.model),
 		images:      userImages,
-		contextNote: shellContextNote(cfg.pendingShell),
+		contextNote: shellContextNote(cfg.pendingShell) + agentNoticesNote(cfg.agentNotices),
 		// Save after every tool round and whatever the outcome, so a crash or Ctrl-C
 		// never loses work the model already did.
 		checkpoint: func(state conversationState) {
 			turnStarted, lastOwed = true, state.pendingToolResults
 			cfg.conversation = state
-			cfg.pendingShell = nil
+			cfg.pendingShell, cfg.agentNotices = nil, nil
 			saveSession(cfg)
 			// The footer under the input catches up with the turn: context used, commands
 			// left running.
@@ -478,15 +532,40 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	if cfg.approver != nil {
 		opts.approveBash = cfg.approver.approve
 	}
-	// Plan mode changes nothing, so there is nothing to check.
-	if !cfg.planMode {
-		opts.verify = verifyGate()
-		// The retry after compacting below is the same turn.
-		opts.verified = &verifyState{}
+	if cfg.agents != nil {
+		opts.agents = cfg.agents
+		opts.serveAgents = func(ctx context.Context) {
+			cfg.agents.serveApprovals(ctx, cfg)
+			// A pause for the commands typed meanwhile, before the queued text steers.
+			cfg.agents.serveMidTurn(ctx)
+		}
+		opts.takeNotices = cfg.agents.turnNotices
+		// /plan can run at the turn's pauses; the next tool call follows it.
+		opts.livePlanMode = cfg.agents.mainPlanMode.Load
 	}
-	// Messages queued while the turn works go to the model with the next tool results.
+	// While a general subagent still works, the check waits for a later turn.
+	if gate := cfg.agents.deferVerify(verifyGate(), &cfg.verifyPending); gate != nil {
+		// /plan can change mode partway through the turn, so the check follows the mode
+		// when the turn ends. In plan mode nothing runs, and what changed before /plan
+		// turned it on is checked when a later turn ends outside plan mode.
+		opts.verify = func(ctx context.Context) (string, error) {
+			if cfg.planMode {
+				cfg.verifyPending = true
+				return "", nil
+			}
+			return gate(ctx)
+		}
+	}
+	// The retry after compacting below is the same turn. A check put off by an
+	// earlier turn runs when this one ends.
+	opts.verified = &verifyState{changed: cfg.verifyPending && opts.verify != nil}
+	// Messages queued while the turn works go to the model with the next tool results,
+	// and the commands of midTurnCommands run at the turn's pauses.
 	if cfg.interactive && style.Enabled() {
 		opts.takeSteering = takeQueuedText
+		if cfg.agents != nil {
+			defer beginMidTurn()()
+		}
 	}
 
 	sent := cfg.conversation.conversation
@@ -495,7 +574,7 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	if err == nil || conversationMoved(sent, next.conversation) {
 		// The ! output went with this message, which the model has now seen. A request
 		// that failed outright keeps it for /retry.
-		cfg.pendingShell = nil
+		cfg.pendingShell, cfg.agentNotices = nil, nil
 	}
 	if err == nil || !provider.IsThinkingBindingError(err) && !errors.Is(err, errContextExceeded) {
 		return err
@@ -519,6 +598,8 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	if compactErr != nil {
 		return fmt.Errorf("%w (compacting it failed too: %v; use /clear)", err, compactErr)
 	}
+	// Steered messages and agents' reports the failed request carried go with the retry:
+	// the compaction keeps them.
 	applyCompactedConversation(cfg, summaryConversation, summary, "recovery")
 	if moved {
 		// The note, any ! output and the prompt's images went with the turn's first
@@ -530,7 +611,7 @@ func runPromptWithImages(ctx context.Context, cfg *config, prompt string, userIm
 	next, err = sendPromptStream(ctx, p, recoveryPromptText(prompt, moved, owed), cfg.conversation, opts)
 	cfg.conversation = next
 	if err == nil || conversationMoved(sent, next.conversation) {
-		cfg.pendingShell = nil
+		cfg.pendingShell, cfg.agentNotices = nil, nil
 	}
 	if errors.Is(err, errContextExceeded) {
 		return fmt.Errorf("%w even after compacting; shorten the prompt, or start over with /clear", err)
@@ -546,7 +627,7 @@ func conversationMoved(before, after provider.Conversation) bool {
 
 // handleInput runs one command or prompt. Ctrl-C cancels it instead of killing the goat.
 func handleInput(cfg *config, text string) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := notifyInterrupt(context.Background())
 	defer stop()
 
 	shellCommand, afterShell, isShell := shellEscapeText(cfg, text)
@@ -580,6 +661,8 @@ func handleInput(cfg *config, text string) error {
 			return runShellEscape(ctx, cfg, shellCommand)
 		case cmd != nil:
 			cfg.commandText = text
+			// A command can change the model or modes the agents take from main.
+			defer cfg.agents.sync(cfg)
 			return cmd.callback(ctx, cfg, args)
 		}
 		return runPrompt(ctx, cfg, text)
@@ -633,7 +716,7 @@ func printWelcome(cfg *config) {
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		fmt.Println(formatNotice("Project instructions: " + strings.Join(sources, ", ") + " (sent with each new conversation)."))
 	}
-	if cfg.approver.autoApprove {
+	if cfg.approver.autoApprove.Load() {
 		message := "run_bash commands are auto-approved (GOAT_AUTO_APPROVE_BASH)."
 		if style.Enabled() {
 			message = formatWarning(message)
@@ -685,7 +768,7 @@ func footerParts(cfg *config) []string {
 			parts = append(parts, "~"+formatTokenCount(estimateConversationTokens(entries))+" ctx")
 		}
 	}
-	if cfg.approver != nil && cfg.approver.autoApprove {
+	if cfg.approver != nil && cfg.approver.autoApprove.Load() {
 		parts = append(parts, "auto-approve on")
 	}
 	return append(parts, shortcutsFooterPart)
@@ -735,8 +818,10 @@ func readPrompt(cfg *config, gap bool) (string, error) {
 	if gap {
 		fmt.Println()
 	}
-	footer := renderFooter(footerParts(cfg), width)
-	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width, sessionImages{cfg}); ok {
+	parts := footerParts(cfg)
+	liveFooter := func() string { return renderFooter(withAgentsPart(parts, agentsFooterPart()), width) }
+	footer := liveFooter()
+	if text, ok, err := editPrompt(ctx, cfg.input, cfg.promptHistory, footer, width, sessionImages{cfg}, cfg.agents.promptEvents(liveFooter)); ok {
 		if err == nil && strings.TrimSpace(text) != "" {
 			cfg.promptHistory = rememberPrompt(cfg.promptHistory, text)
 			fmt.Println(renderUserMessage(text, width))
@@ -843,7 +928,7 @@ func main() {
 	}
 
 	provider.Warnf = warnf
-	workspace.Warnf = warnf
+	workspace.Warnf = workspaceWarnf
 	terminal.Warnf = warnf
 	applyTheme()
 	for _, warning := range append(envWarnings, endpointNotices()...) {
@@ -855,9 +940,13 @@ func main() {
 	cfg.input = newLineReader(os.Stdin)
 	cfg.promptHistory = loadPromptHistory()
 	cfg.interactive = terminal.StdinIsTerminal()
-	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive, autoApprove: opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH")}
+	cfg.approver = &bashApprover{input: cfg.input, interactive: cfg.interactive}
+	cfg.approver.autoApprove.Store(opts.autoApprove || envFlag("GOAT_AUTO_APPROVE_BASH"))
+	cfg.approver.sessionAutoApprove.Store(cfg.approver.autoApprove.Load())
 	argumentCompletions = commandArgumentCompletions(cfg)
 	projectInstructions = projectInstructionsText
+	// Before the exit paths are set up, so every one of them stops the agents.
+	startAgents(cfg, opts.print)
 	stopBackgroundOnSignal()
 
 	if opts.print {
@@ -867,6 +956,7 @@ func main() {
 		cfg.oneShot = true
 		code := runOneShot(cfg, opts)
 		stopBackgroundOnExit(os.Stderr)
+		showHeldWarnings()
 		os.Exit(code)
 	}
 	if opts.prompt != "" {
@@ -884,6 +974,7 @@ func main() {
 // sayGoodbye stops what goat left running in the background and says goodbye.
 func sayGoodbye() {
 	stopBackgroundOnExit(os.Stdout)
+	showHeldWarnings()
 	fmt.Println("Closing the Goat... Goodbye!")
 }
 
@@ -893,6 +984,10 @@ func runInteractive(cfg *config) {
 	gap := true
 	var lastInterrupt time.Time
 	for {
+		// Background agents that finished since the last turn are shown, and their
+		// reports go with the next message; commands they asked to run are asked about.
+		collectAgentNotices(cfg)
+		serveIdleApprovals(cfg)
 		// Messages queued during the last turn run before the prompt comes back.
 		var err error
 		text, queued := nextQueuedInput()
@@ -902,6 +997,16 @@ func runInteractive(cfg *config) {
 			text, err = readPrompt(cfg, gap)
 		}
 		gap = true
+		if errors.Is(err, errUIEvent) {
+			// A subagent asked or finished while the prompt waited: dealt with at the top
+			// of the loop, then the prompt comes back with what was typed.
+			gap = false
+			continue
+		}
+		openedAgents := errors.Is(err, errOpenAgents)
+		if openedAgents {
+			text, err = agentsCommandLine, nil
+		}
 		if errors.Is(err, context.Canceled) {
 			if time.Since(lastInterrupt) < exitConfirmWindow {
 				sayGoodbye()
@@ -925,6 +1030,10 @@ func runInteractive(cfg *config) {
 
 		err = handleInput(cfg, text)
 		stopSpinner()
+		if openedAgents {
+			// The prompt left no line behind for Ctrl-G, so none goes above the next.
+			gap = false
+		}
 		if err != nil {
 			// Nothing queued is sent after a turn that was interrupted or failed; it
 			// waits in the prompt instead.

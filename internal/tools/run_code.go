@@ -123,6 +123,8 @@ func runCode(ctx context.Context, raw string, opts Options) (string, error) {
 
 	nested := opts
 	nested.Nested = nil
+	// Scripts never reach the subagent tools; this keeps it so if one is ever exposed.
+	nested.Agents = nil
 	// calling is the tool of the call being run; calls run one at a time.
 	calling := "run_bash"
 	if approve := opts.ApproveBash; approve != nil {

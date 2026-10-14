@@ -69,7 +69,7 @@ func TestShellEscapeNeedsATerminalOrAutoApproval(t *testing.T) {
 	if err := handleInput(cfg, "!"); err == nil {
 		t.Fatal("expected an empty command to be refused")
 	}
-	cfg.approver.autoApprove = true
+	cfg.approver.autoApprove.Store(true)
 	out := captureStdout(t, func() {
 		if err := handleInput(cfg, "!echo allowed"); err != nil {
 			t.Fatal(err)
@@ -84,7 +84,7 @@ func TestOneShotPromptIsNeverAShellCommand(t *testing.T) {
 	fake := newFakeAnthropic(t, newSSE("msg_1").text("ok").stop("end_turn", ""))
 	cfg := seamConfig(t, fake.provider(true))
 	cfg.oneShot = true
-	cfg.approver.autoApprove = true
+	cfg.approver.autoApprove.Store(true)
 	sessionSaver = func(string, savedSession) error { return nil }
 	t.Cleanup(func() { sessionSaver = writeSessionFile })
 	captureStdout(t, func() {

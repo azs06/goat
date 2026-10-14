@@ -89,6 +89,9 @@ func rememberThemeFile(path string) {
 // built-in theme, or /theme alone to pick one with the arrow keys. Without a terminal
 // to pick on, /theme reloads the configured theme and lists the built-in ones.
 func commandTheme(ctx context.Context, c *config, args []string) error {
+	if err := c.refuseWhileAgentsRun(); err != nil {
+		return err
+	}
 	if len(args) > 0 {
 		// "/theme one dark" names one theme.
 		wanted := strings.Join(args, " ")

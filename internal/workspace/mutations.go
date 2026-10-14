@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,12 +21,21 @@ const (
 	defaultOperationsPath = StateDirName + "/operations.json"
 	defaultSnapshotsRoot  = StateDirName + "/snapshots"
 	maxStateDiffEntries   = 40
-	// maxRecordedOperations is how many operations stay undoable; older snapshots are deleted.
-	maxRecordedOperations = 100
 	// unreferencedSnapshotGracePeriod is how old an unrecorded snapshot must be before
 	// it is treated as abandoned.
 	unreferencedSnapshotGracePeriod = time.Hour
 )
+
+// maxRecordedOperations is how many operations stay undoable; older snapshots are
+// deleted. It is a variable so tests can raise it.
+var maxRecordedOperations = 100
+
+// opsMu serializes changes to the operation log and the snapshot cleanup that follows
+// them, since subagents can record mutations and undo at the same time.
+var opsMu sync.Mutex
+
+// operationSeq tells apart operations created in the same nanosecond.
+var operationSeq atomic.Uint64
 
 type operationRecord struct {
 	ID        string   `json:"id"`
@@ -198,7 +209,8 @@ func newOperationRecord(kind string, paths []string) (operationRecord, error) {
 		fileIdentities = nil
 	}
 
-	id := fmt.Sprintf("%d", time.Now().UTC().UnixNano())
+	// A fixed-width counter suffix keeps IDs numeric and unique within this process.
+	id := fmt.Sprintf("%d%06d", time.Now().UTC().UnixNano(), operationSeq.Add(1)%1000000)
 	return operationRecord{
 		ID:             id,
 		Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
@@ -558,6 +570,9 @@ func saveOperationRecords(records []operationRecord) error {
 }
 
 func appendOperationRecord(record operationRecord) error {
+	opsMu.Lock()
+	defer opsMu.Unlock()
+
 	records, err := loadOperationRecords(true)
 	if err != nil {
 		return err
@@ -650,6 +665,9 @@ func latestUndoableOperationRecord(setAsideCorrupt bool) (operationRecord, int, 
 // PreviewUndoLastChange describes what UndoLastChange would restore without changing
 // anything.
 func PreviewUndoLastChange() (string, error) {
+	opsMu.Lock()
+	defer opsMu.Unlock()
+
 	record, index, _, err := latestUndoableOperationRecord(false)
 	if err != nil {
 		return "", err
@@ -684,6 +702,9 @@ func PreviewUndoLastChange() (string, error) {
 // UndoLastChange restores the workspace to how it was before the most recent recorded
 // change and returns a description of what it restored.
 func UndoLastChange() (string, error) {
+	opsMu.Lock()
+	defer opsMu.Unlock()
+
 	record, index, records, err := latestUndoableOperationRecord(true)
 	if err != nil {
 		return "", err
@@ -720,6 +741,9 @@ func markOperationSkipped(records []operationRecord, index int) (operationRecord
 // SkipLastChange gives up on the latest undoable operation without restoring anything,
 // so undo can reach earlier operations.
 func SkipLastChange() (string, error) {
+	opsMu.Lock()
+	defer opsMu.Unlock()
+
 	_, index, records, err := latestUndoableOperationRecord(true)
 	if err != nil {
 		return "", err

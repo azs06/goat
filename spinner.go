@@ -17,8 +17,10 @@ import (
 // terminal (an approval prompt) can stop it from anywhere. Streamed reply lines are
 // printed above it with printAboveSpinner instead.
 type spinner struct {
-	mu      sync.Mutex
-	label   string
+	mu    sync.Mutex
+	label string
+	// hint replaces "ctrl-c to interrupt" after the elapsed time.
+	hint    string
 	started time.Time
 	stop    chan struct{}
 	done    chan struct{}
@@ -54,12 +56,22 @@ func startSpinner(label string) {
 }
 
 func startSpinnerAt(label string, started time.Time) {
+	startSpinnerWith(label, "", started)
+}
+
+// startSpinnerHint is startSpinner with hint in place of "ctrl-c to interrupt", for
+// views where Ctrl-C does something else.
+func startSpinnerHint(label, hint string) {
+	startSpinnerWith(label, hint, time.Now())
+}
+
+func startSpinnerWith(label, hint string, started time.Time) {
 	if !style.Enabled() {
 		return
 	}
 	stopSpinner()
 
-	s := &spinner{label: label, started: started, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &spinner{label: label, hint: hint, started: started, stop: make(chan struct{}), done: make(chan struct{})}
 	spinnerMu.Lock()
 	activeSpinner = s
 	spinnerMu.Unlock()
@@ -99,7 +111,10 @@ func pauseSpinner() func() {
 		if busy {
 			return
 		}
-		startSpinnerAt(s.label, s.started.Add(time.Since(pausedAt)))
+		s.mu.Lock()
+		label := s.label
+		s.mu.Unlock()
+		startSpinnerWith(label, s.hint, s.started.Add(time.Since(pausedAt)))
 	}
 }
 
@@ -199,7 +214,11 @@ func (s *spinner) render() string {
 	if reducedMotion {
 		glyph = spinnerFrames[4]
 	}
-	line := style.Accent.Render(glyph+" "+s.label+style.Glyphs().Ellipsis) + " " + style.Subtle.Render(fmt.Sprintf("(%s · ctrl-c to interrupt)", formatElapsed(elapsed)))
+	hint := s.hint
+	if hint == "" {
+		hint = "ctrl-c to interrupt"
+	}
+	line := style.Accent.Render(glyph+" "+s.label+style.Glyphs().Ellipsis) + " " + style.Subtle.Render(fmt.Sprintf("(%s · %s)", formatElapsed(elapsed), hint))
 	// \r and erase-line redraw in place; the line is cut to the terminal width so it
 	// never wraps, which would leave stale copies behind.
 	width := terminalWidth()

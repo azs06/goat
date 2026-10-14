@@ -75,10 +75,9 @@ func runTUI(ctx context.Context, raw string, opts Options) (string, error) {
 	if err := workspace.CheckTUIRun(run); err != nil {
 		return "", err
 	}
-	if opts.ApproveBash != nil {
-		if err := opts.ApproveBash(ctx, workspace.TUIApprovalText(run.Command, run.Steps), args.Workdir); err != nil {
-			return "", err
-		}
+	if err := approveCommand(ctx, opts, workspace.TUIApprovalText(run.Command, run.Steps), args.Workdir); err != nil {
+		return "", err
 	}
+
 	return workspace.RunTUI(ctx, run)
 }

@@ -37,6 +37,7 @@ var (
 
 func init() {
 	list := []*cliCommand{
+		{name: "agents", usage: "/agents [id|log id|stop id|dismiss id]", description: "List the subagents; attach to one to watch it and send it messages (ctrl-g); works while goat is busy", aliases: []string{"tasks"}, callback: commandAgents},
 		{name: "approve", usage: "/approve [on|off]", description: "Show or change whether run_bash commands run without asking", callback: commandApprove},
 		{name: "clear", usage: "/clear", description: "Start a new conversation (the old one is kept for /resume)", aliases: []string{"new", "reset"}, callback: commandClear},
 		{name: "ps", usage: "/ps [stop n|all]", description: "List the commands goat left running in the background, such as a dev server, and stop them", aliases: []string{"jobs"}, callback: commandProcesses},
@@ -128,7 +129,7 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 		}
 		return style.Wrap(style.Muted.Render(text), width-1, "", "")
 	}
-	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn."))
+	fmt.Println(paragraph("Type a request and press Enter; anything that is not a command goes to the agent. Start a line with ! to run it in the shell instead, such as !git status; its output goes to the agent with your next message. Ctrl-C interrupts a turn. While a turn runs you can keep typing: text steers it, /agents, ctrl-g, /help, /ps, /tools, /output, /status, /history, /diff and /plan run at its next pause, and other commands wait for it to end."))
 	fmt.Println()
 	fmt.Println(renderHelpTable(commands))
 	if style.Enabled() {
@@ -141,8 +142,15 @@ func commandHelp(ctx context.Context, c *config, args []string) error {
 }
 
 func commandClear(ctx context.Context, c *config, args []string) error {
+	if err := c.refuseWhileAgentsRun(); err != nil {
+		return err
+	}
 	replaceConversation(c, conversationState{})
-	c.pendingShell = nil
+	c.pendingShell, c.agentNotices = nil, nil
+	c.agents.leaveLineage()
+	// The reports marked delivered went to the conversation left behind, or were held
+	// in agentNotices just dropped: a wait from here gives them again.
+	c.agents.forgetDelivered()
 	recordHistory(historyEntry{Type: "reset", Provider: c.model.Provider})
 	fmt.Println(formatSuccess("Started a new conversation. /resume brings the previous one back."))
 	// A new conversation starts under a fresh banner with the current model and effort.
@@ -194,7 +202,11 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 		c.reasoningEffort = effort
 	}
 	adoptSavedConversation(c, previous)
-	c.pendingShell = nil
+	c.pendingShell, c.agentNotices = nil, nil
+	c.agents.leaveLineage()
+	// The reports marked delivered went to the conversation left behind, or were held
+	// in agentNotices just dropped: a wait from here gives them again.
+	c.agents.forgetDelivered()
 	saveSession(c)
 
 	fmt.Println(formatSuccess(fmt.Sprintf("Resumed the previous conversation on %s%s. /resume again switches back.", c.model, effortNote)))
@@ -203,7 +215,7 @@ func commandResume(ctx context.Context, c *config, args []string) error {
 }
 
 func commandTools(ctx context.Context, c *config, args []string) error {
-	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs))))
+	fmt.Println(style.Strong.Render(fmt.Sprintf("Available tools (%d)", len(tools.CodeModeSpecs)+len(tools.AgentSpecs))))
 	fmt.Println()
 	fmt.Println(renderToolList())
 	return nil
@@ -279,14 +291,18 @@ func commandApprove(ctx context.Context, c *config, args []string) error {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "on", "yes", "true":
-			c.approver.autoApprove = true
+			c.approver.autoApprove.Store(true)
+			c.approver.sessionAutoApprove.Store(true)
 		case "off", "no", "false":
-			c.approver.autoApprove = false
+			c.approver.autoApprove.Store(false)
+			c.approver.sessionAutoApprove.Store(false)
+			// Asking again covers the subagents' commands too.
+			c.agents.forgetAlways()
 		default:
 			return fmt.Errorf("use /approve on or /approve off")
 		}
 	}
-	if c.approver.autoApprove {
+	if c.approver.autoApprove.Load() {
 		message := "run_bash commands run without asking "
 		if style.Enabled() {
 			message = formatWarning(message)
@@ -313,7 +329,7 @@ func effortOptions(c *config) []selectOption {
 	options := make([]selectOption, 0, len(provider.EffortLevels))
 	for _, level := range provider.EffortLevels {
 		hint := effortHints[level]
-		if sent := provider.DescribeEffort(c.providers[c.model.Provider], c.model, level); sent != string(level) {
+		if sent := provider.DescribeEffort(c.cachedProvider(c.model.Provider), c.model, level); sent != string(level) {
 			hint += " · sent as " + sent
 		}
 		options = append(options, selectOption{label: string(level), hint: hint, current: level == c.reasoningEffort})
@@ -367,7 +383,7 @@ func effortStatusText(c *config) string {
 
 // effectiveEffortDescription says what the provider will actually receive.
 func effectiveEffortDescription(c *config) string {
-	return provider.DescribeEffort(c.providers[c.model.Provider], c.model, c.reasoningEffort)
+	return provider.DescribeEffort(c.cachedProvider(c.model.Provider), c.model, c.reasoningEffort)
 }
 
 func commandStatus(ctx context.Context, c *config, args []string) error {
@@ -455,7 +471,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 		rows = append(rows, [2]string{"Code mode:", "on (tool calls can be batched in run_code)"})
 	}
 	if c.approver != nil {
-		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove]})
+		rows = append(rows, [2]string{"run_bash:", map[bool]string{true: style.Warning.Render("runs without asking"), false: "asks before each command"}[c.approver.autoApprove.Load()]})
 	}
 	if command, source := verifyCommand(); command != "" {
 		rows = append(rows, [2]string{"Verify:", escapeControlChars(command) + style.Muted.Render(" ("+source+")")})
@@ -588,15 +604,25 @@ func switchModel(ctx context.Context, c *config, raw string) error {
 		return fmt.Errorf("could not carry the conversation over to %s, so the model was not changed: %w (use /clear first to switch without it)", target, err)
 	}
 	previous := c.model
+	carryOverToModel(c, target, next, summary)
+	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
+	printModelLine(c)
+	return nil
+}
+
+// carryOverToModel switches to target with the conversation seeded from summary.
+func carryOverToModel(c *config, target provider.Model, next provider.Conversation, summary string) {
 	recordCompactionSummary(c, summary, "model switch")
 	// The archive keeps the old model, so /resume returns to the full conversation.
 	archiveSession(c)
 	c.model = target
-	startConversation(c, conversationState{conversation: next})
+	// The conversation goes on under a new id; its agents still report to it.
+	previousConversation := activeConversationID
+	// Text a failed request carried goes on with the conversation, as through a compaction.
+	startConversation(c, conversationState{conversation: next, pendingText: c.conversation.pendingText})
+	c.agents.carryLineage(previousConversation)
+	c.agents.forgetDelivered()
 	recordCompactionSeed(c, next, summary)
-	fmt.Println(formatSuccess(fmt.Sprintf("Switched to %s with a summary of the conversation. /resume brings back the full %s one.", target, previous)))
-	printModelLine(c)
-	return nil
 }
 
 // pickModel resolves a number from the last listing, or a model name.
@@ -659,6 +685,8 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 		case "undo":
 			add("preview", "show what would be restored")
 			add("skip", "give up on a change that cannot be restored")
+		case "agents":
+			agentCompletions(c, add)
 		case "theme":
 			for _, name := range style.BuiltinNames() {
 				add(name, themeHints[name])

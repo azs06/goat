@@ -101,6 +101,11 @@ func findSpec(name string) (provider.ToolSpec, bool) {
 			return tool, true
 		}
 	}
+	for _, tool := range AgentSpecs {
+		if tool.Name == name {
+			return tool, true
+		}
+	}
 	return provider.ToolSpec{}, false
 }
 
