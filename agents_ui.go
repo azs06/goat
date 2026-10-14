@@ -671,8 +671,8 @@ func (h *agentHost) sendFromUser(a *subagent.Agent, text string) (string, error)
 		return "", nil
 	case subagent.Steered:
 		return a.ID + " reads it at its next step.", nil
-	case subagent.Held:
-		return a.ID + "'s report is on its way to main; the message starts a turn once main has it.", nil
+	case subagent.AfterTask:
+		return a.ID + " answers once it finishes the task main is waiting on.", nil
 	}
 	running, _, _ := h.m.Counts()
 	return fmt.Sprintf("%s running; message kept in %s's inbox until one finishes.", plural(running, "agent"), a.ID), nil

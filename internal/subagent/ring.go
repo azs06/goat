@@ -115,6 +115,13 @@ func (r *EventRing) Since(seq uint64) []Event {
 	return out
 }
 
+// LastSeq is the sequence number of the newest event appended, 0 before the first.
+func (r *EventRing) LastSeq() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seq
+}
+
 // Dropped is how many events have been pushed out to keep the caps.
 func (r *EventRing) Dropped() int {
 	r.mu.Lock()

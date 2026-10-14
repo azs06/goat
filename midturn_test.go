@@ -83,6 +83,12 @@ func TestQueueRunsAgentsAndReadOnlyCommandsAtMainsPause(t *testing.T) {
 // is closed.
 func midTurnSetup(t *testing.T, scripts map[string][]string, held ...string) (*config, *agentHost, *routedAnthropic, map[string]chan struct{}) {
 	t.Helper()
+	return midTurnSetupWith(t, subagent.Config{}, scripts, held...)
+}
+
+// midTurnSetupWith is midTurnSetup with the manager's limits.
+func midTurnSetupWith(t *testing.T, limits subagent.Config, scripts map[string][]string, held ...string) (*config, *agentHost, *routedAnthropic, map[string]chan struct{}) {
+	t.Helper()
 	withToolTestColor(t, true)
 	resetTurnQueue(t)
 	fake := newRoutedAnthropic(t, scripts)
@@ -91,7 +97,7 @@ func midTurnSetup(t *testing.T, scripts map[string][]string, held ...string) (*c
 		holds[key] = make(chan struct{})
 	}
 	fake.hold = holds
-	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	cfg, h := agentTestConfig(t, fake, limits, true)
 	t.Cleanup(func() {
 		for _, hold := range holds {
 			select {
@@ -322,7 +328,7 @@ func TestMidTurnAttachMessagesTheAgentAndReturnsToTheTurn(t *testing.T) {
 	// Each of the agent's events shows once: in the attach view, not again when main's
 	// follow goes on.
 	// The report shows again in the spawn call's result.
-	for event, times := range map[string]int{"kid working": 1, "kid got your message": 2} {
+	for event, times := range map[string]int{"kid working": 2, "kid got your message": 1} {
 		if n := strings.Count(plain, event); n != times {
 			t.Errorf("%q shown %d times:\n%s", event, n, plain)
 		}
@@ -331,8 +337,9 @@ func TestMidTurnAttachMessagesTheAgentAndReturnsToTheTurn(t *testing.T) {
 	if len(main) != 2 {
 		t.Fatalf("main made %d requests", len(main))
 	}
-	if results := fmt.Sprint(toolResultsOf(t, main[1])); !strings.Contains(results, "kid got your message") {
-		t.Errorf("main should get the report of the turn the message continued: %s", results)
+	// The message went on in a turn of the user's; main gets the task's report.
+	if results := fmt.Sprint(toolResultsOf(t, main[1])); !strings.Contains(results, "kid working") || strings.Contains(results, "kid got your message") {
+		t.Errorf("main should get the report of the turn it followed: %s", results)
 	}
 	// What was queued for main went to main; the agent got only its message.
 	if !strings.Contains(main[1].raw, "note for main") || strings.Contains(main[1].raw, "hello kid") {

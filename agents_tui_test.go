@@ -152,11 +152,13 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 		},
 		"[[kid]]": {
 			newSSE("k1").toolUse("tk1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
-			newSSE("k2").text("kid got your message").stop("end_turn", ""),
+			newSSE("k2").text("kid looked around").stop("end_turn", ""),
+			newSSE("k3").text("kid got your message").stop("end_turn", ""),
 		},
 	})
-	// The kid's first request waits until the user's message is in its inbox; the
-	// request after its tool call carries it.
+	// The kid's first request waits until the user's message is in its inbox. Main
+	// follows the kid's task, so the message is not steered into it: the kid answers it
+	// in a turn of its own once the task is done.
 	release := make(chan struct{})
 	fake.hold = map[string]chan struct{}{"[[kid]]": release}
 	t.Cleanup(func() {
@@ -185,8 +187,8 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 			// 5: Ctrl-C leaves the view, not main's turn; attach again by name.
 			{Keys: "<C-c>", WaitFor: "a1 keeps going", Snapshot: true},
 			{Keys: "/agents a1<Enter>", WaitFor: "type a message for a1"},
-			// 7: the message waits in the kid's inbox; then its request goes on.
-			{Keys: "hello kid<Enter>", WaitFor: "a1 reads it at its next step", Then: func() { close(release) }},
+			// 7: the message waits in the kid's inbox until its task is done.
+			{Keys: "hello kid<Enter>", WaitFor: "a1 answers once it finishes the task main is waiting on", Then: func() { close(release) }},
 			{WaitFor: "kid got your message", Snapshot: true},
 			// 9: back to main's turn, which finishes with the kid's report.
 			{Keys: "/back<Enter>", WaitFor: "Main done.", Snapshot: true},
@@ -209,15 +211,15 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 		}
 	}
 	kid := fake.requests("[[kid]]")
-	if len(kid) != 2 || !strings.Contains(kid[1].raw, "hello kid") {
-		t.Fatalf("expected the kid's second request to carry the message, got %d requests", len(kid))
+	if len(kid) != 3 || strings.Contains(kid[1].raw, "hello kid") || !strings.Contains(kid[2].raw, "hello kid") {
+		t.Fatalf("expected the message in the kid's turn after its task, got %d requests", len(kid))
 	}
 	main := fake.requests("[[main]]")
 	if len(main) != 2 {
 		t.Fatalf("main made %d requests, want 2", len(main))
 	}
-	if !strings.Contains(main[1].raw, "kid got your message") || strings.Contains(main[1].raw, "hello kid") {
-		t.Fatal("main should get the kid's report and none of what was typed for the kid")
+	if !strings.Contains(main[1].raw, "kid looked around") || strings.Contains(main[1].raw, "kid got your message") || strings.Contains(main[1].raw, "hello kid") {
+		t.Fatal("main should get the report of the kid's task and none of the user's chat with it")
 	}
 	if strings.Contains(out, "Interrupted") {
 		t.Error("Ctrl-C in the attach view interrupted main's turn")

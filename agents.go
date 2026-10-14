@@ -395,7 +395,7 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 		if giveUp == nil && h.serveMidTurn(ctx) {
 			h.catchUp(a.ID, ring, &cursor, false)
 		}
-		h.showEvents(a, ring, &cursor)
+		h.showEvents(a, ring, &cursor, done)
 		select {
 		case <-done:
 			finished = true
@@ -415,7 +415,7 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 		}
 	}
 	stop()
-	h.showEvents(a, ring, &cursor)
+	h.showEvents(a, ring, &cursor, done)
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -426,13 +426,13 @@ func (h *agentHost) follow(ctx context.Context, a *subagent.Agent) (string, erro
 	return h.wrapResult(result), nil
 }
 
-// showEvents prints the agent's events after cursor, indented, and names its activity
-// on the spinner.
-func (h *agentHost) showEvents(a *subagent.Agent, ring *subagent.EventRing, cursor *uint64) {
+// showEvents prints the events after cursor of the turn done is for, indented, and
+// names the agent's activity on the spinner.
+func (h *agentHost) showEvents(a *subagent.Agent, ring *subagent.EventRing, cursor *uint64, done <-chan struct{}) {
 	if ring == nil {
 		return
 	}
-	events := ring.Since(*cursor)
+	events := turnEvents(a, ring, *cursor, done)
 	if len(events) > 0 {
 		*cursor = events[len(events)-1].Seq
 		var b strings.Builder
@@ -446,6 +446,24 @@ func (h *agentHost) showEvents(a *subagent.Agent, ring *subagent.EventRing, curs
 		activity = "working"
 	}
 	relabelSpinner(a.ID + " " + style.Glyphs().Dot + " " + activity)
+}
+
+// turnEvents returns the agent's events after cursor that belong to the turn done is
+// for. Read before done is checked, the events of a turn that ends meanwhile are cut
+// where it ended: a user's message may already have started the next one.
+func turnEvents(a *subagent.Agent, ring *subagent.EventRing, cursor uint64, done <-chan struct{}) []subagent.Event {
+	events := ring.Since(cursor)
+	select {
+	case <-done:
+		end := a.LastResult().EndSeq
+		for i, e := range events {
+			if e.Seq > end {
+				return events[:i]
+			}
+		}
+	default:
+	}
+	return events
 }
 
 // showAgentActivity prints text where tool calls are shown, above the spinner.

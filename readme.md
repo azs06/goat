@@ -533,7 +533,9 @@ for a pause`). Attaching then pauses goat's own turn until you return; the agent
 running, and the divider and footer say `main's turn paused`. Ctrl-C there only returns
 to the turn, which goes on where it was; a long stretch of agent work missed meanwhile is
 summed up in one line (`… 24 events while you were away (/agents log a1)`). Elsewhere
-Ctrl-C still interrupts the turn.
+Ctrl-C still interrupts the turn. Talking to an agent goat is waiting on does not change
+what goat gets: the agent finishes the task first, goat gets that report, and the agent
+answers you in a turn of its own right after.
 
 - `/agents log <id>` shows an agent's whole transcript, even after it is dismissed.
 - `/agents stop <id|all>` stops agents.
