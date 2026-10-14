@@ -306,11 +306,11 @@ takes a message, and Enter queues it. Queued text goes to the model with the nex
 results, so it can change course mid-turn; anything still queued when the turn ends is
 sent as the next prompt. `/agents` (and Ctrl-G) and the commands that only look or
 toggle plan mode (`/help`, `/ps`, `/tools`, `/output`, `/status`, `/history`, `/diff`,
-`/plan`) run at the turn's next pause: after a tool call, or at once while goat waits on
-subagents. The footer says when one is waiting for a pause. Other slash commands and `!`
-commands wait until the turn is over, and the queued line says so. Up on an empty line
-takes the last queued message back to edit. After Ctrl-C or a failed
-turn nothing queued is sent; it is put back in the prompt instead, one message per line.
+`/plan`) run at the turn's next pause: after a round of tool calls, or at once while goat
+waits on subagents. The footer says when one is waiting for a pause. Other slash commands
+and `!` commands wait until the turn is over, and the queued line says so. Up on an empty
+line takes the last queued message back to edit. After Ctrl-C or a failed turn nothing
+queued is sent; it is put back in the prompt instead, one message per line.
 Queueing needs an interactive color terminal.
 
 ### Command line
@@ -528,10 +528,10 @@ it. `/back` or Ctrl-C returns to the main conversation; the agent keeps running.
 All of this works while goat's own turn runs, too, which is when it matters most: goat
 often waits minutes on its agents. `/agents`, its subcommands and Ctrl-G run as soon as
 goat pauses: at once while it follows or waits for agents, otherwise after its current
-tool call (while the model is still writing, the footer shows `/agents waiting for a
-pause`). Attaching then pauses goat's own turn until you return; the agents keep running
-and the divider and footer say `main's turn paused`. Ctrl-C there only returns to the
-turn, which goes on where it was; a long stretch of agent work missed meanwhile is
+round of tool calls (while the model is still writing, the footer shows `/agents waiting
+for a pause`). Attaching then pauses goat's own turn until you return; the agents keep
+running, and the divider and footer say `main's turn paused`. Ctrl-C there only returns
+to the turn, which goes on where it was; a long stretch of agent work missed meanwhile is
 summed up in one line (`… 24 events while you were away (/agents log a1)`). Elsewhere
 Ctrl-C still interrupts the turn.
 

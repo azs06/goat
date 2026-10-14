@@ -106,6 +106,9 @@ func (f *routedAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 		f.scripts[key] = f.scripts[key][1:]
 	}
 	var barrier chan struct{}
+	// A hold can span several steps of a terminal test; a barrier only the time the
+	// requests take to arrive.
+	limit := 10 * time.Second
 	if b := f.barrier; b != nil && b.keys[key] && len(f.seen[key]) == 1 {
 		b.arrived++
 		if b.arrived == len(b.keys) {
@@ -115,13 +118,14 @@ func (f *routedAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if hold := f.hold[key]; hold != nil && len(f.seen[key]) == 1 {
 		barrier = hold
+		limit = time.Minute
 	}
 	f.mu.Unlock()
 
 	if barrier != nil {
 		select {
 		case <-barrier:
-		case <-time.After(10 * time.Second):
+		case <-time.After(limit):
 			f.t.Errorf("the request for %s waited for the others in vain: they did not run at the same time", key)
 		case <-r.Context().Done():
 			return

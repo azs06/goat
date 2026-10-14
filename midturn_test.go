@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -356,11 +357,12 @@ func TestCtrlCInMidTurnAttachLeavesTheTurnRunning(t *testing.T) {
 	var err error
 	var editor string
 	out := captureTerminal(t, func() {
+		before := midTurnRuns.Load()
 		result, keys, a := attachMidTurn(t, ctx, cfg, h, fake)
 		defer keys.Close()
 		// The turn's Ctrl-C, as handleInput's notifyInterrupt delivers it.
 		deliverInterrupt(cancel)
-		waitFor(t, "the attach view to close", func() bool { return h.m.Attached() == "" })
+		waitFor(t, "the attach view to close", func() bool { return midTurnRuns.Load() == before+1 && h.m.Attached() == "" })
 		if ctx.Err() != nil {
 			t.Error("Ctrl-C in the attach view cancelled main's turn")
 		}
@@ -369,7 +371,11 @@ func TestCtrlCInMidTurnAttachLeavesTheTurnRunning(t *testing.T) {
 		}
 		turnQueue.mu.Lock()
 		editor = turnQueue.editorText()
+		turnQueue.editor.setText("")
 		turnQueue.mu.Unlock()
+		// Commands still run at main's pauses after the view closed.
+		io.WriteString(keys, "/ps\r")
+		waitFor(t, "a command after the view closed", func() bool { return midTurnRuns.Load() == before+2 })
 		close(holds["[[kid]]"])
 		err = <-result
 		stopKeyCapture()
@@ -428,5 +434,36 @@ func TestAwayEventsAreSummedUp(t *testing.T) {
 	h.serveMidTurn(context.Background())
 	if out := captureTerminal(t, func() { h.catchUp(a.ID, ring, &cursor, false) }); out != "" || cursor != all[len(all)-4].Seq {
 		t.Fatalf("a few events should be left to the follow: %q", out)
+	}
+}
+
+func TestMidTurnPlanAppliesToMainsNextToolCall(t *testing.T) {
+	cfg, _, fake, _ := midTurnSetup(t, map[string][]string{
+		"[[main]]": {
+			newSSE("m1").toolUse("tm1", "read_dir", `{"path":"."}`).stop("tool_use", ""),
+			newSSE("m2").toolUse("tm2", "write_file", `{"path":"made.txt","content":"x"}`).stop("tool_use", ""),
+			newSSE("m3").text("Main done.").stop("end_turn", ""),
+		},
+	})
+	before := midTurnRuns.Load()
+	// Typed before the turn's first pause, after its first tool call.
+	typeQueueKeys("/plan\r")
+	var err error
+	captureTerminal(t, func() { err = runPrompt(context.Background(), cfg, "[[main]] make a file") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if midTurnRuns.Load() != before+1 || !cfg.planMode {
+		t.Fatalf("/plan should run at the pause: %d runs, plan mode %v", midTurnRuns.Load()-before, cfg.planMode)
+	}
+	reqs := fake.requests("[[main]]")
+	if len(reqs) != 3 || !strings.Contains(fmt.Sprint(toolResultsOf(t, reqs[2])), tools.ErrPlanMode.Error()) {
+		t.Fatalf("the next tool call should be refused in plan mode")
+	}
+	if _, statErr := os.Stat("made.txt"); statErr == nil {
+		t.Fatal("the file was written in plan mode")
+	}
+	if len(turnQueue.items) != 0 {
+		t.Fatalf("nothing should be left queued: %q", turnQueue.items)
 	}
 }

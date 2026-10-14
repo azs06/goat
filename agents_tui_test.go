@@ -182,10 +182,13 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 			{Keys: "<C-g>", WaitFor: "a1  kid helper", Snapshot: true},
 			// 4: attach to the kid; main's turn is paused.
 			{Keys: "<Down><Enter>", WaitFor: "type a message for a1", Snapshot: true},
-			// 5: the message waits in the kid's inbox; then its request goes on.
+			// 5: Ctrl-C leaves the view, not main's turn; attach again by name.
+			{Keys: "<C-c>", WaitFor: "a1 keeps going", Snapshot: true},
+			{Keys: "/agents a1<Enter>", WaitFor: "type a message for a1"},
+			// 7: the message waits in the kid's inbox; then its request goes on.
 			{Keys: "hello kid<Enter>", WaitFor: "a1 reads it at its next step", Then: func() { close(release) }},
 			{WaitFor: "kid got your message", Snapshot: true},
-			// 7: back to main's turn, which finishes with the kid's report.
+			// 9: back to main's turn, which finishes with the kid's report.
 			{Keys: "/back<Enter>", WaitFor: "Main done.", Snapshot: true},
 			{Keys: "/exit<Enter>", WaitFor: "Goodbye"},
 		},
@@ -198,7 +201,8 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 		"exited with status 0",
 		"After step 3:", "Subagents", "a1  kid helper",
 		"After step 4:", "── a1 · kid helper · explore ── main's turn paused", "attached to a1 · main's turn paused",
-		"After step 7:", "Back on main.", "Main done.",
+		"After step 5:", "Back on main; a1 keeps going",
+		"After step 9:", "Back on main.", "Main done.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q on the screen", want)
@@ -214,6 +218,9 @@ func TestMidTurnAttachInTheTerminal(t *testing.T) {
 	}
 	if !strings.Contains(main[1].raw, "kid got your message") || strings.Contains(main[1].raw, "hello kid") {
 		t.Fatal("main should get the kid's report and none of what was typed for the kid")
+	}
+	if strings.Contains(out, "Interrupted") {
+		t.Error("Ctrl-C in the attach view interrupted main's turn")
 	}
 	if strings.Contains(out, "kid helper finished") {
 		t.Error("a followed agent's turn is not announced")
