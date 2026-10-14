@@ -268,3 +268,66 @@ func TestResumeFromHistorySkipsSubagentsOfAnUnnamedConversation(t *testing.T) {
 		t.Fatalf("got %q %v, want main's response", response, err)
 	}
 }
+
+// A stopped agent whose turn has not ended, with the user's resume queued behind it,
+// may still run a turn: /login, /theme and /clear stay refused.
+func TestRefuseWhileAgentsRunCountsStoppedStragglers(t *testing.T) {
+	withColor(t, false)
+	release := make(chan struct{})
+	var turns atomic.Int32
+	cfg, h := uiTestHost(t, func(ctx context.Context, a *subagent.Agent, prompt string) (string, error) {
+		if turns.Add(1) == 1 {
+			<-release // ignores its context, like a slow tool
+		}
+		return "ok", nil
+	})
+	a := spawnTest(t, h, "slow", "go")
+	waitFor(t, "the turn", func() bool { return turns.Load() == 1 })
+	if err := h.m.Stop(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := h.m.Deliver(a.ID, "resume", true); err != nil || d != subagent.Queued {
+		t.Fatalf("resume: %v %v", d, err)
+	}
+	if err := cfg.refuseWhileAgentsRun(); err == nil {
+		t.Fatal("a stopped agent still winding down, with a resume queued, should be refused")
+	}
+	close(release)
+	waitFor(t, "the resumed turn", func() bool { return turns.Load() == 2 && h.m.Active() == 0 })
+	if err := cfg.refuseWhileAgentsRun(); err != nil {
+		t.Fatalf("nothing runs any more: %v", err)
+	}
+}
+
+// A workspace warning given while an agent runs (its file change, on its own goroutine)
+// is held for main, which shows it where it shows the agents' notices.
+func TestWorkspaceWarningsWaitForMainWhileAgentsRun(t *testing.T) {
+	withToolTestColor(t, true)
+	fake := newRoutedAnthropic(t, map[string][]string{"[[busy]]": {blockStream}})
+	cfg, h := agentTestConfig(t, fake, subagent.Config{}, true)
+	previous := runningAgents.Swap(h)
+	t.Cleanup(func() { runningAgents.Store(previous) })
+	if _, err := h.Spawn(context.Background(), tools.SpawnRequest{Description: "busy", Prompt: "[[busy]] go", Mode: tools.AgentModeGeneral, Background: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the busy request", func() bool { return fake.started.Load() > 0 })
+	out := captureTerminal(t, func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			workspaceWarnf("write_file succeeded but could not be recorded for undo: %v", "disk full")
+		}()
+		<-done
+	})
+	if strings.Contains(out, "disk full") {
+		t.Fatalf("a warning from an agent's goroutine went straight to the terminal: %q", out)
+	}
+	out = captureTerminal(t, func() { collectAgentNotices(cfg) })
+	if !strings.Contains(out, "could not be recorded for undo: disk full") {
+		t.Fatalf("main should show the held warning: %q", out)
+	}
+	out = captureTerminal(t, func() { collectAgentNotices(cfg) })
+	if strings.Contains(out, "disk full") {
+		t.Fatalf("the warning is shown once: %q", out)
+	}
+}
