@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -30,6 +31,9 @@ func TestPlanModeTurnedOnDuringAnApprovalStopsTheCommand(t *testing.T) {
 		t.Fatal("the command ran in plan mode")
 	}
 
+	if runtime.GOOS == "windows" {
+		return // run_tui needs Unix pseudo-terminals
+	}
 	plan.Store(false)
 	tui := provider.ToolCall{Name: RunTUI, Arguments: `{"command":"touch made"}`}
 	if _, err := Execute(context.Background(), tui, opts); !errors.Is(err, ErrPlanMode) {
