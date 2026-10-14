@@ -32,7 +32,7 @@ func TestDeliveringTheLatestReportKeepsAnEarlierNotice(t *testing.T) {
 	m := NewManager(Config{MaxRunning: 1}, fakeRunner(calls, true))
 	f, _ := m.Spawn(SpawnOptions{Label: "fore", ParentConv: "c1", Prompt: "task"})
 	next(t, calls).reply <- reply{text: "first"}
-	waitDone(t, f)
+	settle(t, f) // the only slot is free once f's goroutine exits, not when its turn ends
 	m.MarkDelivered(f.ID)
 
 	b, err := m.Spawn(SpawnOptions{Label: "back", ParentConv: "c1", Background: true, Prompt: "other"})
@@ -51,6 +51,7 @@ func TestDeliveringTheLatestReportKeepsAnEarlierNotice(t *testing.T) {
 	}
 	kicked.reply <- reply{text: "R1"}
 	eventually(t, "f's kicked turn", func() bool { return f.State() == Idle && f.Report() == "R1" })
+	eventually(t, "f's goroutine to exit", func() bool { return goroutines(f) == 0 })
 
 	if d, err := m.Deliver(f.ID, "next", false); err != nil || d != Started {
 		t.Fatalf("got %v %v", d, err)
