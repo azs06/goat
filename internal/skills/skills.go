@@ -216,7 +216,7 @@ func (s Skill) ReadFile(path string, secret func(name string) bool) (string, err
 	}
 	target, err := filepath.EvalSymlinks(filepath.Join(root, clean))
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", path, errors.Unwrap(err))
+		return "", fmt.Errorf("%s does not exist in the skill", path)
 	}
 	if rel, err := filepath.Rel(root, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%s is outside the skill's directory", path)
