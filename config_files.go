@@ -57,6 +57,7 @@ var configSettings = []configSetting{
 	{"anthropic_cache_ttl", "GOAT_ANTHROPIC_CACHE_TTL", parseChoiceSetting("5m", "1h")},
 	{"auto_compact_tokens", "GOAT_AUTO_COMPACT_TOKENS", parseCountSetting},
 	{"verify_timeout", "GOAT_VERIFY_TIMEOUT", parseCountSetting},
+	{"max_tool_rounds", "GOAT_MAX_TOOL_ROUNDS", parseCountSetting},
 }
 
 // configStartup holds config.json's model and effort. They are defaults for a start
