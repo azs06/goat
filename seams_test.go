@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,6 +96,16 @@ func TestFooterParts(t *testing.T) {
 	parts := strings.Join(footerParts(cfg), " | ")
 	if !strings.HasPrefix(parts, "anthropic:claude-opus-5-5 | effort medium") || !strings.Contains(parts, "auto-approve on") || !strings.HasSuffix(parts, "? for shortcuts") {
 		t.Fatalf("footer %q", parts)
+	}
+	if strings.Contains(parts, "cached") {
+		t.Fatalf("expected no cache hit rate before a conversation, got %q", parts)
+	}
+	cfg.conversation.conversation.Messages = []json.RawMessage{json.RawMessage(`{}`)}
+	if err := appendHistoryEntry(historyEntry{Type: "assistant", ResponseID: "r1", PromptTokens: 200, CacheReadTokens: 150}); err != nil {
+		t.Fatal(err)
+	}
+	if parts := strings.Join(footerParts(cfg), " | "); !strings.HasSuffix(parts, "auto-approve on | 75% cached | ? for shortcuts") {
+		t.Fatalf("expected the cache hit rate after auto-approve, got %q", parts)
 	}
 	withColor(t, true)
 	if footer := style.StripANSI(renderFooter(footerParts(cfg), 40)); strings.Contains(footer, "…") || style.VisibleWidth(footer) >= 40 {
