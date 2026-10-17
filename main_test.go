@@ -502,16 +502,48 @@ func TestSendPromptStreamStopsAfterMaxToolRounds(t *testing.T) {
 	}
 }
 
-func TestMaxToolRoundsFallsBackToTheDefault(t *testing.T) {
+func TestMaxToolRoundsHasNoLimitByDefault(t *testing.T) {
 	for _, raw := range []string{"", "0", "-5", "many"} {
 		t.Setenv("GOAT_MAX_TOOL_ROUNDS", raw)
-		if got := maxToolRounds(); got != defaultMaxToolRounds {
-			t.Fatalf("GOAT_MAX_TOOL_ROUNDS=%q: expected %d, got %d", raw, defaultMaxToolRounds, got)
+		if got := maxToolRounds(); got != 0 {
+			t.Fatalf("GOAT_MAX_TOOL_ROUNDS=%q: expected no limit, got %d", raw, got)
 		}
 	}
 	t.Setenv("GOAT_MAX_TOOL_ROUNDS", " 500 ")
 	if got := maxToolRounds(); got != 500 {
 		t.Fatalf("expected 500, got %d", got)
+	}
+}
+
+func TestSendPromptStreamRunsPastFortyRoundsByDefault(t *testing.T) {
+	workDir := t.TempDir()
+	chdirForTest(t, workDir)
+	t.Setenv("GOAT_MAX_TOOL_ROUNDS", "")
+
+	const rounds = 60
+	callCount := 0
+	stream := func(ctx context.Context, params responses.ResponseNewParams, onText func(string)) (*responses.Response, bool, error) {
+		callCount++
+		if callCount > rounds {
+			return &responses.Response{
+				ID:     fmt.Sprintf("resp-%d", callCount),
+				Output: []responses.ResponseOutputItemUnion{mustResponseOutputItemUnion(t, `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}`)},
+			}, false, nil
+		}
+		return &responses.Response{
+			ID: fmt.Sprintf("resp-%d", callCount),
+			Output: []responses.ResponseOutputItemUnion{
+				mustResponseOutputItemUnion(t, fmt.Sprintf(`{"type":"function_call","name":"read_dir","call_id":"call-%d","arguments":"{\"path\":\".\"}"}`, callCount)),
+			},
+		}, false, nil
+	}
+
+	_, err := sendPromptStream(context.Background(), provider.NewOpenAIWith(nil, stream), "keep going", conversationState{}, turnOptions{model: provider.DefaultOpenAIModel, effort: provider.DefaultEffort})
+	if err != nil {
+		t.Fatalf("expected the turn to finish, got %v", err)
+	}
+	if callCount != rounds+1 {
+		t.Fatalf("expected %d requests, got %d", rounds+1, callCount)
 	}
 }
 

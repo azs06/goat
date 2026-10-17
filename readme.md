@@ -410,9 +410,9 @@ workspace.
 `find_files`, `grep_files` and `tree_dir` skip what `.gitignore` excludes (in a git
 repository git decides; elsewhere the root `.gitignore` is read); `include_ignored=true`
 searches everything. Every tool that changes files accepts `preview=true`, which returns a
-diff without changing anything. A turn can make up to 200 rounds of tool calls
-(`max_tool_rounds` changes it); past that goat stops and asks you to send another
-message to continue.
+diff without changing anything. A turn runs until the model stops calling tools or you
+interrupt it; `max_tool_rounds` sets a limit on its rounds of tool calls, past which
+goat stops and asks you to send another message to continue.
 
 The model gets each tool result cut to about 6,000 characters and 120 lines for
 `run_bash`, and 16,000 characters and 400 lines for the others, keeping the start and the
@@ -1030,7 +1030,7 @@ when that is set), which never holds keys:
 | `reduced_motion` | `false` | Keep the spinner still (it updates once a second) | `GOAT_REDUCED_MOTION` |
 | `verify` | | Workspaces (full paths, `~/` works) and the command that checks each one's changes (see [Verification](#verification)); `/verify` sets it | `GOAT_VERIFY`, for every workspace (`off` turns it off) |
 | `verify_timeout` | `300` | Seconds the verify command may run | `GOAT_VERIFY_TIMEOUT` |
-| `max_tool_rounds` | `200` | Rounds of tool calls one turn may make before goat stops it and waits for another message | `GOAT_MAX_TOOL_ROUNDS` |
+| `max_tool_rounds` | no limit | Rounds of tool calls one turn may make before goat stops it and waits for another message | `GOAT_MAX_TOOL_ROUNDS` |
 | `base_urls` | | `openai`, `anthropic` or `deepseek` at a proxy or a compatible API (see [Safety](#safety) for the checks) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `DEEPSEEK_BASE_URL` |
 | `providers` | | Other providers (see [Setup](#optional-add-other-providers)) | |
 
