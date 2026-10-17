@@ -670,7 +670,8 @@ func handleInput(cfg *config, text string) error {
 	if cmd == nil && !isShell && err == nil && style.Enabled() {
 		if elapsed := time.Since(started); elapsed >= time.Second {
 			stopSpinner()
-			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed, turnCostText(before)))
+			cost, cache := turnUsageText(before)
+			fmt.Fprintln(activityOut, "\n"+renderWorked(elapsed, cost, cache))
 		}
 	}
 	return err
@@ -763,13 +764,19 @@ func footerParts(cfg *config) []string {
 	if state, ok := readGitState(); ok {
 		parts = append(parts, state.footerText())
 	}
+	var cache string
 	if !cfg.conversation.conversation.IsEmpty() {
 		if entries, err := loadConversationHistoryEntries(); err == nil {
 			parts = append(parts, "~"+formatTokenCount(estimateConversationTokens(entries))+" ctx")
+			cache = conversationCacheUsage(entries).cacheHitText()
 		}
 	}
 	if cfg.approver != nil && cfg.approver.autoApprove.Load() {
 		parts = append(parts, "auto-approve on")
+	}
+	// The cache hit rate comes after the parts that matter more on a narrow terminal.
+	if cache != "" {
+		parts = append(parts, cache)
 	}
 	return append(parts, shortcutsFooterPart)
 }

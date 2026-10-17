@@ -454,7 +454,7 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 			rows = append(rows, [2]string{"Cost:", text})
 		}
 		if usage := conversationCacheUsage(entries); usage.responses > 0 {
-			cache := fmt.Sprintf("%d%% of %d input tokens read from cache over %d response(s)", usage.read*100/usage.promptTokens, usage.promptTokens, usage.responses)
+			cache := fmt.Sprintf("%d%% of %d input tokens read from cache over %d response(s)", usage.hitPercent(), usage.promptTokens, usage.responses)
 			if usage.written > 0 {
 				cache += fmt.Sprintf("; %d written", usage.written)
 			}

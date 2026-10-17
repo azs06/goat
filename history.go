@@ -280,9 +280,14 @@ type cacheUsage struct {
 }
 
 func conversationCacheUsage(entries []historyEntry) cacheUsage {
+	return cacheUsageOf(historyEntriesSinceLastReset(entries))
+}
+
+// cacheUsageOf sums the prompt cache usage of the responses in entries.
+func cacheUsageOf(entries []historyEntry) cacheUsage {
 	var usage cacheUsage
 	seen := map[string]bool{}
-	for _, entry := range historyEntriesSinceLastReset(entries) {
+	for _, entry := range entries {
 		// Every tool call of a response carries the same usage; count it once.
 		if entry.PromptTokens == 0 || entry.ResponseID == "" || seen[entry.ResponseID] {
 			continue
@@ -294,4 +299,21 @@ func conversationCacheUsage(entries []historyEntry) cacheUsage {
 		usage.written += entry.CacheWriteTokens
 	}
 	return usage
+}
+
+// hitPercent is the share of the prompt tokens that were read from cache.
+func (u cacheUsage) hitPercent() int64 {
+	if u.promptTokens == 0 {
+		return 0
+	}
+	return u.read * 100 / u.promptTokens
+}
+
+// cacheHitText is the short cache hit rate the worked line and footer show, or "" when
+// no response reported usage.
+func (u cacheUsage) cacheHitText() string {
+	if u.responses == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d%% cached", u.hitPercent())
 }

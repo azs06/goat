@@ -132,14 +132,21 @@ func formatCost(cost float64) string {
 	}
 }
 
-// turnCostText is the cost of the responses recorded after before, the history as it
-// was when the turn started, or "" when nothing priced was used.
-func turnCostText(before []historyEntry) string {
+// turnUsageText is what the responses recorded after before, the history as it was when
+// the turn started, cost and how much of their input was read from cache. Either is ""
+// when nothing priced, or nothing with usage, was recorded.
+func turnUsageText(before []historyEntry) (cost, cache string) {
 	after, err := loadConversationHistoryEntries()
 	if err != nil || len(after) <= len(before) {
-		return ""
+		return "", ""
 	}
-	cost, responses, known := usageCost(after[len(before):])
+	turn := after[len(before):]
+	return turnCostText(turn), cacheUsageOf(turn).cacheHitText()
+}
+
+// turnCostText is the cost of a turn's responses, or "" when nothing priced was used.
+func turnCostText(turn []historyEntry) string {
+	cost, responses, known := usageCost(turn)
 	if responses == 0 || (!known && cost == 0) {
 		return ""
 	}

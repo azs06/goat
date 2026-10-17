@@ -45,3 +45,31 @@ func TestUserPrices(t *testing.T) {
 		t.Fatalf("got %+v %v", price, ok)
 	}
 }
+
+func TestTurnUsageText(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	if err := appendHistoryEntry(historyEntry{Type: "assistant", ResponseID: "r1", Model: "claude-opus-5-5", PromptTokens: 1000, CacheWriteTokens: 1000, ContextTokens: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := loadConversationHistoryEntries()
+	if cost, cache := turnUsageText(before); cost != "" || cache != "" {
+		t.Fatalf("expected nothing for a turn that recorded nothing, got %q %q", cost, cache)
+	}
+	// A turn of two responses, the first counted once over its two tool calls: 1500 of
+	// 2000 prompt tokens read from cache. The turn before it is not counted.
+	for _, entry := range []historyEntry{
+		{Type: "tool_call", ResponseID: "r2", Model: "claude-opus-5-5", PromptTokens: 1000, CacheReadTokens: 1000, ContextTokens: 1000},
+		{Type: "tool_call", ResponseID: "r2", Model: "claude-opus-5-5", PromptTokens: 1000, CacheReadTokens: 1000, ContextTokens: 1000},
+		{Type: "assistant", ResponseID: "r3", Model: "claude-opus-5-5", PromptTokens: 1000, CacheReadTokens: 500, ContextTokens: 1000},
+	} {
+		if err := appendHistoryEntry(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if cost, cache := turnUsageText(before); cost == "" || cache != "75% cached" {
+		t.Fatalf("got cost %q, cache %q", cost, cache)
+	}
+	if got := (cacheUsage{}).cacheHitText(); got != "" {
+		t.Errorf("expected no text without usage, got %q", got)
+	}
+}

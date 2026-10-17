@@ -725,8 +725,9 @@ prompt, so the cached prompt prefix stays the same and editing them costs no cac
   end of the transcript (5-minute entries; `GOAT_ANTHROPIC_CACHE_TTL=1h` keeps them
   across longer pauses at twice the write price). OpenAI requests carry a
   `prompt_cache_key` and ask for 24-hour cache retention; DeepSeek caches prefixes on its
-  own. Switching models, or changing `/effort` on Claude, starts the cache over. `/status`
-  shows how much of the conversation's input was read from cache.
+  own. Switching models, or changing `/effort` on Claude, starts the cache over. The
+  "Worked for" line shows how much of the turn's input was read from cache, and the
+  footer and `/status` how much of the conversation's.
 - DeepSeek is reached through its
   [Anthropic-compatible API](https://api-docs.deepseek.com/guides/anthropic_api), with
   thinking on and its reasoning replayed every turn, as DeepSeek requires. `/effort none`
