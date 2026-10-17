@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azs06/goat/internal/provider"
+	"github.com/azs06/goat/internal/skills"
 	"github.com/azs06/goat/internal/tools"
 	"github.com/azs06/goat/internal/workspace"
 
@@ -57,6 +58,8 @@ func init() {
 		{name: "model", usage: "/model [name|list]", description: "Pick the model, or switch to one by name", callback: commandModel},
 		{name: "resume", usage: "/resume", description: "Swap back to the previous conversation", callback: commandResume},
 		{name: "retry", usage: "/retry", description: "Send the last prompt again", callback: commandRetry},
+		{name: "skill", usage: "/skill <name> [request]", description: "Load a skill and send the request with it", callback: commandSkill},
+		{name: "skills", usage: "/skills", description: "List the skills goat can load", callback: commandSkills},
 		{name: "status", usage: "/status", description: "Show the model, providers, context size and settings", callback: commandStatus},
 		{name: "theme", usage: "/theme [name]", description: "Pick the theme, or switch to a built-in one such as one-dark (saved in config.json)", callback: commandTheme},
 		{name: "tools", usage: "/tools", description: "List available tools", callback: commandTools},
@@ -461,6 +464,9 @@ func commandStatus(ctx context.Context, c *config, args []string) error {
 			rows = append(rows, [2]string{"Cache:", cache})
 		}
 	}
+	if found, _ := skills.Discover(skills.Roots()); len(found) > 0 {
+		rows = append(rows, [2]string{"Skills:", fmt.Sprintf("%d (/skills lists them)", len(found))})
+	}
 	if sources := projectInstructionSources(); len(sources) > 0 {
 		rows = append(rows, [2]string{"Instructions:", strings.Join(sources, ", ")})
 	}
@@ -637,6 +643,11 @@ func commandArgumentCompletions(c *config) func(command, partial string) []compl
 			}
 		}
 		switch command {
+		case "skill":
+			found, _ := skills.Discover(skills.Roots())
+			for _, skill := range found {
+				add(skill.Name, skill.Description)
+			}
 		case "effort":
 			for _, option := range effortOptions(c) {
 				description := option.hint

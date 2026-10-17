@@ -66,6 +66,7 @@ var toolHandlers = map[string]toolHandler{
 	"grep_files":       runGrepFiles,
 	ViewImage:          runViewImage,
 	"read_output":      runReadOutput,
+	Skill:              runSkill,
 	SpawnAgent:         runSpawnAgent,
 	AgentStatus:        runAgentStatus,
 	SendMessage:        runSendMessage,

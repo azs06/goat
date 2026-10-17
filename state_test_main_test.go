@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/azs06/goat/internal/skills"
 	"github.com/azs06/goat/internal/workspace"
 )
 
@@ -21,6 +22,15 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_STATE_HOME", dir)
 	// A verify command from the shell would run after every test turn that changes files.
 	os.Unsetenv("GOAT_VERIFY")
+	// The user's own skills would be listed in every test's first message. A test that
+	// wants user skills sets XDG_CONFIG_HOME.
+	skills.HomeDir = func() (string, error) { return "", nil }
+	skills.UserConfigDir = func() string {
+		if filepath.IsAbs(os.Getenv("XDG_CONFIG_HOME")) {
+			return goatConfigDir()
+		}
+		return ""
+	}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

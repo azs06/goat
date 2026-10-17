@@ -60,6 +60,8 @@ func toolDisplayName(name string) string {
 		return "View"
 	case "read_output":
 		return "Output"
+	case tools.Skill:
+		return "Skill"
 	case verifyToolName:
 		return "Verify"
 	case tools.RunTUI:
@@ -167,6 +169,11 @@ func toolArgSummary(name, rawArgs string) (string, []string) {
 		}
 		flag("include_ignored")
 		limit()
+	case tools.Skill:
+		summary = str("name")
+		if file := str("file"); file != "" {
+			summary += "/" + file
+		}
 	case "grep_files":
 		summary = strconv.Quote(str("query")) + " in " + str("path")
 		if glob := str("glob"); glob != "" {
@@ -302,6 +309,15 @@ func summarizeToolOutput(call provider.ToolCall, output string) (string, []strin
 	}
 
 	switch call.Name {
+	case tools.Skill:
+		// "Skill <name>, from <source>. ..." then the instructions, or "File <file> of
+		// skill <name>:" then the file. Like read_file, only the size is shown.
+		if strings.HasPrefix(header, "Skill ") {
+			return "Loaded " + plural(countLines(strings.TrimPrefix(rest, "\n")), "line"), nil, false
+		}
+		if strings.HasPrefix(header, "File ") {
+			return "Read " + plural(countLines(rest), "line"), nil, false
+		}
 	case "read_file":
 		if strings.HasPrefix(header, "File contents for ") {
 			return "Read " + plural(countLines(rest), "line"), nil, false
