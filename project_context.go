@@ -6,8 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/azs06/goat/internal/skills"
 	"github.com/azs06/goat/internal/workspace"
 )
+
+func init() {
+	skills.UserConfigDir = goatConfigDir
+}
 
 // Project instructions are notes for the agent kept with the code: AGENTS.md (or
 // GOAT.md, or CLAUDE.md) at the workspace root, plus the user's own
@@ -72,6 +77,9 @@ func projectInstructionsText() string {
 			fmt.Fprintf(&b, "\n<instructions source=%q>\n%s\n</instructions>\n", file.label, file.content)
 		}
 	}
+	if list := skillsListText(); list != "" {
+		b.WriteString(list)
+	}
 	if git := gitContextText(); git != "" {
 		fmt.Fprintf(&b, "\n<workspace>\n%s</workspace>\n", git)
 	}
@@ -86,4 +94,21 @@ func projectInstructionSources() []string {
 		labels = append(labels, file.label)
 	}
 	return labels
+}
+
+// skillsListText lists the skills the model can load, for the start of a conversation.
+// It goes in the first message rather than the system prompt for the same reason the
+// instructions do: adding a skill must not change the cached prompt prefix.
+func skillsListText() string {
+	found, _ := skills.Discover(skills.Roots())
+	var b strings.Builder
+	for _, skill := range found {
+		if skill.ModelInvocable {
+			fmt.Fprintf(&b, "- %s: %s\n", skill.Name, skill.Description)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n<skills>\nSkills you can load with the skill tool when a task matches one:\n" + b.String() + "</skills>\n"
 }

@@ -99,6 +99,10 @@ func IsStateDirName(name string) bool {
 	return strings.EqualFold(strings.TrimRight(name, ". "), StateDirName)
 }
 
+// IsSecretFileName reports a file name, such as .env, that file tools refuse because it
+// may hold secrets.
+func IsSecretFileName(name string) bool { return isSecretFileName(name) }
+
 // isSecretFileName reports files that conventionally hold credentials, such as a
 // project's .env. File tools refuse them, so their contents never
 // reach the model without the user running a command for it. Templates meant to be

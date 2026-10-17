@@ -102,7 +102,7 @@ func TestPlanModePolicyMatchesTheRefusal(t *testing.T) {
 		"undo_last_change": PlanModePreview,
 		"run_bash":         PlanModeBlocked,
 		"run_code":         PlanModePerCall,
-		"agent_status":     PlanModeAllowed, "wait": PlanModeAllowed,
+		"agent_status":     PlanModeAllowed, "wait": PlanModeAllowed, "skill": PlanModeAllowed,
 		"spawn_agent": PlanModeDelegated, "send_message": PlanModeDelegated, "stop_agent": PlanModeDelegated,
 	}
 	if workspace.TUIAvailable {

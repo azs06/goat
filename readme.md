@@ -17,6 +17,7 @@ approval. From a certain point on, goat has been improving its own source code.
   takes multi-line and pasted input.
 - Lays requests out for the providers' prompt caches and shows what each turn cost.
 - Reads project instructions from `AGENTS.md`, and has a plan mode that changes nothing.
+- Loads skills, `SKILL.md` instructions for one kind of task, and can write new ones.
 - Can hand work to subagents that run alongside it, and lets you switch to any of them
   to watch it and send it messages.
 - Has a code mode: the model can write one JavaScript script that calls many tools, and
@@ -366,6 +367,8 @@ Nobody can approve `run_bash` commands in that mode, so they are declined unless
 | `/approve [on\|off]` | Show or change whether `run_bash` runs commands without asking. |
 | `/verify [command\|run\|off]` | Show or set the workspace's verify command (see [Verification](#verification)): `/verify go test ./...` sets it, saved in config.json; `/verify run` runs it now; `/verify off` removes it. |
 | `/theme [name]` | Pick the theme with the arrow keys, or switch to a built-in one by name, such as `one-dark`. The choice is saved as `"theme"` in config.json. Without a terminal to pick on, `/theme` reloads the theme file and lists the built-in themes. |
+| `/skills` | List the skills goat can load, and any `SKILL.md` it could not use. See [Skills](#skills). |
+| `/skill <name> [request]` | Send a skill's instructions with the request, for a skill the model would not pick on its own. |
 | `/tools` | List the agent's tools. |
 | `/history` | Show where the conversation history is written. |
 | `/help` | List the commands and keys. |
@@ -400,6 +403,7 @@ workspace.
 | `run_bash` | Run a shell command in the workspace, after you approve it |
 | `view_image` | Look at an image file (PNG, JPEG, GIF or WebP), such as a screenshot a test saved; only for models that read images |
 | `read_output` | Read a tool output that was shortened for the model, a range of lines at a time |
+| `skill` | Load a [skill](#skills) by name, or read another file of it with `file` |
 | `run_tui` | Run a program in an emulated terminal, type keys into it and read the screen back as text, after you approve it; not on Windows |
 | `run_code` | Run a JavaScript script that calls the other tools; only in code mode |
 
@@ -691,6 +695,46 @@ They are sent at the start of every new conversation, including one that starts 
 the workspace is a repository. They go with the first message rather than into the system
 prompt, so the cached prompt prefix stays the same and editing them costs no cache.
 `/status` shows which files are in use.
+
+## Skills
+
+A skill is a directory holding a `SKILL.md`: instructions for one kind of task, plus any
+scripts, references or templates they use. goat reads the
+[Agent Skills](https://agentskills.io/specification) format, so skills written for other
+agents work too:
+
+```markdown
+---
+name: release-notes
+description: Write release notes from the git log. Use when tagging a release.
+---
+
+Read references/style.md first, then run scripts/changes.sh.
+```
+
+`name` is lowercase letters, digits and hyphens; `description` says what the skill does
+and when to use it, since that is all the model sees until it loads one. Skills are
+found in, in this order:
+
+| Directory | |
+| --- | --- |
+| `~/.config/goat/skills/` | Yours, for every project |
+| `~/.agents/skills/` | Yours, shared with other agents |
+| `.agents/skills/` | The project's |
+| `.claude/skills/` | The project's, kept for Claude Code |
+
+A name found twice keeps the first, so a repository cannot replace one of your skills.
+Each new conversation's first message lists the skills by name and description, like the
+project instructions, so adding one never costs cache. When a task matches, the model
+loads it with the `skill` tool, which can also read the skill's other files. Set
+`disable-model-invocation: true` to leave a skill off the list; `/skill <name>` still loads
+it.
+
+Ask goat to make a skill and it writes `.agents/skills/<name>/SKILL.md` with its file
+tools, so you see the change, `/undo` takes it back, and it can be loaded straight away:
+skills are looked up again on every call. A skill only changes what the model is told,
+never goat itself; its scripts run through `run_bash`, which asks first. Review a skill
+from a repository you did not write before using it, as you would its `AGENTS.md`.
 
 ## Models and providers
 
@@ -1023,7 +1067,8 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `agent.go` | One turn: streaming the reply, running tool calls, the 40-round limit |
 | `commands.go` | Slash commands |
 | `session.go`, `history.go`, `compaction.go` | Saved sessions, the history log and compaction |
-| `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions |
+| `system_prompt.go`, `project_context.go` | The system prompt, built from the tool list, and the project instructions and skill list |
+| `skill_commands.go` | `/skills` and `/skill` |
 | `plan_mode.go`, `code_mode.go` | Plan mode; code mode and drawing a script's calls |
 | `prompt_editor.go`, `selector.go`, `input.go`, `queue.go` | The interactive line editor, arrow-key pickers, messages queued during a turn and input reading |
 | `output.go`, `git.go`, `pricing.go` | `/output`, `/copy`, `/export`, `/diff`, the built-in pager, git status and cost |
@@ -1033,6 +1078,7 @@ goat also reads these files, all optional (`~/.config` is `$XDG_CONFIG_HOME` whe
 | `internal/codemode/` | The JavaScript sandbox `run_code` scripts run in: limits, console capture and the generated `goat` API declaration |
 | `internal/markdown/` | Rendering streamed markdown replies, with syntax-highlighted code blocks |
 | `internal/provider/` | The OpenAI, Anthropic and DeepSeek clients behind one interface, and the model catalog |
+| `internal/skills/` | Finding skills, reading `SKILL.md` frontmatter, and reading a skill's files without leaving its directory |
 | `internal/style/` | The style engine: roles, CSS parsing, colors and themes |
 | `internal/terminal/` | Terminal modes (echo, cbreak) and size |
 | `internal/tools/` | The tools offered to the model: schemas, argument checks, plan-mode rules, the handler that runs each one, and `run_code` |
