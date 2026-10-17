@@ -393,7 +393,7 @@ func verifyTurn(ctx context.Context, opts turnOptions, state *verifyState, round
 		return "", nil
 	case state.runs >= maxVerifyRuns:
 		return "", fmt.Errorf("%w after %d runs this turn; /output shows its output", errVerifyFailed, state.runs)
-	case round >= maxToolRoundsPerTurn:
+	case maxToolRounds() > 0 && round >= maxToolRounds():
 		return "", fmt.Errorf("%w, and the turn is out of tool rounds; send another message to let the agent continue", errVerifyFailed)
 	}
 	return failure, nil

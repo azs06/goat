@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -20,8 +21,6 @@ import (
 
 const (
 	maxStreamRateLimitRetries = 3
-
-	maxToolRoundsPerTurn = 40
 
 	maxToolOutputCharsForModel    = 16000
 	maxToolOutputLinesForModel    = 400
@@ -43,6 +42,16 @@ type conversationState struct {
 }
 
 var streamRetrySleeper = sleepWithContext
+
+// maxToolRounds is how many rounds of tool calls one turn may make before goat stops it,
+// from GOAT_MAX_TOOL_ROUNDS (config.json's max_tool_rounds), or 0 for no limit: by
+// default a turn runs until the model stops calling tools or the user interrupts it.
+func maxToolRounds() int {
+	if rounds, err := strconv.Atoi(strings.TrimSpace(os.Getenv("GOAT_MAX_TOOL_ROUNDS"))); err == nil && rounds > 0 {
+		return rounds
+	}
+	return 0
+}
 
 // projectInstructions, when set, returns the project instructions sent at the start of
 // a new conversation.
@@ -622,8 +631,8 @@ func sendPromptStream(ctx context.Context, p provider.Provider, prompt string, c
 			opts.record(historyEntry{Type: "error", Content: "turn interrupted by the user", ResponseID: resp.ID, Status: "interrupted", Provider: providerName})
 			return next, err
 		}
-		if round >= maxToolRoundsPerTurn {
-			err := fmt.Errorf("stopped after %d tool rounds in one turn; send another message to let the agent continue", maxToolRoundsPerTurn)
+		if limit := maxToolRounds(); limit > 0 && round >= limit {
+			err := fmt.Errorf("stopped after %d tool rounds in one turn; send another message to let the agent continue, or raise max_tool_rounds", limit)
 			opts.record(historyEntry{Type: "error", Content: err.Error(), ResponseID: resp.ID, Status: "error", Provider: providerName})
 			return next, err
 		}
